@@ -160,3 +160,18 @@ available without a server-side function.
   Settings → Platforms, or re-run the setup script.
 - **App shows "setup in progress"**: the build was made without
   `--dart-define APPWRITE_PROJECT_ID=...`. Rebuild with the real ID.
+
+## 8. Live backend status (2026-11-14)
+
+- **Project:** `6af869f7001a2600151f`, **Toronto region**,
+  endpoint `https://tor.cloud.appwrite.io/v1`.
+- **Database `lifegame`** + all 8 tables (columns + indexes `available`,
+  row security on). Web platform `lifegame-web` (hostname `yashx.xyz`)
+  registered. A second platform `Web app` (hostname `*`) also exists
+  from project creation — harmless.
+- **Live app** (v2.2.0): `https://yashx.xyz/lifegame` — verified the
+  deployed bundle contains the real project ID + Toronto endpoint and
+  no placeholder text.
+- **Still pending:** Google sign-in provider (needs a Google Cloud
+  OAuth client ID + secret entered in the Appwrite console, §3) and an
+  Appwrite Function owning XP updates (security hardening, §6).
