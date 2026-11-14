@@ -1,0 +1,66 @@
+# Builds a debug APK for Life Game (Flutter) and uploads it as an artifact.
+name: Build Life Game APK (debug)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'lib/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'android/**'
+      - '.github/workflows/build-apk.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      - name: Prefer Google's Maven Central mirror
+        run: |
+          mkdir -p "$HOME/.gradle/init.d"
+          cat > "$HOME/.gradle/init.d/maven-mirror.gradle" << 'GRADLE'
+          // Maven Central's own CDN redirects a few large artifacts to
+          // GitHub releases, which intermittently time out (HTTP 504).
+          // Google's mirror serves the same artifacts directly.
+          // NOTE: inject ONLY into settings-level dependency resolution.
+          def mirror = 'https://maven-central.storage-download.googleapis.com/maven2'
+          beforeSettings { settings ->
+              settings.dependencyResolutionManagement {
+                  repositories {
+                      maven { url mirror }
+                  }
+              }
+          }
+          GRADLE
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build debug APK
+        run: flutter build apk --debug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifegame-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
