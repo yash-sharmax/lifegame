@@ -53,8 +53,16 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State<AuthGate> {
   StreamSubscription<AuthChange>? _authSub;
+  // The latest auth state. Null while the stored session is still
+  // being checked — the gate shows a loader then, NOT the login screen.
+  // Showing login before the check finishes is what made a reload look
+  // like a logout (14 Nov 2026): the first stream yielded "signed out"
+  // while the real check was still waiting on the network.
+  AuthChange? _authChange;
   String? _recoveryUserId;
   String? _recoverySecret;
+
+  AuthRepository get _auth => widget.authRepo ?? AuthRepository();
 
   @override
   void initState() {
@@ -73,14 +81,19 @@ class _AuthGateState extends State<AuthGate> {
       // Uri.base is unavailable in some environments — ignore.
     }
     if (AppConfig.isConfigured) {
-      final repo = widget.authRepo ?? AuthRepository();
-      _authSub = repo.onAuthStateChange.listen((change) {
-        if (change.event == AuthEvent.signedOut) {
-          setState(() {
+      // Subscribe ONCE: the stream's first event only arrives after
+      // the stored session has been checked, so it is authoritative.
+      // (Creating a fresh stream on every build raced the check and
+      // yielded a stale "signed out".)
+      _authSub = _auth.onAuthStateChange.listen((change) {
+        if (!mounted) return;
+        setState(() {
+          _authChange = change;
+          if (change.event == AuthEvent.signedOut) {
             _recoveryUserId = null;
             _recoverySecret = null;
-          });
-        }
+          }
+        });
       });
     }
   }
@@ -107,32 +120,44 @@ class _AuthGateState extends State<AuthGate> {
     if (!AppConfig.isConfigured) {
       return AuthScreen(authRepo: widget.authRepo);
     }
-    final repo = widget.authRepo ?? AuthRepository();
-    return StreamBuilder<AuthChange>(
-      stream: repo.onAuthStateChange,
-      builder: (context, snapshot) {
-        final user = repo.currentUser;
-        if (user == null) {
-          return AuthScreen(authRepo: widget.authRepo);
+    final change = _authChange;
+    if (change == null) {
+      // Stored session is still being checked — wait, don't flash the
+      // login screen.
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (change.event == AuthEvent.signedOut) {
+      // A real auth failure while checking the session (e.g. network)
+      // is shown on the login screen with a retry, instead of silently
+      // dropping the user there as if they had never signed in.
+      final sessionError = AuthRepository.sessionError;
+      return AuthScreen(
+        authRepo: widget.authRepo,
+        sessionNotice: sessionError,
+        onRetrySessionCheck: sessionError == null
+            ? null
+            : () async {
+                await _auth.ensureSession();
+                if (mounted) setState(() {});
+              },
+      );
+    }
+    final profileRepo = widget.profileRepo ?? ProfileRepository();
+    return FutureBuilder(
+      future: profileRepo.fetchMyProfile(),
+      builder: (context, profileSnapshot) {
+        if (profileSnapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
         }
-        final profileRepo = widget.profileRepo ?? ProfileRepository();
-        return FutureBuilder(
-          future: profileRepo.fetchMyProfile(),
-          builder: (context, profileSnapshot) {
-            if (profileSnapshot.connectionState == ConnectionState.waiting) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
-            }
-            if (profileSnapshot.data == null) {
-              return ProfileSetupScreen(
-                profileRepo: widget.profileRepo,
-                authRepo: widget.authRepo,
-              );
-            }
-            return const MainShell();
-          },
-        );
+        if (profileSnapshot.data == null) {
+          return ProfileSetupScreen(
+            profileRepo: widget.profileRepo,
+            authRepo: widget.authRepo,
+          );
+        }
+        return const MainShell();
       },
     );
   }

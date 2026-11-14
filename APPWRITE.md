@@ -128,11 +128,33 @@ Only the row owner can delete their own data.
 **NOT enforced — read this carefully:** Appwrite permissions say *who*
 may write a row, but nothing server-side checks *what value* they write.
 The app's own XP updates go through one repository file
-(`lib/data/repositories.dart`), and the client always adds +10 per tick
-and +50 for the daily bonus — but a determined user driving the Appwrite
-API directly (with their own session) could set their own `xp` to any
-number, e.g. 999999, and top the leaderboard. That is the honest
+(`lib/data/repositories.dart`), and the client always adds +2 per
+completion and −2 on unticking — but a determined user driving the
+Appwrite API directly (with their own session) could set their own `xp`
+to any number, e.g. 999999, and top the leaderboard. That is the honest
 residual risk of a client-only backend.
+
+**Write integrity (client-side, added 14 Nov 2026 after a live test
+caught a lost untick):** Appwrite has no transactions, so XP-affecting
+writes are serialised through one queue in `repositories.dart` — two
+toggles fired in quick succession run one after the other instead of
+reading the same stale state and landing out of order. Every toggle
+then re-reads the stored log + XP + streak and throws when they do not
+match the intended state, so the UI reloads the true server state
+instead of showing a toggle that never persisted. Deleting a habit
+removes its logs and takes back today's +2 XP (floored at 0); deleting
+a done weekly/monthly task takes back its +2 XP too. None of this is
+server-side validation — it only keeps the app's own writes honest.
+
+**Session restore (fixed 14 Nov 2026):** the Appwrite web SDK
+persists the session in localStorage (`cookieFallback`, restored in
+the client constructor). The app used to show the login screen on
+reload anyway: the auth gate created a fresh session-check stream on
+every build, and the first stream yielded "signed out" while the real
+check was still waiting on the network — and the completed check
+emitted no event. Now the gate subscribes once, waits for the check
+(shows a loader, not login), and a failed check surfaces its real
+error with a retry instead of silently dropping to login.
 
 **The proper fix (planned, not done here):** an Appwrite Function that
 owns XP updates — the client only ever creates `habit_logs` rows, and a
@@ -171,9 +193,16 @@ available without a server-side function.
   row security on). Web platform `lifegame-web` (hostname `yashx.xyz`)
   registered. A second platform `Web app` (hostname `*`) also exists
   from project creation — harmless.
-- **Live app** (v2.2.0): `https://yashx.xyz/lifegame` — verified the
+- **Live app** (v2.2.0+5): `https://yashx.xyz/lifegame` — verified the
   deployed bundle contains the real project ID + Toronto endpoint and
   no placeholder text.
+- **v2.2.0+5 fixes (14 Nov, after a live login test):** toggle writes
+  are serialised + verified after write (a rapid tick/untick had left
+  the server at XP 52 with a log while the UI showed 50/undone);
+  session restore fixed (reload no longer drops to login); habits can
+  be edited/deleted from Home (long-press or the ⋮ button) and the
+  habit/task lists refresh after any change; deleting a done habit or
+  task takes back its +2 XP.
 - **Still pending:** Google sign-in provider (needs a Google Cloud
   OAuth client ID + secret entered in the Appwrite console, §3) and an
   Appwrite Function owning XP updates (security hardening, §6).

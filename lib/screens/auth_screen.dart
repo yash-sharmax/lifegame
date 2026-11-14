@@ -21,9 +21,17 @@ enum AuthMode { login, signup, forgot }
 
 /// Login / signup / forgot-password, plus the Google button.
 class AuthScreen extends StatefulWidget {
-  const AuthScreen({super.key, this.authRepo});
+  const AuthScreen({super.key, this.authRepo, this.sessionNotice, this.onRetrySessionCheck});
 
   final AuthRepository? authRepo;
+
+  /// Shown when the stored session could not be checked (e.g. the
+  /// network failed) — the user is not actually signed out, the check
+  /// just did not complete. Shown as a banner above the form.
+  final String? sessionNotice;
+
+  /// Retries the session check; shown as a button in the banner.
+  final Future<void> Function()? onRetrySessionCheck;
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -228,6 +236,44 @@ class _AuthScreenState extends State<AuthScreen> {
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
                                   ),
+                                ),
+                              ),
+                            ],
+                            if (widget.sessionNotice != null) ...[
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Text(
+                                      'Could not check your saved session: '
+                                      '${widget.sessionNotice}',
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    if (widget.onRetrySessionCheck != null) ...[
+                                      const SizedBox(height: 8),
+                                      Align(
+                                        alignment: Alignment.centerRight,
+                                        child: TextButton(
+                                          onPressed: () async {
+                                            final retry =
+                                                widget.onRetrySessionCheck;
+                                            if (retry != null) await retry();
+                                          },
+                                          child: const Text('Retry'),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
                                 ),
                               ),
                             ],

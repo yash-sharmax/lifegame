@@ -158,6 +158,90 @@ void main() {
     expect(find.text('Read 10 pages'), findsOneWidget);
     expect(find.text('42 XP'), findsOneWidget);
   });
+
+  testWidgets('a rapid second tap does not start a second toggle',
+      (tester) async {
+    // The toggle takes 100ms in this fake; a second tap 10ms later
+    // must be ignored while the first toggle is still saving, so two
+    // toggles can never run against the same stale state.
+    final repo = _CountingHabitRepo();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: HomeScreen(habitRepo: repo, profileRepo: _XpProfileRepo()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Read 10 pages'));
+    await tester.pump(const Duration(milliseconds: 10));
+    await tester.tap(find.text('Read 10 pages'));
+    await tester.pumpAndSettle();
+
+    expect(repo.toggleCalls, 1);
+  });
+
+  testWidgets('home tile offers edit/delete and deleting removes it',
+      (tester) async {
+    final repo = _MutableHabitRepo();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: HomeScreen(habitRepo: repo, profileRepo: _XpProfileRepo()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Read 10 pages'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit habit'), findsOneWidget);
+
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Read 10 pages'), findsNothing);
+    expect(repo.deletedIds, ['h1']);
+  });
+
+  testWidgets('profile habit list refreshes when habits change elsewhere',
+      (tester) async {
+    // Tall viewport so both habit rows are on screen (the list is a
+    // lazy ListView — a row below the fold is never built).
+    tester.view.physicalSize = const Size(800, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    // Profile loads once (IndexedStack keeps it alive); a habit added
+    // on Home must appear here without restarting the app.
+    final habits = _MutableHabitRepo();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ProfileScreen(
+            profileRepo: _FullProfileRepo(),
+            habitRepo: habits,
+            taskRepo: _EmptyTaskRepo(),
+            socialRepo: _SocialCountsRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Read 10 pages'), findsOneWidget);
+    expect(find.text('Morning workout'), findsNothing);
+
+    habits.habits.add(
+      const Habit(id: 'h2', userId: 'test-user', title: 'Morning workout'),
+    );
+    HabitRepository.notifyChangedForTest();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Morning workout'), findsOneWidget);
+  });
 }
 
 /// Fake repositories that return empty data without touching Appwrite.
@@ -243,4 +327,71 @@ class _SocialCountsRepo extends SocialRepository {
 
   @override
   Future<int> followingCount(String userId) async => 0;
+}
+
+/// Counts toggleHabit calls; the toggle takes 100ms so a second tap
+/// during the first toggle overlaps it.
+class _CountingHabitRepo extends HabitRepository {
+  int toggleCalls = 0;
+
+  @override
+  Future<List<Habit>> listMyHabits() async => [
+    const Habit(id: 'h1', userId: 'test-user', title: 'Read 10 pages'),
+  ];
+
+  @override
+  Future<List<HabitLog>> listLogsForDate(String date) async => [];
+
+  @override
+  Future<ToggleResult> toggleHabit({
+    required Habit habit,
+    required String date,
+    required bool completed,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    toggleCalls++;
+    return const ToggleResult(xpDelta: 2, allDone: false);
+  }
+}
+
+/// Habits held in a mutable list so tests can add/remove them and
+/// trigger a refresh notification, like another tab would.
+class _MutableHabitRepo extends HabitRepository {
+  final habits = <Habit>[
+    const Habit(id: 'h1', userId: 'test-user', title: 'Read 10 pages'),
+  ];
+  final deletedIds = <String>[];
+
+  @override
+  Future<List<Habit>> listMyHabits() async => List.of(habits);
+
+  @override
+  Future<List<HabitLog>> listLogsForDate(String date) async => [];
+
+  @override
+  Future<void> updateHabit(Habit habit, {String? title, int? color}) async {
+    final index = habits.indexWhere((h) => h.id == habit.id);
+    if (index >= 0 && title != null) {
+      habits[index] = Habit(
+        id: habit.id,
+        userId: habit.userId,
+        title: title,
+        color: habit.color,
+      );
+    }
+  }
+
+  @override
+  Future<void> deleteHabit(String habitId) async {
+    deletedIds.add(habitId);
+    habits.removeWhere((h) => h.id == habitId);
+  }
+}
+
+class _EmptyTaskRepo extends TaskRepository {
+  @override
+  Future<List<WeeklyTask>> listWeeklyTasks(String weekStart) async => [];
+
+  @override
+  Future<List<MonthlyTask>> listMonthlyTasks(String month) async => [];
 }

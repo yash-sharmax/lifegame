@@ -7,13 +7,19 @@
 /// For widget tests, screens accept optional repository instances; tests
 /// pass in-memory fakes that subclass these classes.
 ///
-/// NOTE: Appwrite has no multi-document transactions. Writes that used
-/// to happen in one batch (e.g. tick habit + update profile) are
-/// sequential here — a failure midway can leave a partial state (e.g.
-/// the log exists but the profile XP was not updated). Toggles are
-/// idempotent by design: the log document id (`{habitId}_{date}`) means
-/// a retried tick can never double-grant XP, and unticking deletes the
-/// log, so re-ticking after an untick grants XP again exactly once.
+/// Appwrite has no multi-document transactions, so writes that used to
+/// happen in one batch (e.g. tick habit + update profile) are sequential
+/// here. Every XP-affecting write runs through [_writeQueue], which
+/// serialises them: without it, two toggles fired in quick succession
+/// read the same stale XP/log state and their writes land out of order,
+/// leaving the server holding a different state than the UI shows
+/// (found by a live test, 14 Nov 2026). Toggles also verify their
+/// writes afterwards and throw when the stored state does not match
+/// the intended one, so the UI can reload the true state instead of
+/// silently showing a wrong one. Toggles are idempotent by design:
+/// the log document id (`{habitId}_{date}`) means a retried tick can
+/// never double-grant XP, and unticking deletes the log, so re-ticking
+/// after an untick grants XP again exactly once.
 /// See APPWRITE.md ("Security model") for the honest write-up.
 library;
 
@@ -158,6 +164,24 @@ List<String> _usernamePerms(String uid) => [
   Permission.delete(Role.user(uid)),
 ];
 
+/// Serialises all XP-affecting writes (habit/task toggles, habit and
+/// task deletes). Without this, two toggles fired in quick succession
+/// read the same stale profile/log state and their sequential writes
+/// land out of order — the stored state then matches neither toggle.
+/// The queue never stalls on an error: a failed item still lets the
+/// next one run.
+class _WriteQueue {
+  Future<void> _tail = Future.value();
+
+  Future<T> run<T>(Future<T> Function() work) {
+    final result = _tail.then((_) => work());
+    _tail = result.then<void>((_) {}, onError: (_) {});
+    return result;
+  }
+}
+
+final _writeQueue = _WriteQueue();
+
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
@@ -175,33 +199,90 @@ class AuthRepository {
   // but the signed-in user is one per app run.
   static AppAuthUser? _cachedUser;
   static bool _sessionLoaded = false;
+  // The in-flight session check, shared by every caller. Without this,
+  // a second caller sees `_sessionLoaded == true` while the first
+  // check is still waiting on the network and concludes — wrongly —
+  // that there is no session (the reload logout bug, 14 Nov 2026).
+  static Future<void>? _sessionLoad;
+  // Friendly description of the last session-check failure for a reason
+  // OTHER than "no session" (401). Null when the check succeeded or
+  // simply found no session. The auth gate shows this instead of
+  // silently dropping the user on the login screen.
+  static String? _sessionError;
   static final _changes = StreamController<AuthChange>.broadcast();
 
   /// The signed-in user if the session was already loaded, else null.
   /// Use [currentUserAsync] when the session may not be loaded yet.
   static AppAuthUser? get cachedUser => _cachedUser;
 
+  /// Last non-401 session-check failure, if any (see [_sessionError]).
+  static String? get sessionError => _sessionError;
+
+  /// Test-only: seeds the cached signed-in user so repository tests can
+  /// run against a fake TablesDB without a live Appwrite session.
+  static void debugSetCachedUserForTest(AppAuthUser? user) {
+    _cachedUser = user;
+    _sessionLoaded = user != null;
+    _sessionError = null;
+    _sessionLoad = null;
+  }
+
+  /// Test-only: seeds a session-check failure for auth-gate tests.
+  static void debugSetSessionErrorForTest(String? message) {
+    _sessionError = message;
+  }
+
   AppAuthUser? get currentUser => _cachedUser;
 
-  /// Loads the session once (from the stored Appwrite session cookie).
+  /// Loads the session once (from the stored Appwrite session, which the
+  /// SDK persists on web in localStorage). Concurrent callers share the
+  /// same in-flight check and all see its true result — a caller never
+  /// gets a stale "signed out" while the check is still running.
   /// Safe to call repeatedly; later calls are no-ops until sign-out.
-  Future<void> ensureSession() async {
-    if (_sessionLoaded) return;
-    _sessionLoaded = true;
+  /// A transient failure leaves the session unloaded (and records
+  /// [sessionError]) so the next call retries instead of silently
+  /// treating the user as signed out.
+  Future<void> ensureSession() {
+    if (_sessionLoaded) return Future.value();
+    return _sessionLoad ??= _loadSession();
+  }
+
+  Future<void> _loadSession() async {
     try {
       final user = await _a.get();
+      final isNew = _cachedUser?.uid != user.$id;
       _cachedUser = AppAuthUser.fromAppwrite(user);
+      _sessionLoaded = true;
+      _sessionError = null;
+      // Listeners that already yielded "signed out" (e.g. the auth gate
+      // while this check was in flight) must hear that a session
+      // actually exists — otherwise they stay stuck on the login screen.
+      if (isNew) {
+        _changes.add(
+          AuthChange(event: AuthEvent.signedIn, user: _cachedUser),
+        );
+      }
     } on AppwriteException catch (e) {
       if (e.code == 401) {
+        // No valid session — a normal signed-out state, not an error.
         _cachedUser = null;
-        return;
+        _sessionLoaded = true;
+        _sessionError = null;
+      } else {
+        _sessionLoaded = false;
+        _sessionError = _friendlyAuthError(e);
+        _cachedUser = null;
       }
-      // Transient error (e.g. network): let a later call retry.
+    } on AppwriteNotConfigured {
       _sessionLoaded = false;
+      _sessionError = null;
       _cachedUser = null;
-    } catch (_) {
+    } catch (e) {
       _sessionLoaded = false;
+      _sessionError = e.toString();
       _cachedUser = null;
+    } finally {
+      _sessionLoad = null;
     }
   }
 
@@ -352,6 +433,7 @@ class AuthRepository {
     }
     _cachedUser = null;
     _sessionLoaded = false;
+    _sessionError = null;
     _changes.add(const AuthChange(event: AuthEvent.signedOut));
   }
 }
@@ -575,6 +657,20 @@ class HabitRepository {
 
   TablesDB get _d => _requireDb(_db);
 
+  /// Broadcast whenever habits (or their logs) change — add, update,
+  /// archive, delete or toggle. Screens live in an IndexedStack and
+  /// load once, so without this a habit added on Home never appears
+  /// on Profile until the app restarts (found by a live test,
+  /// 14 Nov 2026). Screens subscribe in initState and reload.
+  static final _changes = StreamController<void>.broadcast();
+  static Stream<void> get onChanged => _changes.stream;
+  static void _notifyChanged() {
+    if (!_changes.isClosed) _changes.add(null);
+  }
+
+  /// Test-only hook to simulate a habit change from a fake repository.
+  static void notifyChangedForTest() => _notifyChanged();
+
   String _requireUserId() {
     final user = AuthRepository.cachedUser;
     if (user == null) throw const AuthException('Not signed in.');
@@ -609,6 +705,7 @@ class HabitRepository {
       },
       permissions: _ownerPerms(userId),
     );
+    _notifyChanged();
     return Habit(id: doc.$id, userId: userId, title: title, color: color);
   }
 
@@ -623,6 +720,7 @@ class HabitRepository {
       rowId: habit.id,
       data: updates,
     );
+    _notifyChanged();
   }
 
   Future<void> archiveHabit(String habitId) async {
@@ -632,6 +730,66 @@ class HabitRepository {
       rowId: habitId,
       data: {'archived': true},
     );
+    _notifyChanged();
+  }
+
+  /// All logs ever recorded for one habit (any date), paginated.
+  Future<List<HabitLog>> _listLogsForHabit(String habitId) async {
+    final userId = _requireUserId();
+    final all = <HabitLog>[];
+    const page = 100;
+    var offset = 0;
+    while (true) {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'habit_logs',
+        queries: [
+          Query.equal('ownerUid', userId),
+          Query.equal('habitId', habitId),
+          Query.limit(page),
+          Query.offset(offset),
+        ],
+      );
+      all.addAll(list.rows.map((doc) => HabitLog.fromJson(_docJson(doc))));
+      if (list.rows.length < page) break;
+      offset += page;
+    }
+    return all;
+  }
+
+  /// Deletes a habit for good: archives the habit row, removes ALL its
+  /// logs, and adjusts XP/streak so the numbers stay consistent — a
+  /// habit that is done today loses its +2 XP for today (never below
+  /// 0), and the streak is recomputed from the remaining logs. The
+  /// longest streak never decreases (it is a historical best).
+  Future<void> deleteHabit(String habitId) async {
+    return _writeQueue.run(() async {
+      final profiles = ProfileRepository(db: _db);
+      final logs = await _listLogsForHabit(habitId);
+      final doneToday = logs.any(
+        (l) => l.logDate == todayKey() && l.completed,
+      );
+      for (final log in logs) {
+        await _d.deleteRow(
+          databaseId: _dbId,
+          tableId: 'habit_logs',
+          rowId: log.id,
+        );
+      }
+      final me = await profiles.fetchMyProfile();
+      if (me != null) {
+        final dates = await activeDates();
+        final newStreak = computeStreak(dates.toSet());
+        final newLastActive = dates.isEmpty ? null : dates.first;
+        await profiles.applyXpAndStreak(
+          xpDelta: doneToday ? -xpPerTask : 0,
+          currentStreak: newStreak,
+          longestStreak: me.longestStreak,
+          lastActiveDate: newLastActive,
+        );
+      }
+      await archiveHabit(habitId);
+    });
   }
 
   Future<Map<String, dynamic>?> _getLogOrNull(String logId) async {
@@ -705,86 +863,132 @@ class HabitRepository {
   /// Untick deletes the log, so the day no longer counts toward the
   /// streak when its last completion is undone (streak is recomputed
   /// from the remaining logs). Returns what changed.
+  ///
+  /// Serialised through [_writeQueue]: two toggles fired in quick
+  /// succession must run one after the other, so the second reads the
+  /// first's result instead of the same stale state. After the writes,
+  /// the stored log + XP + streak are re-read and compared with the
+  /// intended state — a mismatch throws, so the UI reloads the true
+  /// server state instead of showing a toggle that never persisted.
   Future<ToggleResult> toggleHabit({
     required Habit habit,
     required String date,
     required bool completed,
   }) async {
-    final profiles = ProfileRepository(db: _db);
-    final me = await profiles.fetchMyProfile();
-    if (me == null) throw const AuthException('Profile not found.');
-    final userId = _requireUserId();
-    final today = todayKey();
-    final logId = _logDocId(habit.id, date);
+    return _writeQueue.run(() async {
+      final profiles = ProfileRepository(db: _db);
+      final me = await profiles.fetchMyProfile();
+      if (me == null) throw const AuthException('Profile not found.');
+      final userId = _requireUserId();
+      final today = todayKey();
+      final logId = _logDocId(habit.id, date);
 
-    final existing = await _getLogOrNull(logId);
-    final alreadyDone =
-        existing != null && (existing['completed'] as bool? ?? false);
+      final existing = await _getLogOrNull(logId);
+      final alreadyDone =
+          existing != null && (existing['completed'] as bool? ?? false);
 
-    final xpDelta = xpDeltaForToggle(
-      completing: completed,
-      wasDone: alreadyDone,
-    );
-
-    if (completed && !alreadyDone) {
-      await _d.createRow(
-        databaseId: _dbId,
-        tableId: 'habit_logs',
-        rowId: logId,
-        data: {
-          'ownerUid': userId,
-          'habitId': habit.id,
-          'date': date,
-          'completed': true,
-          'xpEarned': xpPerTask,
-        },
-        permissions: _ownerPerms(userId),
+      final xpDelta = xpDeltaForToggle(
+        completing: completed,
+        wasDone: alreadyDone,
       );
 
-      final newStreak = streakAfterTick(
-        currentStreak: me.currentStreak,
-        lastActiveDate: me.lastActiveDate,
-        today: today,
-      );
-      final longest = newStreak > me.longestStreak
-          ? newStreak
-          : me.longestStreak;
+      int newStreak = me.currentStreak;
+      String? newLastActive = me.lastActiveDate;
+      if (completed && !alreadyDone) {
+        await _d.createRow(
+          databaseId: _dbId,
+          tableId: 'habit_logs',
+          rowId: logId,
+          data: {
+            'ownerUid': userId,
+            'habitId': habit.id,
+            'date': date,
+            'completed': true,
+            'xpEarned': xpPerTask,
+          },
+          permissions: _ownerPerms(userId),
+        );
 
-      final habits = await listMyHabits();
-      final todaysLogs = await listLogsForDate(date);
-      final allDone = habits.isNotEmpty && todaysLogs.length >= habits.length;
-      await _d.updateRow(
-        databaseId: _dbId,
-        tableId: 'users',
-        rowId: userId,
-        data: {
-          'xp': (me.xp + xpDelta).clamp(0, 100000000),
-          'currentStreak': newStreak,
-          'longestStreak': longest,
-          'lastActiveDate': date,
-        },
+        newStreak = streakAfterTick(
+          currentStreak: me.currentStreak,
+          lastActiveDate: me.lastActiveDate,
+          today: today,
+        );
+        final longest = newStreak > me.longestStreak
+            ? newStreak
+            : me.longestStreak;
+        newLastActive = date;
+
+        final habits = await listMyHabits();
+        final todaysLogs = await listLogsForDate(date);
+        final allDone = habits.isNotEmpty && todaysLogs.length >= habits.length;
+        await profiles.applyXpAndStreak(
+          xpDelta: xpDelta,
+          currentStreak: newStreak,
+          longestStreak: longest,
+          lastActiveDate: newLastActive,
+        );
+        await _verifyToggle(
+          logId: logId,
+          expectDone: true,
+          expectXp: (me.xp + xpDelta).clamp(0, 100000000),
+          expectStreak: newStreak,
+        );
+        _notifyChanged();
+        return ToggleResult(xpDelta: xpDelta, allDone: allDone);
+      }
+
+      if (!completed && alreadyDone) {
+        await _d.deleteRow(
+          databaseId: _dbId,
+          tableId: 'habit_logs',
+          rowId: logId,
+        );
+        // Recompute the streak from the remaining active dates.
+        final dates = await activeDates();
+        newStreak = computeStreak(dates.toSet());
+        newLastActive = dates.isEmpty ? null : dates.first;
+        await profiles.applyXpAndStreak(
+          xpDelta: xpDelta,
+          currentStreak: newStreak,
+          longestStreak: me.longestStreak,
+          lastActiveDate: newLastActive,
+        );
+        await _verifyToggle(
+          logId: logId,
+          expectDone: false,
+          expectXp: (me.xp + xpDelta).clamp(0, 100000000),
+          expectStreak: newStreak,
+        );
+      }
+      _notifyChanged();
+      return ToggleResult(xpDelta: xpDelta, allDone: false);
+    });
+  }
+
+  /// Re-reads the stored state after a toggle and throws when it does
+  /// not match the intended one. A partial write (log saved but XP
+  /// not, or the reverse) must never look like a success.
+  Future<void> _verifyToggle({
+    required String logId,
+    required bool expectDone,
+    required int expectXp,
+    required int expectStreak,
+  }) async {
+    final log = await _getLogOrNull(logId);
+    final done = log != null && (log['completed'] as bool? ?? false);
+    if (done != expectDone) {
+      throw StateError(
+        'Habit toggle did not save properly. Please try again.',
       );
-      return ToggleResult(xpDelta: xpDelta, allDone: allDone);
     }
-
-    if (!completed && alreadyDone) {
-      await _d.deleteRow(
-        databaseId: _dbId,
-        tableId: 'habit_logs',
-        rowId: logId,
-      );
-      // Recompute the streak from the remaining active dates.
-      final dates = await activeDates();
-      final newStreak = computeStreak(dates.toSet());
-      final newLastActive = dates.isEmpty ? null : dates.first;
-      await profiles.applyXpAndStreak(
-        xpDelta: xpDelta,
-        currentStreak: newStreak,
-        longestStreak: me.longestStreak,
-        lastActiveDate: newLastActive,
+    final profile = await ProfileRepository(db: _db).fetchMyProfile();
+    if (profile == null) throw const AuthException('Profile not found.');
+    if (profile.xp != expectXp || profile.currentStreak != expectStreak) {
+      throw StateError(
+        'Habit toggle did not save properly. Please try again.',
       );
     }
-    return ToggleResult(xpDelta: xpDelta, allDone: false);
   }
 }
 
@@ -798,6 +1002,17 @@ class TaskRepository {
   final TablesDB? _db;
 
   TablesDB get _d => _requireDb(_db);
+
+  /// Broadcast whenever weekly/monthly tasks change, so screens that
+  /// load once (IndexedStack) refresh after a change made elsewhere.
+  static final _changes = StreamController<void>.broadcast();
+  static Stream<void> get onChanged => _changes.stream;
+  static void _notifyChanged() {
+    if (!_changes.isClosed) _changes.add(null);
+  }
+
+  /// Test-only hook to simulate a task change from a fake repository.
+  static void notifyChangedForTest() => _notifyChanged();
 
   String _requireUserId() {
     final user = AuthRepository.cachedUser;
@@ -833,6 +1048,7 @@ class TaskRepository {
       },
       permissions: _ownerPerms(userId),
     );
+    _notifyChanged();
   }
 
   /// Applies an XP delta to my profile, clamped at 0, leaving streak
@@ -869,22 +1085,39 @@ class TaskRepository {
 
   /// Toggles a weekly task: +2 XP on completing, -2 XP on unticking
   /// (never below 0). Reads the current state first so toggling to
-  /// the same state grants nothing.
+  /// the same state grants nothing. Serialised with the other XP
+  /// writes so two quick toggles cannot read the same stale state.
   Future<void> toggleWeeklyTask(String id, bool done) async {
-    final wasDone = await _taskDone('weekly_tasks', id);
-    await _d.updateRow(
-      databaseId: _dbId,
-      tableId: 'weekly_tasks',
-      rowId: id,
-      data: {'done': done},
-    );
-    if (wasDone != null) {
-      await _adjustXp(xpDeltaForToggle(completing: done, wasDone: wasDone));
-    }
+    return _writeQueue.run(() async {
+      final wasDone = await _taskDone('weekly_tasks', id);
+      await _d.updateRow(
+        databaseId: _dbId,
+        tableId: 'weekly_tasks',
+        rowId: id,
+        data: {'done': done},
+      );
+      if (wasDone != null) {
+        await _adjustXp(xpDeltaForToggle(completing: done, wasDone: wasDone));
+      }
+      _notifyChanged();
+    });
   }
 
+  /// Deletes a weekly task. A task that was done loses its +2 XP
+  /// (never below 0) — deleting must not leave phantom XP behind.
   Future<void> deleteWeeklyTask(String id) async {
-    await _d.deleteRow(databaseId: _dbId, tableId: 'weekly_tasks', rowId: id);
+    return _writeQueue.run(() async {
+      final wasDone = await _taskDone('weekly_tasks', id);
+      await _d.deleteRow(
+        databaseId: _dbId,
+        tableId: 'weekly_tasks',
+        rowId: id,
+      );
+      if (wasDone == true) {
+        await _adjustXp(-xpPerTask);
+      }
+      _notifyChanged();
+    });
   }
 
   Future<List<MonthlyTask>> listMonthlyTasks(String month) async {
@@ -910,24 +1143,41 @@ class TaskRepository {
       data: {'ownerUid': userId, 'title': title, 'month': month, 'done': false},
       permissions: _ownerPerms(userId),
     );
+    _notifyChanged();
   }
 
   /// Toggles a monthly task: same +2 / -2 XP rule as weekly tasks.
   Future<void> toggleMonthlyTask(String id, bool done) async {
-    final wasDone = await _taskDone('monthly_tasks', id);
-    await _d.updateRow(
-      databaseId: _dbId,
-      tableId: 'monthly_tasks',
-      rowId: id,
-      data: {'done': done},
-    );
-    if (wasDone != null) {
-      await _adjustXp(xpDeltaForToggle(completing: done, wasDone: wasDone));
-    }
+    return _writeQueue.run(() async {
+      final wasDone = await _taskDone('monthly_tasks', id);
+      await _d.updateRow(
+        databaseId: _dbId,
+        tableId: 'monthly_tasks',
+        rowId: id,
+        data: {'done': done},
+      );
+      if (wasDone != null) {
+        await _adjustXp(xpDeltaForToggle(completing: done, wasDone: wasDone));
+      }
+      _notifyChanged();
+    });
   }
 
+  /// Deletes a monthly task. A task that was done loses its +2 XP
+  /// (never below 0) — deleting must not leave phantom XP behind.
   Future<void> deleteMonthlyTask(String id) async {
-    await _d.deleteRow(databaseId: _dbId, tableId: 'monthly_tasks', rowId: id);
+    return _writeQueue.run(() async {
+      final wasDone = await _taskDone('monthly_tasks', id);
+      await _d.deleteRow(
+        databaseId: _dbId,
+        tableId: 'monthly_tasks',
+        rowId: id,
+      );
+      if (wasDone == true) {
+        await _adjustXp(-xpPerTask);
+      }
+      _notifyChanged();
+    });
   }
 }
 

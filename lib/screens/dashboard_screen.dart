@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -30,15 +32,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<HabitLog> _monthLogs = [];
   List<HabitLog> _recentLogs = [];
   List<MapEntry<String, int>> _topHabits = [];
+  StreamSubscription<void>? _habitChanges;
 
   @override
   void initState() {
     super.initState();
+    // This screen loads once (IndexedStack keeps it alive), so a habit
+    // ticked on Home would leave the charts stale. Reload whenever
+    // habits or their logs change.
+    _habitChanges = HabitRepository.onChanged.listen((_) {
+      if (mounted) _load();
+    });
     _load();
   }
 
+  @override
+  void dispose() {
+    _habitChanges?.cancel();
+    super.dispose();
+  }
+
   Future<void> _load() async {
-    setState(() => _loading = true);
+    // Only show the spinner on the first load: later refreshes update
+    // silently instead of flashing a loader over the charts.
+    final firstLoad = _profile == null && _habitCount == 0;
+    if (firstLoad) setState(() => _loading = true);
     try {
       final now = DateTime.now();
       final monthStart = DateTime(now.year, now.month, 1);

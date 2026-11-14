@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:confetti/confetti.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -8,6 +10,7 @@ import '../logic/quotes.dart';
 import '../logic/xp.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/habit_dialog.dart';
 import 'auth_screen.dart';
 
 /// Home: greeting, quote, streak + XP, today's habits.
@@ -31,6 +34,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Profile? _profile;
   bool _loading = true;
   late final ConfettiController _confetti;
+  // Habits whose toggle is still in flight: a second tap while the
+  // first toggle is saving is ignored, so two toggles can never run
+  // against the same stale state (see repositories.dart).
+  final Set<String> _toggling = {};
+  StreamSubscription<void>? _habitChanges;
 
   String get _today => todayKey();
 
@@ -38,17 +46,27 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _confetti = ConfettiController(duration: const Duration(seconds: 2));
+    // Habits can change elsewhere (e.g. deleted from Profile): reload
+    // whenever the habit list changes instead of trusting initState.
+    _habitChanges = HabitRepository.onChanged.listen((_) {
+      if (mounted) _load();
+    });
     _load();
   }
 
   @override
   void dispose() {
+    _habitChanges?.cancel();
     _confetti.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    // Only show the spinner on the first load: later refreshes
+    // (after a toggle, or a change made on another tab) update the
+    // list silently instead of flashing a loader over the habits.
+    final firstLoad = _profile == null && _habitsList.isEmpty;
+    if (firstLoad) setState(() => _loading = true);
     try {
       final habits = await _habits.listMyHabits();
       final logs = await _habits.listLogsForDate(_today);
@@ -77,6 +95,12 @@ class _HomeScreenState extends State<HomeScreen> {
       _habitsList.isNotEmpty && _doneToday.length >= _habitsList.length;
 
   Future<void> _toggle(Habit habit, bool value) async {
+    // Ignore a second tap while this habit's toggle is still saving:
+    // overlapping toggles read the same stale state and their writes
+    // land out of order. The repository serialises writes too; this
+    // keeps the UI from even starting a second one.
+    if (_toggling.contains(habit.id)) return;
+    _toggling.add(habit.id);
     try {
       final wasAllDone = _allDone;
       final result = await _habits.toggleHabit(
@@ -96,7 +120,45 @@ class _HomeScreenState extends State<HomeScreen> {
         showInfo(context, '−$xpPerTask XP');
       }
     } on AuthException catch (e) {
-      if (mounted) showError(context, e);
+      // The toggle may have partially landed; reload so the tile shows
+      // the true server state instead of the pre-tap one.
+      if (mounted) {
+        try {
+          await _load();
+        } catch (_) {}
+        if (mounted) showError(context, e);
+      }
+    } catch (e) {
+      if (mounted) {
+        try {
+          await _load();
+        } catch (_) {}
+        if (mounted) showError(context, e);
+      }
+    } finally {
+      _toggling.remove(habit.id);
+    }
+  }
+
+  Future<void> _editHabit(Habit habit) async {
+    final result = await showHabitEditDialog(context, habit);
+    if (result == null || !mounted) return;
+    try {
+      if (result.action == HabitEditAction.save &&
+          result.title.isNotEmpty) {
+        await _habits.updateHabit(habit, title: result.title);
+      } else if (result.action == HabitEditAction.delete) {
+        // Deleting removes the habit's logs and takes back today's +2
+        // XP when the habit is done today (see HabitRepository).
+        await _habits.deleteHabit(habit.id);
+        if (!mounted) return;
+        showInfo(context, 'Habit deleted.');
+        await _load();
+        return;
+      } else {
+        return;
+      }
+      await _load();
     } catch (e) {
       if (mounted) showError(context, e);
     }
@@ -300,6 +362,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                             habit: habit,
                                             done: done,
                                             onToggle: (v) => _toggle(habit, v),
+                                            onEdit: () => _editHabit(habit),
                                           )
                                           .animate()
                                           .fadeIn(delay: (60 * entry.key).ms)
@@ -320,6 +383,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       habit: habit,
                                       done: done,
                                       onToggle: (v) => _toggle(habit, v),
+                                      onEdit: () => _editHabit(habit),
                                     )
                                     .animate()
                                     .fadeIn(delay: (60 * entry.key).ms)
@@ -523,11 +587,13 @@ class _HabitTile extends StatelessWidget {
     required this.habit,
     required this.done,
     required this.onToggle,
+    required this.onEdit,
   });
 
   final Habit habit;
   final bool done;
   final ValueChanged<bool> onToggle;
+  final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -539,6 +605,9 @@ class _HabitTile extends StatelessWidget {
       elevation: 0,
       child: InkWell(
         onTap: () => onToggle(!done),
+        // Long-press opens the same edit dialog (rename / delete) that
+        // Profile offers — a habit card must always have a delete path.
+        onLongPress: onEdit,
         borderRadius: BorderRadius.circular(20),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -591,6 +660,17 @@ class _HabitTile extends StatelessWidget {
                     ),
                   ],
                 ),
+              ),
+              IconButton(
+                onPressed: onEdit,
+                tooltip: 'Edit or delete habit',
+                icon: const Icon(
+                  Icons.more_vert,
+                  color: AppTheme.inkSoft,
+                  size: 20,
+                ),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                padding: EdgeInsets.zero,
               ),
               AnimatedContainer(
                 duration: const Duration(milliseconds: 250),

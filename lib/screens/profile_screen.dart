@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
@@ -6,6 +8,7 @@ import '../data/repositories.dart';
 import '../logic/xp.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/habit_dialog.dart';
 import 'auth_screen.dart';
 
 /// The user's own profile: stats, all habits, weekly + monthly tasks,
@@ -45,15 +48,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int _followers = 0;
   int _following = 0;
   bool _loading = true;
+  StreamSubscription<void>? _habitChanges;
+  StreamSubscription<void>? _taskChanges;
 
   @override
   void initState() {
     super.initState();
+    // This screen loads once (IndexedStack keeps it alive), so a habit
+    // added on Home — or a task toggled here — would never appear until
+    // the app restarts. Reload whenever habits or tasks change.
+    _habitChanges = HabitRepository.onChanged.listen((_) {
+      if (mounted) _load();
+    });
+    _taskChanges = TaskRepository.onChanged.listen((_) {
+      if (mounted) _load();
+    });
     _load();
   }
 
+  @override
+  void dispose() {
+    _habitChanges?.cancel();
+    _taskChanges?.cancel();
+    super.dispose();
+  }
+
   Future<void> _load() async {
-    setState(() => _loading = true);
+    // Only show the spinner on the first load: later refreshes update
+    // silently instead of flashing a loader over the profile.
+    final firstLoad = _profile == null;
+    if (firstLoad) setState(() => _loading = true);
     try {
       final profile = await _profiles.fetchMyProfile();
       final habits = await _habits.listMyHabits();
@@ -183,47 +207,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _editHabit(Habit habit) async {
-    final controller = TextEditingController(text: habit.title);
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text('Edit habit'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Habit name'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop('delete'),
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop('save'),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    if (result == 'save' && controller.text.trim().isNotEmpty) {
-      try {
-        await _habits.updateHabit(habit, title: controller.text.trim());
+    final result = await showHabitEditDialog(context, habit);
+    if (result == null || !mounted) return;
+    try {
+      if (result.action == HabitEditAction.save &&
+          result.title.isNotEmpty) {
+        await _habits.updateHabit(habit, title: result.title);
         await _load();
-      } catch (e) {
-        if (mounted) showError(context, e);
-      }
-    } else if (result == 'delete') {
-      try {
-        await _habits.archiveHabit(habit.id);
+      } else if (result.action == HabitEditAction.delete) {
+        // Deleting removes the habit's logs and takes back today's +2
+        // XP when the habit is done today (see HabitRepository).
+        await _habits.deleteHabit(habit.id);
+        if (mounted) showInfo(context, 'Habit deleted.');
         await _load();
-      } catch (e) {
-        if (mounted) showError(context, e);
       }
+    } catch (e) {
+      if (mounted) showError(context, e);
     }
   }
 
