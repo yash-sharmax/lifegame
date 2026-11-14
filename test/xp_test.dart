@@ -2,6 +2,32 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lifegame/logic/xp.dart';
 
 void main() {
+  group('XP economy: 2 XP per task', () {
+    test('one task is worth exactly 2 XP', () {
+      expect(xpPerTask, 2);
+    });
+
+    test('a level still costs 100 XP, so 50 tasks', () {
+      expect(50 * xpPerTask, 100);
+      expect(levelForXp(100), 2);
+    });
+  });
+
+  group('xpDeltaForToggle', () {
+    test('completing a pending item grants +2', () {
+      expect(xpDeltaForToggle(completing: true, wasDone: false), 2);
+    });
+
+    test('unticking a done item removes 2', () {
+      expect(xpDeltaForToggle(completing: false, wasDone: true), -2);
+    });
+
+    test('no change when the state does not change', () {
+      expect(xpDeltaForToggle(completing: true, wasDone: true), 0);
+      expect(xpDeltaForToggle(completing: false, wasDone: false), 0);
+    });
+  });
+
   group('levelForXp', () {
     test('0 XP is level 1', () {
       expect(levelForXp(0), 1);
@@ -95,20 +121,19 @@ void main() {
   group('computeStreak', () {
     test('counts backwards from today', () {
       expect(
-        computeStreak(
-          {'2026-11-14', '2026-11-13', '2026-11-12', '2026-11-10'},
-          DateTime(2026, 11, 14),
-        ),
+        computeStreak({
+          '2026-11-14',
+          '2026-11-13',
+          '2026-11-12',
+          '2026-11-10',
+        }, DateTime(2026, 11, 14)),
         3,
       );
     });
 
     test('today not active yet counts from yesterday', () {
       expect(
-        computeStreak(
-          {'2026-11-13', '2026-11-12'},
-          DateTime(2026, 11, 14),
-        ),
+        computeStreak({'2026-11-13', '2026-11-12'}, DateTime(2026, 11, 14)),
         2,
       );
     });

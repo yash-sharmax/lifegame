@@ -20,8 +20,7 @@ const List<String> motivationalQuotes = [
 /// Quote for a given day — stable for the whole day, rotates daily.
 String quoteForDay([DateTime? now]) {
   final d = now ?? DateTime.now();
-  final dayOfYear =
-      d.difference(DateTime(d.year, 1, 1)).inDays;
+  final dayOfYear = d.difference(DateTime(d.year, 1, 1)).inDays;
   return motivationalQuotes[dayOfYear % motivationalQuotes.length];
 }
 

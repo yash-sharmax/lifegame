@@ -71,7 +71,9 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return ResponsiveCenter(
+      maxWidth: 980,
+      child: Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
@@ -133,7 +135,8 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
                 ),
         ),
       ],
-    );
+    ),
+  );
   }
 }
 

@@ -24,8 +24,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   HabitRepository get _habits => widget.habitRepo ?? HabitRepository();
-  ProfileRepository get _profiles =>
-      widget.profileRepo ?? ProfileRepository();
+  ProfileRepository get _profiles => widget.profileRepo ?? ProfileRepository();
 
   List<Habit> _habitsList = [];
   Set<String> _doneToday = {};
@@ -88,16 +87,13 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
       await _load();
       if (!mounted) return;
-      if (result.bonusGranted && !wasAllDone) {
+      if (value && result.allDone && !wasAllDone) {
         _confetti.play();
-        showInfo(context, 'Day complete! +${result.xpDelta} XP. Legendary!');
+        showInfo(context, 'Day complete! Every habit ticked.');
       } else if (value) {
-        showInfo(context, '+$xpPerHabit XP — nice one!');
-      }
-      // Confetti also fires when the day becomes complete even if the
-      // bonus was already granted earlier (e.g. after an untick).
-      if (result.allDone && !wasAllDone && !result.bonusGranted) {
-        _confetti.play();
+        showInfo(context, '+$xpPerTask XP — nice one!');
+      } else {
+        showInfo(context, '−$xpPerTask XP');
       }
     } on AuthException catch (e) {
       if (mounted) showError(context, e);
@@ -198,135 +194,200 @@ class _HomeScreenState extends State<HomeScreen> {
     final profile = _profile;
     final streak = profile?.currentStreak ?? 0;
     final xp = profile?.xp ?? 0;
+    final wide = isWideScreen(context);
 
-    return Stack(
-      children: [
-        RefreshIndicator(
-          onRefresh: _load,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+    // The XP bar is pinned above the scrollable list, so the user's
+    // current XP (and level) is visible at the top at all times.
+    return ResponsiveCenter(
+      maxWidth: 980,
+      child: Stack(
+        children: [
+          Column(
             children: [
-              _Header(
-                displayName: profile?.displayName ?? 'Player',
-                streak: streak,
-              ).animate().fadeIn().slideY(begin: -0.1),
-              const SizedBox(height: 16),
-              _QuoteCard(
-                quote: quoteForDay(),
-              ).animate().fadeIn(delay: 80.ms).slideY(begin: 0.1),
-              const SizedBox(height: 16),
-              XpBar(xp: xp).animate().fadeIn(delay: 140.ms).slideY(begin: 0.1),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  const Text(
-                    "Today's habits",
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
-                  ),
-                  const Spacer(),
-                  if (_habitsList.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppTheme.violet.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        '${_doneToday.length}/${_habitsList.length} done',
-                        style: const TextStyle(
-                          color: AppTheme.violet,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                child: _Header(
+                  displayName: profile?.displayName ?? 'Player',
+                  streak: streak,
+                ).animate().fadeIn().slideY(begin: -0.1),
               ),
               const SizedBox(height: 12),
-              if (_loading)
-                const Center(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 48),
-                    child: CircularProgressIndicator(),
-                  ),
-                )
-              else if (_habitsList.isEmpty)
-                EmptyState(
-                  icon: Icons.flag_outlined,
-                  title: 'Your journey starts here',
-                  subtitle:
-                      'No habits yet. Add your first one — small steps, big change.',
-                  actionLabel: 'Add your first habit',
-                  onAction: _addHabit,
-                )
-              else
-                ..._habitsList.asMap().entries.map((entry) {
-                  final habit = entry.value;
-                  final done = _doneToday.contains(habit.id);
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _HabitTile(
-                      habit: habit,
-                      done: done,
-                      onToggle: (v) => _toggle(habit, v),
-                    ).animate().fadeIn(delay: (60 * entry.key).ms).slideX(begin: 0.08),
-                  );
-                }),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _addHabit,
-                icon: const Icon(Icons.add),
-                label: const Text('Add habit'),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: XpBar(xp: xp)
+                    .animate()
+                    .fadeIn(delay: 60.ms)
+                    .slideY(begin: 0.1),
               ),
-              if (_allDone) ...[
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    gradient: AppTheme.amberGradient,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Row(
+              const SizedBox(height: 16),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
                     children: [
-                      Icon(Icons.emoji_events, color: Colors.white, size: 34),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Day complete! Every habit ticked. +50 XP bonus earned.',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 15,
+                      _QuoteCard(quote: quoteForDay())
+                          .animate()
+                          .fadeIn(delay: 80.ms)
+                          .slideY(begin: 0.1),
+                      const SizedBox(height: 20),
+                      Row(
+                        children: [
+                          const Flexible(
+                            child: Text(
+                              "Today's habits",
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
+                          const Spacer(),
+                          if (_habitsList.isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppTheme.violet.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                '${_doneToday.length}/${_habitsList.length} done',
+                                style: const TextStyle(
+                                  color: AppTheme.violet,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
+                      const SizedBox(height: 12),
+                      if (_loading)
+                        const Center(
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(vertical: 48),
+                            child: CircularProgressIndicator(),
+                          ),
+                        )
+                      else if (_habitsList.isEmpty)
+                        EmptyState(
+                          icon: Icons.flag_outlined,
+                          title: 'Your journey starts here',
+                          subtitle: 'No habits yet. Add your first one — small steps, big change.',
+                          actionLabel: 'Add your first habit',
+                          onAction: _addHabit,
+                        )
+                      else if (wide)
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final tileWidth = (constraints.maxWidth - 12) / 2;
+                            return Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              children: _habitsList.asMap().entries.map((
+                                entry,
+                              ) {
+                                final habit = entry.value;
+                                final done = _doneToday.contains(habit.id);
+                                return SizedBox(
+                                  width: tileWidth,
+                                  child:
+                                      _HabitTile(
+                                            habit: habit,
+                                            done: done,
+                                            onToggle: (v) => _toggle(habit, v),
+                                          )
+                                          .animate()
+                                          .fadeIn(delay: (60 * entry.key).ms)
+                                          .slideX(begin: 0.08),
+                                );
+                              }).toList(),
+                            );
+                          },
+                        )
+                      else
+                        ..._habitsList.asMap().entries.map((entry) {
+                          final habit = entry.value;
+                          final done = _doneToday.contains(habit.id);
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child:
+                                _HabitTile(
+                                      habit: habit,
+                                      done: done,
+                                      onToggle: (v) => _toggle(habit, v),
+                                    )
+                                    .animate()
+                                    .fadeIn(delay: (60 * entry.key).ms)
+                                    .slideX(begin: 0.08),
+                          );
+                        }),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: _addHabit,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add habit'),
+                      ),
+                      if (_allDone) ...[
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(18),
+                          decoration: BoxDecoration(
+                            gradient: AppTheme.amberGradient,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Row(
+                            children: [
+                              Icon(
+                                Icons.emoji_events,
+                                color: Colors.white,
+                                size: 34,
+                              ),
+                              SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  'Day complete! Every habit ticked.',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ).animate().fadeIn().scale(
+                          begin: const Offset(0.95, 0.95),
+                        ),
+                      ],
                     ],
                   ),
-                ).animate().fadeIn().scale(begin: const Offset(0.95, 0.95)),
+                ),
+              ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.topCenter,
+            child: ConfettiWidget(
+              confettiController: _confetti,
+              blastDirectionality: BlastDirectionality.explosive,
+              shouldLoop: false,
+              numberOfParticles: 60,
+              gravity: 0.25,
+              colors: const [
+                AppTheme.violet,
+                AppTheme.pink,
+                AppTheme.amber,
+                AppTheme.teal,
               ],
-            ],
+            ),
           ),
-        ),
-        Align(
-          alignment: Alignment.topCenter,
-          child: ConfettiWidget(
-            confettiController: _confetti,
-            blastDirectionality: BlastDirectionality.explosive,
-            shouldLoop: false,
-            numberOfParticles: 60,
-            gravity: 0.25,
-            colors: const [
-              AppTheme.violet,
-              AppTheme.pink,
-              AppTheme.amber,
-              AppTheme.teal,
-            ],
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -341,8 +402,19 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     final now = DateTime.now();
     const months = [
-      '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      '',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -405,13 +477,6 @@ class _Header extends StatelessWidget {
                   fontSize: 17,
                 ),
               ),
-              const Text(
-                ' streak',
-                style: TextStyle(
-                  color: AppTheme.inkSoft,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
             ],
           ),
         ),
@@ -466,7 +531,8 @@ class _HabitTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final gradient = AppTheme.habitGradients[habit.color % AppTheme.habitGradients.length];
+    final gradient =
+        AppTheme.habitGradients[habit.color % AppTheme.habitGradients.length];
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(20),
@@ -479,9 +545,7 @@ class _HabitTile extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: done
-                  ? Colors.transparent
-                  : const Color(0xFFEDEAF5),
+              color: done ? Colors.transparent : const Color(0xFFEDEAF5),
             ),
             color: done ? AppTheme.violet.withValues(alpha: 0.06) : null,
           ),
@@ -507,17 +571,19 @@ class _HabitTile extends StatelessWidget {
                   children: [
                     Text(
                       habit.title,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
-                        decoration: done
-                            ? TextDecoration.lineThrough
-                            : null,
-                        color: done ? AppTheme.inkSoft : AppTheme.ink,
+                        // Done items stay fully readable: no
+                        // strikethrough — the filled check circle and
+                        // the tinted tile are the done state.
+                        color: AppTheme.ink,
                       ),
                     ),
                     Text(
-                      done ? 'Done • +$xpPerHabit XP' : 'Tap to complete • +$xpPerHabit XP',
+                      done
+                          ? 'Done • +$xpPerTask XP'
+                          : 'Tap to complete • +$xpPerTask XP',
                       style: const TextStyle(
                         color: AppTheme.inkSoft,
                         fontSize: 13,

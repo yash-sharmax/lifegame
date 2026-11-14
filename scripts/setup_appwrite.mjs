@@ -168,6 +168,10 @@ const TABLES = [
     ],
   },
   {
+    // LEGACY (14 Nov 2026): the daily-complete bonus was removed — every
+    // task is worth exactly +2 XP. The table is still created so the
+    // script stays idempotent against the existing project; the app
+    // never reads or writes it any more.
     id: 'daily_rewards',
     name: 'Daily rewards',
     permissions: TABLE_DEFAULT_PERMS,

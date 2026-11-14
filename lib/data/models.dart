@@ -80,9 +80,7 @@ class Profile {
         s.isEmpty ? '' : String.fromCharCode(s.runes.first);
     if (parts.length == 1) {
       final p = parts.first;
-      return p.length >= 2
-          ? p.substring(0, 2).toUpperCase()
-          : p.toUpperCase();
+      return p.length >= 2 ? p.substring(0, 2).toUpperCase() : p.toUpperCase();
     }
     return (firstChar(parts.first) + firstChar(parts.last)).toUpperCase();
   }

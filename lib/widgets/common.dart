@@ -2,7 +2,43 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
+import '../logic/xp.dart';
 import '../theme.dart';
+
+/// Desktop breakpoint: screens 600px and wider use the desktop layout
+/// (centred content, multi-column sections, side navigation) instead of
+/// the phone-like bottom-nav layout.
+const double kDesktopBreakpoint = 600;
+
+/// True when the current screen is wide enough for the desktop layout.
+bool isWideScreen(BuildContext context) =>
+    MediaQuery.sizeOf(context).width >= kDesktopBreakpoint;
+
+/// Centres [child] with a maximum width on wide screens so content uses
+/// the computer screen instead of stretching edge to edge, while phones
+/// (<600px) get the full width unchanged.
+class ResponsiveCenter extends StatelessWidget {
+  const ResponsiveCenter({
+    super.key,
+    required this.child,
+    this.maxWidth = 1080,
+  });
+
+  final Widget child;
+  final double maxWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isWideScreen(context)) return child;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: child,
+      ),
+    );
+  }
+}
 
 /// Gradient circle avatar showing the user's initials.
 class AvatarCircle extends StatelessWidget {
@@ -58,10 +94,8 @@ class CountUp extends StatelessWidget {
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: 0, end: value.toDouble()),
       duration: duration,
-      builder: (context, animated, _) => Text(
-        '${animated.round()}$suffix',
-        style: style,
-      ),
+      builder: (context, animated, _) =>
+          Text('${animated.round()}$suffix', style: style),
     );
   }
 }
@@ -74,9 +108,9 @@ class XpBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final level = xp ~/ 100 + 1;
-    final progress = (xp % 100) / 100;
-    final toNext = 100 - (xp % 100);
+    final level = levelForXp(xp);
+    final progress = progressToNextLevel(xp);
+    final toNext = xpToNextLevel(xp);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -131,9 +165,7 @@ class XpBar extends StatelessWidget {
                 value: value,
                 minHeight: 10,
                 backgroundColor: Colors.white.withValues(alpha: 0.25),
-                valueColor: const AlwaysStoppedAnimation<Color>(
-                  AppTheme.amber,
-                ),
+                valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.amber),
               ),
             ),
           ),
@@ -366,7 +398,11 @@ class GradientButton extends StatelessWidget {
 
 /// "Continue with Google" button.
 class GoogleButton extends StatelessWidget {
-  const GoogleButton({super.key, required this.onPressed, this.loading = false});
+  const GoogleButton({
+    super.key,
+    required this.onPressed,
+    this.loading = false,
+  });
 
   final VoidCallback? onPressed;
   final bool loading;

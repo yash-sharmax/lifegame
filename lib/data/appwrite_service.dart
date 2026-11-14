@@ -51,8 +51,7 @@ class AppwriteService {
   }
 
   /// Null-safe accessors used by repositories that must degrade gracefully.
-  static Account? get accountOrNull =>
-      AppConfig.isConfigured ? _account : null;
+  static Account? get accountOrNull => AppConfig.isConfigured ? _account : null;
 
   static TablesDB? get dbOrNull => AppConfig.isConfigured ? _databases : null;
 }

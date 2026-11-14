@@ -4,6 +4,7 @@ import 'package:lifegame/data/models.dart';
 import 'package:lifegame/data/repositories.dart';
 import 'package:lifegame/main.dart';
 import 'package:lifegame/screens/home_screen.dart';
+import 'package:lifegame/screens/profile_screen.dart';
 
 void main() {
   testWidgets('unconfigured app shows the login screen', (tester) async {
@@ -35,8 +36,9 @@ void main() {
     expect(find.text('Username'), findsOneWidget);
   });
 
-  testWidgets('home shows empty state when there are no habits',
-      (tester) async {
+  testWidgets('home shows empty state when there are no habits', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -53,6 +55,109 @@ void main() {
     expect(find.text('Your journey starts here'), findsOneWidget);
     expect(find.text('Add your first habit'), findsOneWidget);
   });
+
+  testWidgets('home shows XP at the top', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: HomeScreen(
+            habitRepo: _EmptyHabitRepo(),
+            profileRepo: _XpProfileRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // XP is pinned at the top (XpBar), not buried in Profile.
+    expect(find.text('42 XP'), findsOneWidget);
+    expect(find.text('LEVEL 1'), findsOneWidget);
+    expect(find.text('58 XP to Level 2'), findsOneWidget);
+  });
+
+  testWidgets('done habit stays visible without a strikethrough',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: HomeScreen(
+            habitRepo: _DoneHabitRepo(),
+            profileRepo: _XpProfileRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Read 10 pages'), findsOneWidget);
+    expect(find.text('Done • +2 XP'), findsOneWidget);
+    final title = tester.widget<Text>(find.text('Read 10 pages'));
+    expect(title.style?.decoration, isNot(TextDecoration.lineThrough));
+  });
+
+  testWidgets('done weekly task stays visible without a strikethrough',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ProfileScreen(
+            profileRepo: _FullProfileRepo(),
+            habitRepo: _EmptyHabitRepo(),
+            taskRepo: _WeeklyTaskRepo(),
+            socialRepo: _SocialCountsRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Task sections sit below the fold: scroll until visible.
+    await tester.scrollUntilVisible(find.text('Buy groceries'), 300);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Buy groceries'), findsOneWidget);
+    final title = tester.widget<Text>(find.text('Buy groceries'));
+    expect(title.style?.decoration, isNot(TextDecoration.lineThrough));
+    final checkbox = tester.widget<Checkbox>(find.byType(Checkbox));
+    expect(checkbox.value, isTrue);
+  });
+
+  testWidgets('desktop shell uses a navigation rail', (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const MaterialApp(home: MainShell()));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(find.text('Life Game'), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
+  });
+
+  testWidgets('home renders wide desktop layout without errors',
+      (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: HomeScreen(
+            habitRepo: _DoneHabitRepo(),
+            profileRepo: _XpProfileRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Read 10 pages'), findsOneWidget);
+    expect(find.text('42 XP'), findsOneWidget);
+  });
 }
 
 /// Fake repositories that return empty data without touching Appwrite.
@@ -66,9 +171,76 @@ class _EmptyHabitRepo extends HabitRepository {
 
 class _EmptyProfileRepo extends ProfileRepository {
   @override
+  Future<Profile?> fetchMyProfile() async =>
+      const Profile(id: 'test-user', username: 'tester', displayName: 'Tester');
+}
+
+/// Profile with 42 XP (level 1, 58 XP to level 2).
+class _XpProfileRepo extends ProfileRepository {
+  @override
   Future<Profile?> fetchMyProfile() async => const Profile(
     id: 'test-user',
     username: 'tester',
     displayName: 'Tester',
+    xp: 42,
+    currentStreak: 3,
+    longestStreak: 5,
   );
+}
+
+/// One habit, already done today.
+class _DoneHabitRepo extends HabitRepository {
+  @override
+  Future<List<Habit>> listMyHabits() async => [
+    const Habit(id: 'h1', userId: 'test-user', title: 'Read 10 pages'),
+  ];
+
+  @override
+  Future<List<HabitLog>> listLogsForDate(String date) async => [
+    HabitLog(
+      id: 'h1_$date',
+      habitId: 'h1',
+      userId: 'test-user',
+      logDate: date,
+    ),
+  ];
+}
+
+class _FullProfileRepo extends ProfileRepository {
+  @override
+  Future<Profile?> fetchMyProfile() async => const Profile(
+    id: 'test-user',
+    username: 'tester',
+    displayName: 'Tester',
+    xp: 42,
+    currentStreak: 3,
+    longestStreak: 5,
+  );
+
+  @override
+  Future<int> fetchGlobalRank() async => 1;
+}
+
+class _WeeklyTaskRepo extends TaskRepository {
+  @override
+  Future<List<WeeklyTask>> listWeeklyTasks(String weekStart) async => [
+    WeeklyTask(
+      id: 'w1',
+      userId: 'test-user',
+      title: 'Buy groceries',
+      weekStart: weekStart,
+      done: true,
+    ),
+  ];
+
+  @override
+  Future<List<MonthlyTask>> listMonthlyTasks(String month) async => [];
+}
+
+class _SocialCountsRepo extends SocialRepository {
+  @override
+  Future<int> followersCount(String userId) async => 0;
+
+  @override
+  Future<int> followingCount(String userId) async => 0;
 }

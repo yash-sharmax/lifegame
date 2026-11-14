@@ -8,11 +8,12 @@
 /// pass in-memory fakes that subclass these classes.
 ///
 /// NOTE: Appwrite has no multi-document transactions. Writes that used
-/// to happen in one batch (e.g. tick habit + grant bonus + update
-/// profile) are sequential here — a failure midway can leave a partial
-/// state (e.g. the log exists but the bonus was not granted).
-/// The daily-reward document id (`{uid}_{date}`) makes the bonus
-/// idempotent, so retrying a tick can never double-grant it.
+/// to happen in one batch (e.g. tick habit + update profile) are
+/// sequential here — a failure midway can leave a partial state (e.g.
+/// the log exists but the profile XP was not updated). Toggles are
+/// idempotent by design: the log document id (`{habitId}_{date}`) means
+/// a retried tick can never double-grant XP, and unticking deletes the
+/// log, so re-ticking after an untick grants XP again exactly once.
 /// See APPWRITE.md ("Security model") for the honest write-up.
 library;
 
@@ -127,7 +128,6 @@ TablesDB _requireDb(TablesDB? injected) {
 
 String get _dbId => AppConfig.databaseId;
 
-
 /// Merge an Appwrite document into the shape our models expect.
 Map<String, dynamic> _docJson(models.Row doc) => {
   'id': doc.$id,
@@ -231,10 +231,7 @@ class AuthRepository {
     );
   }
 
-  Future<void> signIn({
-    required String email,
-    required String password,
-  }) async {
+  Future<void> signIn({required String email, required String password}) async {
     try {
       await _a.createEmailPasswordSession(email: email, password: password);
       final user = await _a.get();
@@ -271,11 +268,7 @@ class AuthRepository {
       );
       await auth.createEmailPasswordSession(email: email, password: password);
       _setUser(AppAuthUser.fromAppwrite(user));
-      final profile = Profile(
-        id: user.$id,
-        username: lower,
-        displayName: name,
-      );
+      final profile = Profile(id: user.$id, username: lower, displayName: name);
       await db.createRow(
         databaseId: _dbId,
         tableId: 'users',
@@ -288,10 +281,7 @@ class AuthRepository {
           databaseId: _dbId,
           tableId: 'usernames',
           rowId: lower,
-          data: {
-            'username': lower,
-            'ownerUid': user.$id,
-          },
+          data: {'username': lower, 'ownerUid': user.$id},
           permissions: _usernamePerms(user.$id),
         );
       } on AppwriteException catch (e) {
@@ -322,10 +312,7 @@ class AuthRepository {
 
   Future<void> sendPasswordReset(String email) async {
     try {
-      await _a.createRecovery(
-        email: email,
-        url: AppConfig.resetContinueUrl,
-      );
+      await _a.createRecovery(email: email, url: AppConfig.resetContinueUrl);
     } catch (e) {
       throw _wrapAuthError(e);
     }
@@ -365,9 +352,7 @@ class AuthRepository {
     }
     _cachedUser = null;
     _sessionLoaded = false;
-    _changes.add(
-      const AuthChange(event: AuthEvent.signedOut),
-    );
+    _changes.add(const AuthChange(event: AuthEvent.signedOut));
   }
 }
 
@@ -428,11 +413,7 @@ class ProfileRepository {
     final userId = _requireUserId();
     final lower = username.toLowerCase();
     final name = displayName.isEmpty ? lower : displayName;
-    final profile = Profile(
-      id: userId,
-      username: lower,
-      displayName: name,
-    );
+    final profile = Profile(id: userId, username: lower, displayName: name);
     try {
       await _d.createRow(
         databaseId: _dbId,
@@ -454,10 +435,7 @@ class ProfileRepository {
         databaseId: _dbId,
         tableId: 'usernames',
         rowId: lower,
-        data: {
-          'username': lower,
-          'ownerUid': userId,
-        },
+        data: {'username': lower, 'ownerUid': userId},
         permissions: _usernamePerms(userId),
       );
     } on AppwriteException catch (e) {
@@ -480,10 +458,7 @@ class ProfileRepository {
       databaseId: _dbId,
       tableId: 'users',
       rowId: userId,
-      data: {
-        'displayName': displayName,
-        'bio': bio,
-      },
+      data: {'displayName': displayName, 'bio': bio},
     );
     final updated = await fetchProfile(userId);
     if (updated == null) throw const AuthException('Profile not found.');
@@ -585,14 +560,9 @@ class ProfileRepository {
 // ---------------------------------------------------------------------------
 
 class ToggleResult {
-  const ToggleResult({
-    required this.xpDelta,
-    required this.bonusGranted,
-    required this.allDone,
-  });
+  const ToggleResult({required this.xpDelta, required this.allDone});
 
   final int xpDelta;
-  final bool bonusGranted;
   final bool allDone;
 }
 
@@ -622,15 +592,10 @@ class HabitRepository {
         Query.orderAsc(r'$createdAt'),
       ],
     );
-    return list.rows
-        .map((doc) => Habit.fromJson(_docJson(doc)))
-        .toList();
+    return list.rows.map((doc) => Habit.fromJson(_docJson(doc))).toList();
   }
 
-  Future<Habit> addHabit({
-    required String title,
-    required int color,
-  }) async {
+  Future<Habit> addHabit({required String title, required int color}) async {
     final userId = _requireUserId();
     final doc = await _d.createRow(
       databaseId: _dbId,
@@ -694,9 +659,7 @@ class HabitRepository {
         Query.equal('completed', true),
       ],
     );
-    return list.rows
-        .map((doc) => HabitLog.fromJson(_docJson(doc)))
-        .toList();
+    return list.rows.map((doc) => HabitLog.fromJson(_docJson(doc))).toList();
   }
 
   Future<List<HabitLog>> listLogsInRange(String start, String end) async {
@@ -712,9 +675,7 @@ class HabitRepository {
         Query.orderAsc('date'),
       ],
     );
-    return list.rows
-        .map((doc) => HabitLog.fromJson(_docJson(doc)))
-        .toList();
+    return list.rows.map((doc) => HabitLog.fromJson(_docJson(doc))).toList();
   }
 
   /// Distinct dates (newest first) with at least one completed habit.
@@ -738,23 +699,12 @@ class HabitRepository {
     return dates.toList();
   }
 
-  Future<bool> dailyBonusGranted(String date) async {
-    final userId = _requireUserId();
-    try {
-      await _d.getRow(
-        databaseId: _dbId,
-        tableId: 'daily_rewards',
-        rowId: '${userId}_$date',
-      );
-      return true;
-    } on AppwriteException catch (e) {
-      if (e.code == 404) return false;
-      rethrow;
-    }
-  }
-
-  /// Tick or untick a habit for [date]. Handles XP, streak and the
-  /// all-done bonus. Returns what changed.
+  /// Tick or untick a habit for [date]. Handles XP and streak.
+  /// +2 XP on completing, -2 XP on unticking (never below 0, enforced
+  /// by the clamp in [ProfileRepository.applyXpAndStreak]). No bonus.
+  /// Untick deletes the log, so the day no longer counts toward the
+  /// streak when its last completion is undone (streak is recomputed
+  /// from the remaining logs). Returns what changed.
   Future<ToggleResult> toggleHabit({
     required Habit habit,
     required String date,
@@ -771,8 +721,10 @@ class HabitRepository {
     final alreadyDone =
         existing != null && (existing['completed'] as bool? ?? false);
 
-    var xpDelta = 0;
-    var bonusGranted = false;
+    final xpDelta = xpDeltaForToggle(
+      completing: completed,
+      wasDone: alreadyDone,
+    );
 
     if (completed && !alreadyDone) {
       await _d.createRow(
@@ -784,11 +736,10 @@ class HabitRepository {
           'habitId': habit.id,
           'date': date,
           'completed': true,
-          'xpEarned': xpPerHabit,
+          'xpEarned': xpPerTask,
         },
         permissions: _ownerPerms(userId),
       );
-      xpDelta += xpPerHabit;
 
       final newStreak = streakAfterTick(
         currentStreak: me.currentStreak,
@@ -799,33 +750,9 @@ class HabitRepository {
           ? newStreak
           : me.longestStreak;
 
-      // All of today's habits done? Grant the +50 bonus once per day.
-      // The reward document id ({uid}_{date}) makes it idempotent: a
-      // 409 means it was already granted (e.g. a retried tick).
       final habits = await listMyHabits();
       final todaysLogs = await listLogsForDate(date);
-      final allDone = habits.isNotEmpty &&
-          todaysLogs.length >= habits.length;
-      if (allDone && date == today && !await dailyBonusGranted(date)) {
-        try {
-          await _d.createRow(
-            databaseId: _dbId,
-            tableId: 'daily_rewards',
-            rowId: '${userId}_$date',
-            data: {
-              'ownerUid': userId,
-              'date': date,
-              'xp': xpDailyCompleteBonus,
-              'kind': 'daily_complete',
-            },
-            permissions: _ownerPerms(userId),
-          );
-          xpDelta += xpDailyCompleteBonus;
-          bonusGranted = true;
-        } on AppwriteException catch (e) {
-          if (e.code != 409) rethrow;
-        }
-      }
+      final allDone = habits.isNotEmpty && todaysLogs.length >= habits.length;
       await _d.updateRow(
         databaseId: _dbId,
         tableId: 'users',
@@ -837,11 +764,7 @@ class HabitRepository {
           'lastActiveDate': date,
         },
       );
-      return ToggleResult(
-        xpDelta: xpDelta,
-        bonusGranted: bonusGranted,
-        allDone: allDone,
-      );
+      return ToggleResult(xpDelta: xpDelta, allDone: allDone);
     }
 
     if (!completed && alreadyDone) {
@@ -850,7 +773,6 @@ class HabitRepository {
         tableId: 'habit_logs',
         rowId: logId,
       );
-      xpDelta -= xpPerHabit;
       // Recompute the streak from the remaining active dates.
       final dates = await activeDates();
       final newStreak = computeStreak(dates.toSet());
@@ -862,11 +784,7 @@ class HabitRepository {
         lastActiveDate: newLastActive,
       );
     }
-    return ToggleResult(
-      xpDelta: xpDelta,
-      bonusGranted: bonusGranted,
-      allDone: false,
-    );
+    return ToggleResult(xpDelta: xpDelta, allDone: false);
   }
 }
 
@@ -898,9 +816,7 @@ class TaskRepository {
         Query.orderAsc(r'$createdAt'),
       ],
     );
-    return list.rows
-        .map((doc) => WeeklyTask.fromJson(_docJson(doc)))
-        .toList();
+    return list.rows.map((doc) => WeeklyTask.fromJson(_docJson(doc))).toList();
   }
 
   Future<void> addWeeklyTask(String title, String weekStart) async {
@@ -919,21 +835,56 @@ class TaskRepository {
     );
   }
 
+  /// Applies an XP delta to my profile, clamped at 0, leaving streak
+  /// fields untouched. Weekly/monthly tasks grant XP only — the streak
+  /// stays habit-driven (it is computed from habit logs).
+  Future<void> _adjustXp(int delta) async {
+    if (delta == 0) return;
+    final profiles = ProfileRepository(db: _db);
+    final me = await profiles.fetchMyProfile();
+    if (me == null) return;
+    await profiles.applyXpAndStreak(
+      xpDelta: delta,
+      currentStreak: me.currentStreak,
+      longestStreak: me.longestStreak,
+      lastActiveDate: me.lastActiveDate,
+    );
+  }
+
+  /// Reads the current `done` value of a task row; null when the row
+  /// does not exist.
+  Future<bool?> _taskDone(String tableId, String id) async {
+    try {
+      final doc = await _d.getRow(
+        databaseId: _dbId,
+        tableId: tableId,
+        rowId: id,
+      );
+      return doc.data['done'] as bool? ?? false;
+    } on AppwriteException catch (e) {
+      if (e.code == 404) return null;
+      rethrow;
+    }
+  }
+
+  /// Toggles a weekly task: +2 XP on completing, -2 XP on unticking
+  /// (never below 0). Reads the current state first so toggling to
+  /// the same state grants nothing.
   Future<void> toggleWeeklyTask(String id, bool done) async {
+    final wasDone = await _taskDone('weekly_tasks', id);
     await _d.updateRow(
       databaseId: _dbId,
       tableId: 'weekly_tasks',
       rowId: id,
       data: {'done': done},
     );
+    if (wasDone != null) {
+      await _adjustXp(xpDeltaForToggle(completing: done, wasDone: wasDone));
+    }
   }
 
   Future<void> deleteWeeklyTask(String id) async {
-    await _d.deleteRow(
-      databaseId: _dbId,
-      tableId: 'weekly_tasks',
-      rowId: id,
-    );
+    await _d.deleteRow(databaseId: _dbId, tableId: 'weekly_tasks', rowId: id);
   }
 
   Future<List<MonthlyTask>> listMonthlyTasks(String month) async {
@@ -947,9 +898,7 @@ class TaskRepository {
         Query.orderAsc(r'$createdAt'),
       ],
     );
-    return list.rows
-        .map((doc) => MonthlyTask.fromJson(_docJson(doc)))
-        .toList();
+    return list.rows.map((doc) => MonthlyTask.fromJson(_docJson(doc))).toList();
   }
 
   Future<void> addMonthlyTask(String title, String month) async {
@@ -958,31 +907,27 @@ class TaskRepository {
       databaseId: _dbId,
       tableId: 'monthly_tasks',
       rowId: ID.unique(),
-      data: {
-        'ownerUid': userId,
-        'title': title,
-        'month': month,
-        'done': false,
-      },
+      data: {'ownerUid': userId, 'title': title, 'month': month, 'done': false},
       permissions: _ownerPerms(userId),
     );
   }
 
+  /// Toggles a monthly task: same +2 / -2 XP rule as weekly tasks.
   Future<void> toggleMonthlyTask(String id, bool done) async {
+    final wasDone = await _taskDone('monthly_tasks', id);
     await _d.updateRow(
       databaseId: _dbId,
       tableId: 'monthly_tasks',
       rowId: id,
       data: {'done': done},
     );
+    if (wasDone != null) {
+      await _adjustXp(xpDeltaForToggle(completing: done, wasDone: wasDone));
+    }
   }
 
   Future<void> deleteMonthlyTask(String id) async {
-    await _d.deleteRow(
-      databaseId: _dbId,
-      tableId: 'monthly_tasks',
-      rowId: id,
-    );
+    await _d.deleteRow(databaseId: _dbId, tableId: 'monthly_tasks', rowId: id);
   }
 }
 
@@ -1012,10 +957,7 @@ class SocialRepository {
       databaseId: _dbId,
       tableId: 'follows',
       rowId: _followDocId(userId, followingId),
-      data: {
-        'followerUid': userId,
-        'followingUid': followingId,
-      },
+      data: {'followerUid': userId, 'followingUid': followingId},
       permissions: [
         Permission.read(Role.users()),
         Permission.update(Role.user(userId)),
@@ -1055,9 +997,7 @@ class SocialRepository {
       tableId: 'follows',
       queries: [Query.equal('followerUid', userId)],
     );
-    return list.rows
-        .map((doc) => doc.data['followingUid'] as String)
-        .toList();
+    return list.rows.map((doc) => doc.data['followingUid'] as String).toList();
   }
 
   Future<int> followingCount(String userId) async {

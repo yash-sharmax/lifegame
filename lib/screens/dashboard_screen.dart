@@ -22,8 +22,7 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   HabitRepository get _habits => widget.habitRepo ?? HabitRepository();
-  ProfileRepository get _profiles =>
-      widget.profileRepo ?? ProfileRepository();
+  ProfileRepository get _profiles => widget.profileRepo ?? ProfileRepository();
 
   bool _loading = true;
   Profile? _profile;
@@ -61,9 +60,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         counts[log.habitId] = (counts[log.habitId] ?? 0) + 1;
       }
       final sortedHabits = habits.toList()
-        ..sort(
-          (a, b) => (counts[b.id] ?? 0).compareTo(counts[a.id] ?? 0),
-        );
+        ..sort((a, b) => (counts[b.id] ?? 0).compareTo(counts[a.id] ?? 0));
       final topHabits = sortedHabits
           .where((h) => (counts[h.id] ?? 0) > 0)
           .take(5)
@@ -120,8 +117,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final now = DateTime.now();
     final result = <MapEntry<String, double>>[];
     for (var w = 3; w >= 0; w--) {
-      final weekMonday = now
-          .subtract(Duration(days: now.weekday - 1 + w * 7));
+      final weekMonday = now.subtract(Duration(days: now.weekday - 1 + w * 7));
       var done = 0;
       var possible = 0;
       for (var d = 0; d < 7; d++) {
@@ -132,9 +128,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         done += _recentLogs.where((l) => l.logDate == key).length;
       }
       final pct = possible == 0 ? 0.0 : done / possible;
-      final label = w == 0
-          ? 'This week'
-          : 'W${4 - w}';
+      final label = w == 0 ? 'This week' : 'W${4 - w}';
       result.add(MapEntry(label, pct));
     }
     return result;
@@ -154,6 +148,315 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return done / possible;
   }
 
+  Widget _monthlyCard(double monthFraction) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          const Text(
+            'Monthly Progress',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          ProgressRing(
+            fraction: monthFraction,
+            size: 190,
+            centerLabel: 'this month',
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${_monthLogs.length} completions so far this month',
+            style: const TextStyle(color: AppTheme.inkSoft),
+          ),
+        ],
+      ),
+    ),
+  ).animate().fadeIn().slideY(begin: 0.1);
+
+  Widget _statsGrid(Profile? profile, double last30) {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _StatCard(
+                icon: Icons.bolt,
+                label: 'Total XP',
+                valueWidget: CountUp(
+                  value: profile?.xp ?? 0,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                gradient: AppTheme.violetGradient,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _StatCard(
+                icon: Icons.local_fire_department,
+                label: 'Current streak',
+                valueWidget: CountUp(
+                  value: profile?.currentStreak ?? 0,
+                  suffix: ' days',
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                gradient: AppTheme.amberGradient,
+              ),
+            ),
+          ],
+        ).animate().fadeIn(delay: 80.ms).slideY(begin: 0.1),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _StatCard(
+                icon: Icons.emoji_events,
+                label: 'Longest streak',
+                valueWidget: CountUp(
+                  value: profile?.longestStreak ?? 0,
+                  suffix: ' days',
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                gradient: AppTheme.pinkGradient,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _StatCard(
+                icon: Icons.percent,
+                label: 'Last 30 days',
+                valueWidget: Text(
+                  '${(last30 * 100).toStringAsFixed(0)}%',
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                gradient: AppTheme.tealGradient,
+              ),
+            ),
+          ],
+        ).animate().fadeIn(delay: 120.ms).slideY(begin: 0.1),
+      ],
+    );
+  }
+
+  Widget _weeklyCard(List<MapEntry<String, double>> weekly) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Weekly completion',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 180,
+            child: BarChart(
+              BarChartData(
+                maxY: 1.0,
+                barGroups: [
+                  for (var i = 0; i < weekly.length; i++)
+                    BarChartGroupData(
+                      x: i,
+                      barRods: [
+                        BarChartRodData(
+                          toY: weekly[i].value,
+                          width: 34,
+                          borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(10),
+                          ),
+                          gradient: AppTheme.violetGradient,
+                        ),
+                      ],
+                    ),
+                ],
+                titlesData: FlTitlesData(
+                  leftTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  topTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      getTitlesWidget: (value, meta) => Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text(
+                          '${(weekly[value.toInt()].value * 100).round()}%',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      getTitlesWidget: (value, meta) => Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          weekly[value.toInt()].key,
+                          style: const TextStyle(
+                            color: AppTheme.inkSoft,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                gridData: const FlGridData(show: false),
+                borderData: FlBorderData(show: false),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  ).animate().fadeIn(delay: 160.ms).slideY(begin: 0.1);
+
+  Widget _trendCard(List<double> trend) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Daily trend — last 14 days',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 170,
+            child: LineChart(
+              LineChartData(
+                minY: 0,
+                maxY: 1.0,
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: [
+                      for (var i = 0; i < trend.length; i++)
+                        FlSpot(i.toDouble(), trend[i]),
+                    ],
+                    isCurved: true,
+                    color: AppTheme.pink,
+                    barWidth: 3.5,
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      gradient: LinearGradient(
+                        colors: [
+                          AppTheme.pink.withValues(alpha: 0.35),
+                          AppTheme.pink.withValues(alpha: 0.02),
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                    ),
+                  ),
+                ],
+                titlesData: const FlTitlesData(
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  topTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                ),
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  getDrawingHorizontalLine: (_) =>
+                      FlLine(color: const Color(0xFFEDEAF5), strokeWidth: 1),
+                ),
+                borderData: FlBorderData(show: false),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.1);
+
+  Widget _topHabitsCard() => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Top habits',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 12),
+          if (_topHabits.isEmpty)
+            const Text(
+              'Complete habits to see your top performers here.',
+              style: TextStyle(color: AppTheme.inkSoft),
+            )
+          else
+            ..._topHabits.asMap().entries.map((entry) {
+              final title = entry.value.key;
+              final count = entry.value.value;
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 15,
+                      backgroundColor: AppTheme.violet.withValues(alpha: 0.12),
+                      child: Text(
+                        '${entry.key + 1}',
+                        style: const TextStyle(
+                          color: AppTheme.violet,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    Text(
+                      '$count times',
+                      style: const TextStyle(
+                        color: AppTheme.inkSoft,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+        ],
+      ),
+    ),
+  ).animate().fadeIn(delay: 240.ms).slideY(begin: 0.1);
+
   @override
   Widget build(BuildContext context) {
     final profile = _profile;
@@ -161,358 +464,91 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final trend = _trend();
     final weekly = _weekly();
     final last30 = _last30DaysFraction();
+    final wide = isWideScreen(context);
 
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+    // The XP bar is pinned above the scrollable content, so the user's
+    // current XP (and level) is visible at the top at all times.
+    // Desktop (>=600px) lays the dashboard out in two columns inside a
+    // centred, wider frame; phones keep the stacked app layout.
+    return ResponsiveCenter(
+      maxWidth: 1100,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Dashboard',
-            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
-          ).animate().fadeIn().slideY(begin: -0.1),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+            child: const Text(
+              'Dashboard',
+              style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
+            ).animate().fadeIn().slideY(begin: -0.1),
+          ),
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: XpBar(xp: profile?.xp ?? 0)
+                .animate()
+                .fadeIn(delay: 60.ms)
+                .slideY(begin: 0.1),
+          ),
           const SizedBox(height: 16),
-          if (_loading)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.symmetric(vertical: 48),
-                child: CircularProgressIndicator(),
-              ),
-            )
-          else if (_habitCount == 0)
-            EmptyState(
-              icon: Icons.insights_outlined,
-              title: 'No data yet',
-              subtitle:
-                  'Add your first habit from the Home tab and your dashboard will come alive.',
-            )
-          else ...[
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  children: [
-                    const Text(
-                      'Monthly Progress',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                children: [
+                  if (_loading)
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 48),
+                        child: CircularProgressIndicator(),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    ProgressRing(
-                      fraction: monthFraction,
-                      size: 190,
-                      centerLabel: 'this month',
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${_monthLogs.length} completions so far this month',
-                      style: const TextStyle(color: AppTheme.inkSoft),
-                    ),
-                  ],
-                ),
-              ),
-            ).animate().fadeIn().slideY(begin: 0.1),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.bolt,
-                    label: 'Total XP',
-                    valueWidget: CountUp(
-                      value: profile?.xp ?? 0,
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    gradient: AppTheme.violetGradient,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.local_fire_department,
-                    label: 'Current streak',
-                    valueWidget: CountUp(
-                      value: profile?.currentStreak ?? 0,
-                      suffix: ' days',
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    gradient: AppTheme.amberGradient,
-                  ),
-                ),
-              ],
-            ).animate().fadeIn(delay: 80.ms).slideY(begin: 0.1),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.emoji_events,
-                    label: 'Longest streak',
-                    valueWidget: CountUp(
-                      value: profile?.longestStreak ?? 0,
-                      suffix: ' days',
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    gradient: AppTheme.pinkGradient,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.percent,
-                    label: 'Last 30 days',
-                    valueWidget: Text(
-                      '${(last30 * 100).toStringAsFixed(0)}%',
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    gradient: AppTheme.tealGradient,
-                  ),
-                ),
-              ],
-            ).animate().fadeIn(delay: 120.ms).slideY(begin: 0.1),
-            const SizedBox(height: 16),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Weekly completion',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                      ),
+                    )
+                  else if (_habitCount == 0)
+                    EmptyState(
+                      icon: Icons.insights_outlined,
+                      title: 'No data yet',
+                      subtitle: 'Add your first habit from the Home tab and your dashboard will come alive.',
+                    )
+                  else if (wide) ...[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: _monthlyCard(monthFraction)),
+                        const SizedBox(width: 16),
+                        Expanded(child: _statsGrid(profile, last30)),
+                      ],
                     ),
                     const SizedBox(height: 16),
-                    SizedBox(
-                      height: 180,
-                      child: BarChart(
-                        BarChartData(
-                          maxY: 1.0,
-                          barGroups: [
-                            for (var i = 0; i < weekly.length; i++)
-                              BarChartGroupData(
-                                x: i,
-                                barRods: [
-                                  BarChartRodData(
-                                    toY: weekly[i].value,
-                                    width: 34,
-                                    borderRadius: const BorderRadius.vertical(
-                                      top: Radius.circular(10),
-                                    ),
-                                    gradient: AppTheme.violetGradient,
-                                  ),
-                                ],
-                              ),
-                          ],
-                          titlesData: FlTitlesData(
-                            leftTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false),
-                            ),
-                            rightTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false),
-                            ),
-                            topTitles: AxisTitles(
-                              sideTitles: SideTitles(
-                                showTitles: true,
-                                getTitlesWidget: (value, meta) => Padding(
-                                  padding: const EdgeInsets.only(bottom: 6),
-                                  child: Text(
-                                    '${(weekly[value.toInt()].value * 100).round()}%',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            bottomTitles: AxisTitles(
-                              sideTitles: SideTitles(
-                                showTitles: true,
-                                getTitlesWidget: (value, meta) => Padding(
-                                  padding: const EdgeInsets.only(top: 8),
-                                  child: Text(
-                                    weekly[value.toInt()].key,
-                                    style: const TextStyle(
-                                      color: AppTheme.inkSoft,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          gridData: const FlGridData(show: false),
-                          borderData: FlBorderData(show: false),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ).animate().fadeIn(delay: 160.ms).slideY(begin: 0.1),
-            const SizedBox(height: 16),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Daily trend — last 14 days',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                      ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: _weeklyCard(weekly)),
+                        const SizedBox(width: 16),
+                        Expanded(child: _trendCard(trend)),
+                      ],
                     ),
                     const SizedBox(height: 16),
-                    SizedBox(
-                      height: 170,
-                      child: LineChart(
-                        LineChartData(
-                          minY: 0,
-                          maxY: 1.0,
-                          lineBarsData: [
-                            LineChartBarData(
-                              spots: [
-                                for (var i = 0; i < trend.length; i++)
-                                  FlSpot(i.toDouble(), trend[i]),
-                              ],
-                              isCurved: true,
-                              color: AppTheme.pink,
-                              barWidth: 3.5,
-                              dotData: const FlDotData(show: false),
-                              belowBarData: BarAreaData(
-                                show: true,
-                                gradient: LinearGradient(
-                                  colors: [
-                                    AppTheme.pink.withValues(alpha: 0.35),
-                                    AppTheme.pink.withValues(alpha: 0.02),
-                                  ],
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                ),
-                              ),
-                            ),
-                          ],
-                          titlesData: const FlTitlesData(
-                            leftTitles: AxisTitles(
-                              sideTitles: SideTitles(showTitles: false),
-                            ),
-                            rightTitles: AxisTitles(
-                              sideTitles: SideTitles(showTitles: false),
-                            ),
-                            topTitles: AxisTitles(
-                              sideTitles: SideTitles(showTitles: false),
-                            ),
-                            bottomTitles: AxisTitles(
-                              sideTitles: SideTitles(showTitles: false),
-                            ),
-                          ),
-                          gridData: FlGridData(
-                            show: true,
-                            drawVerticalLine: false,
-                            getDrawingHorizontalLine: (_) => FlLine(
-                              color: const Color(0xFFEDEAF5),
-                              strokeWidth: 1,
-                            ),
-                          ),
-                          borderData: FlBorderData(show: false),
-                        ),
-                      ),
-                    ),
+                    _topHabitsCard(),
+                  ] else ...[
+                    _monthlyCard(monthFraction),
+                    const SizedBox(height: 16),
+                    _statsGrid(profile, last30),
+                    const SizedBox(height: 16),
+                    _weeklyCard(weekly),
+                    const SizedBox(height: 16),
+                    _trendCard(trend),
+                    const SizedBox(height: 16),
+                    _topHabitsCard(),
                   ],
-                ),
+                ],
               ),
-            ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.1),
-            const SizedBox(height: 16),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Top habits',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    if (_topHabits.isEmpty)
-                      const Text(
-                        'Complete habits to see your top performers here.',
-                        style: TextStyle(color: AppTheme.inkSoft),
-                      )
-                    else
-                      ..._topHabits.asMap().entries.map((entry) {
-                        final title = entry.value.key;
-                        final count = entry.value.value;
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 6),
-                          child: Row(
-                            children: [
-                              CircleAvatar(
-                                radius: 15,
-                                backgroundColor: AppTheme.violet.withValues(
-                                  alpha: 0.12,
-                                ),
-                                child: Text(
-                                  '${entry.key + 1}',
-                                  style: const TextStyle(
-                                    color: AppTheme.violet,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Text(
-                                  title,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                              Text(
-                                '$count times',
-                                style: const TextStyle(
-                                  color: AppTheme.inkSoft,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }),
-                  ],
-                ),
-              ),
-            ).animate().fadeIn(delay: 240.ms).slideY(begin: 0.1),
-          ],
+            ),
+          ),
         ],
       ),
     );
   }
-
 }
 
 class _StatCard extends StatelessWidget {

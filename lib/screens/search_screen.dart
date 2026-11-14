@@ -20,8 +20,7 @@ class SearchScreen extends StatefulWidget {
 }
 
 class _SearchScreenState extends State<SearchScreen> {
-  ProfileRepository get _profiles =>
-      widget.profileRepo ?? ProfileRepository();
+  ProfileRepository get _profiles => widget.profileRepo ?? ProfileRepository();
   SocialRepository get _social => widget.socialRepo ?? SocialRepository();
 
   final _query = TextEditingController();
@@ -90,81 +89,88 @@ class _SearchScreenState extends State<SearchScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
-      children: [
-        const Text(
-          'Find players',
-          style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
-        ).animate().fadeIn().slideY(begin: -0.1),
-        const SizedBox(height: 6),
-        const Text(
-          'Search by username or name, follow friends and compare streaks on the Friends board.',
-          style: TextStyle(color: AppTheme.inkSoft, fontSize: 14),
-        ),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _query,
-          textInputAction: TextInputAction.search,
-          onSubmitted: (_) => _search(),
-          decoration: InputDecoration(
-            hintText: 'Search username or name…',
-            prefixIcon: const Icon(Icons.search),
-            suffixIcon: _query.text.isEmpty
-                ? null
-                : IconButton(
-                    onPressed: () {
-                      _query.clear();
-                      setState(() {
-                        _results = [];
-                        _searched = false;
-                      });
-                    },
-                    icon: const Icon(Icons.clear),
-                  ),
+    return ResponsiveCenter(
+      maxWidth: 980,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+        children: [
+          const Text(
+            'Find players',
+            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
+          ).animate().fadeIn().slideY(begin: -0.1),
+          const SizedBox(height: 6),
+          const Text(
+            'Search by username or name, follow friends and compare streaks on the Friends board.',
+            style: TextStyle(color: AppTheme.inkSoft, fontSize: 14),
           ),
-          onChanged: (_) => setState(() {}),
-        ),
-        const SizedBox(height: 12),
-        GradientButton(
-          label: 'Search',
-          icon: Icons.search,
-          onPressed: _search,
-          loading: _searching,
-        ),
-        const SizedBox(height: 20),
-        if (!_searched)
-          EmptyState(
-            icon: Icons.person_search_outlined,
-            title: 'Find your circle',
-            subtitle:
-                'Search for friends, follow them, and race them on the Friends leaderboard.',
-          )
-        else if (_results.isEmpty && !_searching)
-          EmptyState(
-            icon: Icons.search_off_outlined,
-            title: 'No players found',
-            subtitle: 'Try a different username or name.',
-          )
-        else
-          ..._results.asMap().entries.map((entry) {
-            final profile = entry.value;
-            final following = _following[profile.id] ?? false;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _SearchRow(
-                profile: profile,
-                following: following,
-                onToggleFollow: () => _toggleFollow(profile),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => UserProfileScreen(profile: profile),
-                  ),
-                ),
-              ).animate().fadeIn(delay: (40 * entry.key).ms).slideX(begin: 0.06),
-            );
-          }),
-      ],
+          const SizedBox(height: 16),
+          TextField(
+            controller: _query,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (_) => _search(),
+            decoration: InputDecoration(
+              hintText: 'Search username or name…',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _query.text.isEmpty
+                  ? null
+                  : IconButton(
+                      onPressed: () {
+                        _query.clear();
+                        setState(() {
+                          _results = [];
+                          _searched = false;
+                        });
+                      },
+                      icon: const Icon(Icons.clear),
+                    ),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 12),
+          GradientButton(
+            label: 'Search',
+            icon: Icons.search,
+            onPressed: _search,
+            loading: _searching,
+          ),
+          const SizedBox(height: 20),
+          if (!_searched)
+            EmptyState(
+              icon: Icons.person_search_outlined,
+              title: 'Find your circle',
+              subtitle: 'Search for friends, follow them, and race them on the Friends leaderboard.',
+            )
+          else if (_results.isEmpty && !_searching)
+            EmptyState(
+              icon: Icons.search_off_outlined,
+              title: 'No players found',
+              subtitle: 'Try a different username or name.',
+            )
+          else
+            ..._results.asMap().entries.map((entry) {
+              final profile = entry.value;
+              final following = _following[profile.id] ?? false;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child:
+                    _SearchRow(
+                          profile: profile,
+                          following: following,
+                          onToggleFollow: () => _toggleFollow(profile),
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  UserProfileScreen(profile: profile),
+                            ),
+                          ),
+                        )
+                        .animate()
+                        .fadeIn(delay: (40 * entry.key).ms)
+                        .slideX(begin: 0.06),
+              );
+            }),
+        ],
+      ),
     );
   }
 }

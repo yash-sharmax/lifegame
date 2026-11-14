@@ -20,11 +20,18 @@ data** — every list starts empty and the user fills it.
 
 ## XP & streak rules
 
-- **+10 XP** per habit tick.
-- **+50 XP bonus** when ALL of today's habits are done (once per day).
+- **+2 XP** per habit/task completion; **−2 XP** when a done item is
+  unticked again (XP never goes below 0). No daily-complete bonus.
+  Completing again after unticking re-grants +2; toggles never
+  double-grant.
 - **Streak** = consecutive days (device-local calendar dates) with at least
-  1 habit completed. Tracked: current streak + longest streak.
-- **Level** = `floor(total XP / 100) + 1`. Progress bar shows XP to next level.
+  1 habit completed. Tracked: current streak + longest streak. Unticking
+  a day's last completion removes that day from the streak.
+- **Level** = `floor(total XP / 100) + 1` — a level takes 50 completions.
+  Progress bar shows XP to next level. The XP bar is pinned at the top
+  of Home and Dashboard.
+- **Done items stay visible** in their lists (filled checkmark, subtle
+  done styling, fully readable) — never removed or struck through.
 
 ## Tech
 

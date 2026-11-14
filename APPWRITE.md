@@ -75,16 +75,18 @@ login screen with a friendly "setup in progress" notice.
 | `usernames` | username (lowercase) | `username`, `ownerUid` — first come, first served; never updated/deleted |
 | `habits` | auto id | `ownerUid`, `title`, `color`, `archived` |
 | `habit_logs` | `{habitId}_{YYYY-MM-DD}` | `ownerUid`, `habitId`, `date`, `completed`, `xpEarned` |
-| `daily_rewards` | `{uid}_{YYYY-MM-DD}` | `ownerUid`, `date`, `xp` (50), `kind: daily_complete` |
+| `daily_rewards` | `{uid}_{YYYY-MM-DD}` | `ownerUid`, `date`, `xp`, `kind` — **legacy, unused since 14 Nov 2026** (the daily-complete bonus was removed; the table stays only so existing data is untouched) |
 | `weekly_tasks` | auto id | `ownerUid`, `title`, `weekStart` (Monday YYYY-MM-DD), `done` |
 | `monthly_tasks` | auto id | `ownerUid`, `title`, `month` (YYYY-MM), `done` |
 | `follows` | `{followerUid}_{followingUid}` | `followerUid`, `followingUid` |
 
 `createdAt` is Appwrite's system `$createdAt` — the app never sends it.
 All lists start **empty** — the app never seeds data. Usernames are
-lowercased everywhere. XP rules: +10 per habit tick, +50 when all of
-today's habits are done (once per day, via `daily_rewards`), streak =
+lowercased everywhere. XP rules: +2 per habit/task completion, -2 when
+a done item is unticked again (never below 0), no daily bonus; streak =
 consecutive days with ≥1 completion, level = floor(XP/100)+1.
+(A level now takes 50 completions.) Done items stay in their lists in
+a visible done state — they are never removed or struck through.
 
 Indexes (created by the script; required — without them the listed
 queries fail):

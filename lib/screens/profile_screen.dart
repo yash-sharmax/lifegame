@@ -31,8 +31,7 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  ProfileRepository get _profiles =>
-      widget.profileRepo ?? ProfileRepository();
+  ProfileRepository get _profiles => widget.profileRepo ?? ProfileRepository();
   HabitRepository get _habits => widget.habitRepo ?? HabitRepository();
   TaskRepository get _tasks => widget.taskRepo ?? TaskRepository();
   SocialRepository get _social => widget.socialRepo ?? SocialRepository();
@@ -100,9 +99,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final saved = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         title: const Text('Edit profile'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -152,9 +149,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final saved = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         title: Text(weekly ? 'Add weekly task' : 'Add monthly task'),
         content: TextField(
           controller: controller,
@@ -176,10 +171,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (saved == true && controller.text.trim().isNotEmpty) {
       try {
         if (weekly) {
-          await _tasks.addWeeklyTask(
-            controller.text.trim(),
-            weekStartKey(),
-          );
+          await _tasks.addWeeklyTask(controller.text.trim(), weekStartKey());
         } else {
           await _tasks.addMonthlyTask(controller.text.trim(), monthKey());
         }
@@ -195,9 +187,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         title: const Text('Edit habit'),
         content: TextField(
           controller: controller,
@@ -207,10 +197,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop('delete'),
-            child: const Text(
-              'Delete',
-              style: TextStyle(color: Colors.red),
-            ),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
@@ -251,144 +238,167 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final profile = _profile;
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
-        children: [
-          Row(
-            children: [
-              const Text(
-                'Profile',
-                style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
-              ),
-              const Spacer(),
-              IconButton(
-                onPressed: _editProfile,
-                tooltip: 'Edit profile',
-                icon: const Icon(Icons.edit_outlined),
-              ),
-            ],
-          ).animate().fadeIn().slideY(begin: -0.1),
-          const SizedBox(height: 8),
-          if (_loading)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.symmetric(vertical: 48),
-                child: CircularProgressIndicator(),
-              ),
-            )
-          else if (profile == null)
-            const EmptyState(
-              icon: Icons.person_off_outlined,
-              title: 'No profile yet',
-              subtitle: 'Sign in again to set up your profile.',
-            )
-          else ...[
-            _ProfileHeader(
-              profile: profile,
-              rank: _rank,
-              followers: _followers,
-              following: _following,
-            ).animate().fadeIn(delay: 60.ms).slideY(begin: 0.1),
-            const SizedBox(height: 16),
-            XpBar(xp: profile.xp)
-                .animate()
-                .fadeIn(delay: 120.ms)
-                .slideY(begin: 0.1),
-            const SizedBox(height: 24),
-            _SectionTitle(
-              title: 'My habits',
-              count: _habitsList.length,
-              onAdd: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const _AddHabitHint(),
+    final wide = isWideScreen(context);
+    // Weekly / monthly task sections, shared by the mobile (stacked)
+    // and desktop (side-by-side) layouts below.
+    final weeklySection = _TaskSection(
+      title: 'Weekly tasks',
+      subtitle: 'This week • +2 XP each',
+      items: _weekly
+          .map((t) => _TaskItem(id: t.id, title: t.title, done: t.done))
+          .toList(),
+      onToggle: (id, done) async {
+        await _tasks.toggleWeeklyTask(id, done);
+        await _load();
+        if (context.mounted) {
+          showInfo(context, done ? '+$xpPerTask XP' : '−$xpPerTask XP');
+        }
+      },
+      onDelete: (id) async {
+        await _tasks.deleteWeeklyTask(id);
+        await _load();
+      },
+      onAdd: () => _addTask(weekly: true),
+    );
+    final monthlySection = _TaskSection(
+      title: 'Monthly tasks',
+      subtitle: 'This month • +2 XP each',
+      items: _monthly
+          .map((t) => _TaskItem(id: t.id, title: t.title, done: t.done))
+          .toList(),
+      onToggle: (id, done) async {
+        await _tasks.toggleMonthlyTask(id, done);
+        await _load();
+        if (context.mounted) {
+          showInfo(context, done ? '+$xpPerTask XP' : '−$xpPerTask XP');
+        }
+      },
+      onDelete: (id) async {
+        await _tasks.deleteMonthlyTask(id);
+        await _load();
+      },
+      onAdd: () => _addTask(weekly: false),
+    );
+    return ResponsiveCenter(
+      maxWidth: 980,
+      child: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+          children: [
+            Row(
+              children: [
+                const Text(
+                  'Profile',
+                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
                 ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            if (_habitsList.isEmpty)
-              const Card(
+                const Spacer(),
+                IconButton(
+                  onPressed: _editProfile,
+                  tooltip: 'Edit profile',
+                  icon: const Icon(Icons.edit_outlined),
+                ),
+              ],
+            ).animate().fadeIn().slideY(begin: -0.1),
+            const SizedBox(height: 8),
+            if (_loading)
+              const Center(
                 child: Padding(
-                  padding: EdgeInsets.all(18),
-                  child: Text(
-                    'No habits yet — add your first one from the Home tab.',
-                    style: TextStyle(color: AppTheme.inkSoft),
-                  ),
+                  padding: EdgeInsets.symmetric(vertical: 48),
+                  child: CircularProgressIndicator(),
                 ),
               )
-            else
-              ..._habitsList.map(
-                (habit) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _HabitRow(
-                    habit: habit,
-                    onTap: () => _editHabit(habit),
-                  ),
+            else if (profile == null)
+              const EmptyState(
+                icon: Icons.person_off_outlined,
+                title: 'No profile yet',
+                subtitle: 'Sign in again to set up your profile.',
+              )
+            else ...[
+              _ProfileHeader(
+                profile: profile,
+                rank: _rank,
+                followers: _followers,
+                following: _following,
+              ).animate().fadeIn(delay: 60.ms).slideY(begin: 0.1),
+              const SizedBox(height: 16),
+              XpBar(xp: profile.xp)
+                  .animate()
+                  .fadeIn(delay: 120.ms)
+                  .slideY(begin: 0.1),
+              const SizedBox(height: 24),
+              _SectionTitle(
+                title: 'My habits',
+                count: _habitsList.length,
+                onAdd: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const _AddHabitHint()),
                 ),
               ),
-            const SizedBox(height: 24),
-            _TaskSection(
-              title: 'Weekly tasks',
-              subtitle: 'This week',
-              items: _weekly
-                  .map((t) => _TaskItem(id: t.id, title: t.title, done: t.done))
-                  .toList(),
-              onToggle: (id, done) async {
-                await _tasks.toggleWeeklyTask(id, done);
-                await _load();
-              },
-              onDelete: (id) async {
-                await _tasks.deleteWeeklyTask(id);
-                await _load();
-              },
-              onAdd: () => _addTask(weekly: true),
-            ),
-            const SizedBox(height: 24),
-            _TaskSection(
-              title: 'Monthly tasks',
-              subtitle: 'This month',
-              items: _monthly
-                  .map((t) => _TaskItem(id: t.id, title: t.title, done: t.done))
-                  .toList(),
-              onToggle: (id, done) async {
-                await _tasks.toggleMonthlyTask(id, done);
-                await _load();
-              },
-              onDelete: (id) async {
-                await _tasks.deleteMonthlyTask(id);
-                await _load();
-              },
-              onAdd: () => _addTask(weekly: false),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Settings',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 10),
-            Card(
-              child: Column(
-                children: [
-                  ListTile(
-                    leading: const Icon(Icons.info_outline),
-                    title: const Text('About Life Game'),
-                    subtitle: const Text('Version 2.2 • Flutter • Appwrite'),
-                  ),
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.logout, color: Colors.red),
-                    title: const Text(
-                      'Log out',
-                      style: TextStyle(color: Colors.red),
+              const SizedBox(height: 10),
+              if (_habitsList.isEmpty)
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(18),
+                    child: Text(
+                      'No habits yet — add your first one from the Home tab.',
+                      style: TextStyle(color: AppTheme.inkSoft),
                     ),
-                    onTap: _signOut,
                   ),
-                ],
+                )
+              else
+                ..._habitsList.map(
+                  (habit) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _HabitRow(
+                      habit: habit,
+                      onTap: () => _editHabit(habit),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 24),
+              if (wide)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: weeklySection),
+                    const SizedBox(width: 16),
+                    Expanded(child: monthlySection),
+                  ],
+                )
+              else ...[
+                weeklySection,
+                const SizedBox(height: 24),
+                monthlySection,
+              ],
+              const SizedBox(height: 24),
+              const Text(
+                'Settings',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
               ),
-            ),
+              const SizedBox(height: 10),
+              Card(
+                child: Column(
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.info_outline),
+                      title: const Text('About Life Game'),
+                      subtitle: const Text('Version 2.2 • Flutter • Appwrite'),
+                    ),
+                    const Divider(height: 1),
+                    ListTile(
+                      leading: const Icon(Icons.logout, color: Colors.red),
+                      title: const Text(
+                        'Log out',
+                        style: TextStyle(color: Colors.red),
+                      ),
+                      onTap: _signOut,
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -479,11 +489,7 @@ class _MiniStat extends StatelessWidget {
 }
 
 class _SectionTitle extends StatelessWidget {
-  const _SectionTitle({
-    required this.title,
-    required this.count,
-    this.onAdd,
-  });
+  const _SectionTitle({required this.title, required this.count, this.onAdd});
 
   final String title;
   final int count;
@@ -615,11 +621,18 @@ class _TaskSection extends StatelessWidget {
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
             ),
             const SizedBox(width: 8),
-            Text(
-              subtitle,
-              style: const TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+            // Flexible so the header never overflows the narrower
+            // side-by-side columns on desktop.
+            Expanded(
+              child: Text(
+                subtitle,
+                style: const TextStyle(
+                  color: AppTheme.inkSoft,
+                  fontSize: 13,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-            const Spacer(),
             IconButton(
               onPressed: onAdd,
               icon: const Icon(Icons.add_circle_outline),
@@ -646,12 +659,17 @@ class _TaskSection extends StatelessWidget {
                   CheckboxListTile(
                     value: items[i].done,
                     onChanged: (v) => onToggle(items[i].id, v ?? false),
+                    // Done items stay in the list, fully readable:
+                    // no strikethrough — the filled checkbox and the
+                    // subtle tint are the done state.
+                    tileColor: items[i].done
+                        ? AppTheme.violet.withValues(alpha: 0.05)
+                        : null,
                     title: Text(
                       items[i].title,
-                      style: TextStyle(
-                        decoration: items[i].done
-                            ? TextDecoration.lineThrough
-                            : null,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.ink,
                       ),
                     ),
                     secondary: IconButton(
@@ -716,9 +734,7 @@ class UserProfileScreen extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
         children: [
           const SizedBox(height: 8),
-          Center(
-            child: AvatarCircle(initials: profile.initials, size: 96),
-          ),
+          Center(child: AvatarCircle(initials: profile.initials, size: 96)),
           const SizedBox(height: 14),
           Text(
             profile.displayName,
@@ -895,9 +911,7 @@ class _FollowButtonState extends State<_FollowButton> {
       icon: following ? Icons.check : Icons.person_add_outlined,
       onPressed: _toggle,
       gradient: following
-          ? const LinearGradient(
-              colors: [Color(0xFF9CA3AF), Color(0xFF6B7280)],
-            )
+          ? const LinearGradient(colors: [Color(0xFF9CA3AF), Color(0xFF6B7280)])
           : AppTheme.heroGradient,
     );
   }
