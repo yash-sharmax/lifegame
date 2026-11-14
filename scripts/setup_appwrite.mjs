@@ -7,7 +7,9 @@
 // Usage (the API key is used ONLY here — never in the app or the repo):
 //   APPWRITE_PROJECT_ID=<id> APPWRITE_API_KEY=<key> node scripts/setup_appwrite.mjs
 // Optional:
-//   APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1   (default)
+//   APPWRITE_ENDPOINT=https://tor.cloud.appwrite.io/v1   (default;
+//   this project's region is Toronto — the generic endpoint will not
+//   reach it)
 //   APPWRITE_DATABASE_ID=lifegame                    (default)
 //
 // The API key must have the scopes: databases.write, projects.write.
@@ -15,7 +17,7 @@
 // Safe to re-run: existing resources are skipped (409 = already exists).
 
 const ENDPOINT = (
-  process.env.APPWRITE_ENDPOINT ?? 'https://cloud.appwrite.io/v1'
+  process.env.APPWRITE_ENDPOINT ?? 'https://tor.cloud.appwrite.io/v1'
 ).replace(/\/$/, '');
 const PROJECT_ID = process.env.APPWRITE_PROJECT_ID;
 const API_KEY = process.env.APPWRITE_API_KEY;
@@ -96,12 +98,13 @@ const str = (key, size, required = false, def = undefined) => ({
 const intCol = (key, required = false, def = 0) => ({
   kind: 'integer',
   key,
-  body: { key, required, default: def },
+  // Appwrite rejects a default value on a required column.
+  body: { key, required, ...(required ? {} : { default: def }) },
 });
 const boolCol = (key, required = false, def = false) => ({
   kind: 'boolean',
   key,
-  body: { key, required, default: def },
+  body: { key, required, ...(required ? {} : { default: def }) },
 });
 
 // Each table: columns + indexes. All lists start empty in the app — no
@@ -221,19 +224,20 @@ const TABLES = [
 // ---------------------------------------------------------------------------
 
 async function ensureDatabase() {
+  // GET-first: on the free plan, re-POSTing an existing database fails
+  // with 403 (plan limit) instead of 409, so check existence first.
   try {
-    await api('POST', '/tablesdb', {
-      databaseId: DATABASE_ID,
-      name: 'Life Game',
-    });
-    console.log(`+ database '${DATABASE_ID}' created`);
+    await api('GET', `/tablesdb/${DATABASE_ID}`);
+    console.log(`= database '${DATABASE_ID}' already exists`);
+    return;
   } catch (e) {
-    if (existsOk(e)) {
-      console.log(`= database '${DATABASE_ID}' already exists`);
-    } else {
-      throw e;
-    }
+    if (e.status !== 404) throw e;
   }
+  await api('POST', '/tablesdb', {
+    databaseId: DATABASE_ID,
+    name: 'Life Game',
+  });
+  console.log(`+ database '${DATABASE_ID}' created`);
 }
 
 async function ensureTable(table) {
@@ -297,6 +301,7 @@ async function ensureTable(table) {
 async function ensureWebPlatform() {
   try {
     await api('POST', `/projects/${PROJECT_ID}/platforms`, {
+      platformId: 'lifegame-web',
       type: 'web',
       name: 'Life Game Web',
       hostname: 'yashx.xyz',
@@ -332,7 +337,10 @@ async function main() {
   console.log(
     `     flutter build web --base-href /lifegame/ --no-web-resources-cdn \\`,
   );
-  console.log(`       --dart-define APPWRITE_PROJECT_ID=${PROJECT_ID}`);
+  console.log(
+    `       --dart-define APPWRITE_PROJECT_ID=${PROJECT_ID} \\`,
+  );
+  console.log(`       --dart-define APPWRITE_ENDPOINT=${ENDPOINT}`);
 }
 
 main().catch((e) => {

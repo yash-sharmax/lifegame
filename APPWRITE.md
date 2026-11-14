@@ -25,7 +25,9 @@ v2.2.0 Appwrite).
 APPWRITE_PROJECT_ID=<project id> \
 APPWRITE_API_KEY=<api key> \
 node scripts/setup_appwrite.mjs
-# Optional: APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1 (default)
+# Optional: APPWRITE_ENDPOINT=https://tor.cloud.appwrite.io/v1 (default;
+#           this project's region is Toronto — the generic endpoint
+#           https://cloud.appwrite.io/v1 will NOT reach it)
 #           APPWRITE_DATABASE_ID=lifegame (default)
 ```
 
@@ -52,11 +54,14 @@ each one is `available` before continuing.
 
 ```sh
 flutter build web --base-href /lifegame/ --no-web-resources-cdn \
-  --dart-define APPWRITE_PROJECT_ID=<project id>
+  --dart-define APPWRITE_PROJECT_ID=<project id> \
+  --dart-define APPWRITE_ENDPOINT=https://tor.cloud.appwrite.io/v1
 # Optional: --dart-define APPWRITE_DATABASE_ID=lifegame (default)
 ```
 
-The endpoint (`https://cloud.appwrite.io/v1`) and project ID are
+The endpoint (`https://tor.cloud.appwrite.io/v1` — this project is in
+the **Toronto** region; the generic `https://cloud.appwrite.io/v1` will
+not reach it) and project ID are
 **public-by-design** identifiers — they ship inside the web bundle of
 every Appwrite app. Security comes from the permissions below, not from
 hiding them. Without the define, the app still builds and renders the

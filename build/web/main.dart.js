@@ -28096,10 +28096,10 @@ return new A.dG(J.ay(a))},
 aDZ(a){var s=a.d
 if(s.length===0)s=null
 return new A.a41(a.a,s)},
-pa(a){var s=!B.c.p("placeholder-project-id","placeholder")?$.aIy:null
+pa(a){var s=!B.c.p("6af869f7001a2600151f","placeholder")?$.aIy:null
 if(s==null)throw A.i(new A.ps())
 return s},
-cc(a){var s=!B.c.p("placeholder-project-id","placeholder")?$.aIA:null
+cc(a){var s=!B.c.p("6af869f7001a2600151f","placeholder")?$.aIA:null
 if(s==null)throw A.i(new A.ps())
 return s},
 tP(a){var s=A.o(t.N,t.z)
@@ -29640,7 +29640,7 @@ return q}catch(p){q=A.a2(p)
 if(q instanceof A.wq){s=q
 throw A.i(A.aZ_("Invalid "+a+": "+s.a,s.b,s.gyb()))}else if(t.bE.b(q)){r=q
 throw A.i(A.ct("Invalid "+a+' "'+b+'": '+r.gwT(),r.gyb(),r.gcw()))}else throw p}},
-aTp(){var s,r,q="placeholder-project-id",p="https://cloud.appwrite.io/v1",o="https://",n="http://"
+aTp(){var s,r,q="6af869f7001a2600151f",p="https://cloud.appwrite.io/v1",o="https://",n="http://",m="https://tor.cloud.appwrite.io/v1"
 if(B.c.p(q,"placeholder"))return
 if($.aIz!=null)return
 s=new A.a5Q(p)
@@ -29650,9 +29650,9 @@ r=t.N
 s.b=A.a8(["content-type","application/json","x-sdk-name","Flutter","x-sdk-platform","client","x-sdk-language","flutter","x-sdk-version","28.3.0","X-Appwrite-Response-Format","2.7.0"],r,r)
 s.c=A.o(r,r)
 s.CA()
-if(!B.c.bz(p,n)&&!B.c.bz(p,o))A.a3(A.eP("Invalid endpoint URL: https://cloud.appwrite.io/v1",null,null,null))
-s.a=p
-B.c.mD(B.c.mD(p,o,"wss://"),n,"ws://")
+if(!B.c.bz(m,n)&&!B.c.bz(m,o))A.a3(A.eP("Invalid endpoint URL: https://tor.cloud.appwrite.io/v1",null,null,null))
+s.a=m
+B.c.mD(B.c.mD(m,o,"wss://"),n,"ws://")
 s.c.m(0,"project",q)
 $.aIz=s
 $.aIy=new A.a3H(s)
@@ -95075,14 +95075,14 @@ p=r
 if(J.bY(p==null?"":p)!==0){p=q
 p=J.bY(p==null?"":p)!==0}else p=!1
 if(p){n.e=r
-n.f=q}}catch(o){}if(!B.c.p("placeholder-project-id","placeholder")){n.a.toString
+n.f=q}}catch(o){}if(!B.c.p("6af869f7001a2600151f","placeholder")){n.a.toString
 n.d=new A.pu().gpZ().lf(new A.aq9(n))}},
 l(){var s=this.d
 if(s!=null)s.aT()
 this.aD()},
 F(a){var s,r=this,q=null,p=r.e
 if(p!=null&&r.f!=null){r.a.toString
-return new A.Dw(q,p,r.f,new A.aq6(r),q)}if(B.c.p("placeholder-project-id","placeholder")){r.a.toString
+return new A.Dw(q,p,r.f,new A.aq6(r),q)}if(B.c.p("6af869f7001a2600151f","placeholder")){r.a.toString
 return new A.ub(q,q)}r.a.toString
 s=new A.pu()
 return new A.Ex(new A.aq7(r,s),s.gpZ(),q,t.uO)}}
@@ -95263,7 +95263,7 @@ case 5:return A.F(null,r)
 case 1:return A.E(p.at(-1),r)}})
 return A.G($async$z7,r)},
 F(a){var s,r,q=this,p=null,o="Create account",n=t.p,m=A.fY(A.eq(A.em(A.d_(A.b([A.cE(p,B.Jz,B.n,p,B.DA,p,64,p,p,p,p,p,64),B.cj,B.a_p],n),B.F,B.ix,B.A,0)),p,p),-0.2),l=A.bL(28),k=A.b([A.aN(q.ganf(),p,p,p,p,A.W(a).ok.e,p,p),B.mZ,A.aN(q.gamR(),p,p,p,p,B.cI,p,p)],n)
-if(B.c.p("placeholder-project-id","placeholder"))B.b.M(k,A.b([B.aO,A.cE(p,B.a_s,B.n,p,new A.bR(B.e_.fH(0.12),p,p,A.bL(12),p,p,B.a2),p,p,p,p,B.pg,p,p,p)],n))
+if(B.c.p("6af869f7001a2600151f","placeholder"))B.b.M(k,A.b([B.aO,A.cE(p,B.a_s,B.n,p,new A.bR(B.e_.fH(0.12),p,p,A.bL(12),p,p,B.a2),p,p,p,p,B.pg,p,p,p)],n))
 k.push(B.dy)
 if(q.d===B.nL)B.b.M(k,A.b([A.t3(q.x,B.K5,p,!1,p),B.dx,A.t3(q.w,B.K1,p,!1,new A.aqk()),B.dx],n))
 k.push(A.t3(q.f,B.K4,B.C0,!1,new A.aql()))

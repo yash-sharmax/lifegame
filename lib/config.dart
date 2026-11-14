@@ -1,11 +1,16 @@
 /// App configuration: Appwrite project wiring + public URLs.
 ///
 /// The Appwrite project ID is passed at build time with
-/// `--dart-define APPWRITE_PROJECT_ID=...` (database ID defaults to
+/// `--dart-define APPWRITE_PROJECT_ID=...` and the region endpoint with
+/// `--dart-define APPWRITE_ENDPOINT=...` (database ID defaults to
 /// 'lifegame' and can be overridden with APPWRITE_DATABASE_ID).
 /// Until a real project ID is provided, the app runs in "unconfigured"
 /// mode: it renders the login screen and explains that setup is still
 /// pending.
+///
+/// The endpoint matters: the project lives in the Toronto region, so
+/// the endpoint must be https://tor.cloud.appwrite.io/v1 — the generic
+/// https://cloud.appwrite.io/v1 will NOT reach it.
 ///
 /// No secrets live here: the endpoint + project ID are public-by-design
 /// identifiers (they ship inside the web bundle of every Appwrite app).
@@ -14,8 +19,11 @@
 library;
 
 class AppConfig {
-  /// Appwrite Cloud endpoint.
-  static const String endpoint = 'https://cloud.appwrite.io/v1';
+  /// Appwrite Cloud endpoint (region-specific for this project).
+  static const String endpoint = String.fromEnvironment(
+    'APPWRITE_ENDPOINT',
+    defaultValue: 'https://tor.cloud.appwrite.io/v1',
+  );
 
   static const String projectId = String.fromEnvironment(
     'APPWRITE_PROJECT_ID',

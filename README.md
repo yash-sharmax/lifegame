@@ -50,7 +50,8 @@ setup script):
 
 ```sh
 flutter build web --base-href /lifegame/ --no-web-resources-cdn \
-  --dart-define APPWRITE_PROJECT_ID=<project id>
+  --dart-define APPWRITE_PROJECT_ID=<project id> \
+  --dart-define APPWRITE_ENDPOINT=https://tor.cloud.appwrite.io/v1
 ```
 
 `--no-web-resources-cdn` bundles CanvasKit in `build/web` instead of
@@ -68,7 +69,8 @@ so a push redeploys the committed build:
 
 ```sh
 flutter build web --base-href /lifegame/ --no-web-resources-cdn \
-  --dart-define APPWRITE_PROJECT_ID=<project id>
+  --dart-define APPWRITE_PROJECT_ID=<project id> \
+  --dart-define APPWRITE_ENDPOINT=https://tor.cloud.appwrite.io/v1
 git add -A && git commit -m "..." && git push
 ```
 

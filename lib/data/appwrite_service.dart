@@ -8,7 +8,7 @@ import '../config.dart';
 /// client is never created and every repository throws
 /// [AppwriteNotConfigured] with a friendly message instead of crashing.
 ///
-/// The client talks to Appwrite Cloud (https://cloud.appwrite.io/v1).
+/// The client talks to Appwrite Cloud (Toronto region endpoint).
 /// No API key lives here — the app only ever uses the public project ID;
 /// the API key belongs to the setup script only (see APPWRITE.md).
 class AppwriteService {
