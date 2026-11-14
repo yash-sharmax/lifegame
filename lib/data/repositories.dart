@@ -7,10 +7,10 @@
 /// For widget tests, screens accept optional repository instances; tests
 /// pass in-memory fakes that subclass these classes.
 ///
-/// NOTE: Appwrite has no multi-document transactions. Writes that the
-/// Firebase version did in one batch (e.g. tick habit + grant bonus +
-/// update profile) are sequential here — a failure midway can leave a
-/// partial state (e.g. the log exists but the bonus was not granted).
+/// NOTE: Appwrite has no multi-document transactions. Writes that used
+/// to happen in one batch (e.g. tick habit + grant bonus + update
+/// profile) are sequential here — a failure midway can leave a partial
+/// state (e.g. the log exists but the bonus was not granted).
 /// The daily-reward document id (`{uid}_{date}`) makes the bonus
 /// idempotent, so retrying a tick can never double-grant it.
 /// See APPWRITE.md ("Security model") for the honest write-up.
