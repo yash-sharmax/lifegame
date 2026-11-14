@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Sets up the Appwrite Cloud backend for Life Game.
 //
-// Creates: database `lifegame` + all 8 tables with columns, indexes and
+// Creates: database `lifegame` + all 9 tables with columns, indexes and
 // row-level permissions, plus the Web platform (hostname yashx.xyz).
 //
 // Usage (the API key is used ONLY here — never in the app or the repo):
@@ -220,6 +220,20 @@ const TABLES = [
       { key: 'idx_follower', type: 'key', columns: ['followerUid'] },
       { key: 'idx_following', type: 'key', columns: ['followingUid'] },
     ],
+  },
+  {
+    // Added 14 Nov 2026 (v2.2.0+6): feedback sent from Profile →
+    // Support. Owner-only rows; the app never shows one user's feedback
+    // to another user.
+    id: 'feedback',
+    name: 'Feedback',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('userId', 64, true),
+      str('text', 2000, true),
+      str('createdAt', 32, true),
+    ],
+    indexes: [{ key: 'idx_user', type: 'key', columns: ['userId'] }],
   },
 ];
 

@@ -122,18 +122,8 @@ class _GoldenHabitRepo extends HabitRepository {
 
   @override
   Future<List<HabitLog>> listLogsForDate(String date) async => [
-    HabitLog(
-      id: 'h1_$date',
-      habitId: 'h1',
-      userId: 'test-user',
-      logDate: date,
-    ),
-    HabitLog(
-      id: 'h2_$date',
-      habitId: 'h2',
-      userId: 'test-user',
-      logDate: date,
-    ),
+    HabitLog(id: 'h1_$date', habitId: 'h1', userId: 'test-user', logDate: date),
+    HabitLog(id: 'h2_$date', habitId: 'h2', userId: 'test-user', logDate: date),
   ];
 
   @override

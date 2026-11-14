@@ -21,7 +21,12 @@ enum AuthMode { login, signup, forgot }
 
 /// Login / signup / forgot-password, plus the Google button.
 class AuthScreen extends StatefulWidget {
-  const AuthScreen({super.key, this.authRepo, this.sessionNotice, this.onRetrySessionCheck});
+  const AuthScreen({
+    super.key,
+    this.authRepo,
+    this.sessionNotice,
+    this.onRetrySessionCheck,
+  });
 
   final AuthRepository? authRepo;
 

@@ -100,7 +100,14 @@ class CountUp extends StatelessWidget {
   }
 }
 
-/// XP progress bar to the next level, with a level badge.
+/// Level + XP header strip: the level badge, current XP and progress to
+/// the next level, shown at the top of Home, Dashboard and Profile.
+///
+/// Deliberately a light, quiet strip — not a big gradient banner. The
+/// old full-width violet card read like a popup stuck to the top of the
+/// screen (user feedback, 14 Nov 2026), so the level now lives in the
+/// header itself: a gradient level badge, the XP count and a slim
+/// progress bar, on a white card that blends with the rest of the UI.
 class XpBar extends StatelessWidget {
   const XpBar({super.key, required this.xp});
 
@@ -112,44 +119,61 @@ class XpBar extends StatelessWidget {
     final progress = progressToNextLevel(xp);
     final toNext = xpToNextLevel(xp);
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       decoration: BoxDecoration(
-        gradient: AppTheme.violetGradient,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFEDEAF5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
+              // The level badge is the most prominent element here.
               Container(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
+                  horizontal: 14,
+                  vertical: 8,
                 ),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.2),
+                  gradient: AppTheme.heroGradient,
                   borderRadius: BorderRadius.circular(999),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.violet.withValues(alpha: 0.3),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
-                child: Text(
-                  'LEVEL $level',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 13,
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.star, color: Colors.white, size: 18),
+                    const SizedBox(width: 6),
+                    Text(
+                      'LEVEL $level',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
                 ),
               ),
               const Spacer(),
-              const Icon(Icons.bolt, color: Colors.white, size: 20),
+              const Icon(Icons.bolt, color: AppTheme.violet, size: 20),
               const SizedBox(width: 4),
               CountUp(
                 value: xp,
                 suffix: ' XP',
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: AppTheme.ink,
                   fontWeight: FontWeight.w800,
-                  fontSize: 16,
+                  fontSize: 17,
                 ),
               ),
             ],
@@ -163,17 +187,19 @@ class XpBar extends StatelessWidget {
               curve: Curves.easeOutCubic,
               builder: (context, value, _) => LinearProgressIndicator(
                 value: value,
-                minHeight: 10,
-                backgroundColor: Colors.white.withValues(alpha: 0.25),
-                valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.amber),
+                minHeight: 8,
+                backgroundColor: const Color(0xFFEDEAF5),
+                valueColor: const AlwaysStoppedAnimation<Color>(
+                  AppTheme.violet,
+                ),
               ),
             ),
           ),
           const SizedBox(height: 8),
           Text(
             '$toNext XP to Level ${level + 1}',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.85),
+            style: const TextStyle(
+              color: AppTheme.inkSoft,
               fontWeight: FontWeight.w600,
               fontSize: 13,
             ),

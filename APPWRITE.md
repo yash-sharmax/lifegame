@@ -31,7 +31,7 @@ node scripts/setup_appwrite.mjs
 #           APPWRITE_DATABASE_ID=lifegame (default)
 ```
 
-The script creates the `lifegame` database, all 8 tables with columns,
+The script creates the `lifegame` database, all 9 tables with columns,
 indexes and row-level permissions, and registers the Web platform
 (hostname `yashx.xyz`). It is safe to re-run — existing resources are
 skipped. Column/index creation is asynchronous; the script waits until
@@ -79,6 +79,7 @@ login screen with a friendly "setup in progress" notice.
 | `weekly_tasks` | auto id | `ownerUid`, `title`, `weekStart` (Monday YYYY-MM-DD), `done` |
 | `monthly_tasks` | auto id | `ownerUid`, `title`, `month` (YYYY-MM), `done` |
 | `follows` | `{followerUid}_{followingUid}` | `followerUid`, `followingUid` |
+| `feedback` | auto id | `userId`, `text`, `createdAt` (ISO string; the table also has Appwrite's `$createdAt`) — sent from Profile → Feedback; owner-only rows |
 
 `createdAt` is Appwrite's system `$createdAt` — the app never sends it.
 All lists start **empty** — the app never seeds data. Usernames are
@@ -102,6 +103,7 @@ queries fail):
 | `monthly_tasks` | `idx_owner_month` | `ownerUid`, `month` |
 | `follows` | `idx_follower` | `followerUid` |
 | `follows` | `idx_following` | `followingUid` |
+| `feedback` | `idx_user` | `userId` |
 
 ## 6. Permissions model (row security)
 
@@ -112,7 +114,7 @@ permissions, set by the app when the row is created:
 |---|---|---|
 | `users` profile | any signed-in user (leaderboard + search need this) | only the owner |
 | `usernames` | any signed-in user (uniqueness checks) | only the owner |
-| `habits`, `habit_logs`, `daily_rewards`, `weekly_tasks`, `monthly_tasks` | only the owner | only the owner |
+| `habits`, `habit_logs`, `daily_rewards`, `weekly_tasks`, `monthly_tasks`, `feedback` | only the owner | only the owner |
 | `follows` | any signed-in user | only the follower |
 
 Table-level permissions are the same broad defaults (signed-in users);
@@ -189,13 +191,26 @@ available without a server-side function.
 
 - **Project:** `6af869f7001a2600151f`, **Toronto region**,
   endpoint `https://tor.cloud.appwrite.io/v1`.
-- **Database `lifegame`** + all 8 tables (columns + indexes `available`,
+- **Database `lifegame`** + all 9 tables (columns + indexes `available`,
   row security on). Web platform `lifegame-web` (hostname `yashx.xyz`)
   registered. A second platform `Web app` (hostname `*`) also exists
   from project creation — harmless.
-- **Live app** (v2.2.0+5): `https://yashx.xyz/lifegame` — verified the
+- **Live app** (v2.2.0+6): `https://yashx.xyz/lifegame` — verified the
   deployed bundle contains the real project ID + Toronto endpoint and
   no placeholder text.
+- **v2.2.0+6 changes (14 Nov, after real-use feedback):** no level-up
+  popup/toast anywhere — the level lives in the slim XP bar pinned at
+  the top (Home + Dashboard); Home shows a deterministic "line of the
+  day" (same line all day, a new one tomorrow, 36 bundled lines);
+  habit/task taps are optimistic (instant check + XP, write syncs in
+  the background through the serialised write queue, rollback only on
+  a real failure); Dashboard charts restyled (labels, % axes, empty
+  states, 600 ms animation); Profile gained Support (how it works +
+  email support), a Feedback form (`feedback` table — **the table must
+  be created by re-running `scripts/setup_appwrite.mjs` with the API
+  key; until then the form shows a friendly error**) and account
+  deletion (confirm checkbox → deletes all the user's rows, then the
+  Appwrite account, then signs out).
 - **v2.2.0+5 fixes (14 Nov, after a live login test):** toggle writes
   are serialised + verified after write (a rapid tick/untick had left
   the server at XP 52 with a log while the UI showed 50/undone);

@@ -95,45 +95,54 @@ class _HomeScreenState extends State<HomeScreen> {
       _habitsList.isNotEmpty && _doneToday.length >= _habitsList.length;
 
   Future<void> _toggle(Habit habit, bool value) async {
-    // Ignore a second tap while this habit's toggle is still saving:
-    // overlapping toggles read the same stale state and their writes
-    // land out of order. The repository serialises writes too; this
-    // keeps the UI from even starting a second one.
+    // A tap must feel instant: paint the new state NOW (checked tile +
+    // updated XP) and sync to Appwrite in the background. The write
+    // itself still runs through the repository's serialised queue with
+    // verify-after-write (the v2.2.0+5 fix) — only the painting is
+    // optimistic. On a real failure the optimistic state rolls back so
+    // the tile shows the true server state.
+    // No success toast: the tile already shows "Done • +2 XP" and the
+    // XP count updates instantly — a popup on every tap is what made
+    // taps feel slow and stuck (user feedback, 14 Nov 2026).
     if (_toggling.contains(habit.id)) return;
+    final wasDone = _doneToday.contains(habit.id);
+    final wasAllDone = _allDone;
+    final delta = xpDeltaForToggle(completing: value, wasDone: wasDone);
+    final prevDone = Set<String>.from(_doneToday);
+    final prevProfile = _profile;
+    setState(() {
+      if (value) {
+        _doneToday.add(habit.id);
+      } else {
+        _doneToday.remove(habit.id);
+      }
+      final profile = _profile;
+      if (profile != null && delta != 0) {
+        _profile = profile.copyWith(
+          xp: (profile.xp + delta).clamp(0, 100000000),
+        );
+      }
+    });
     _toggling.add(habit.id);
     try {
-      final wasAllDone = _allDone;
-      final result = await _habits.toggleHabit(
-        habit: habit,
-        date: _today,
-        completed: value,
-      );
+      await _habits.toggleHabit(habit: habit, date: _today, completed: value);
       if (!mounted) return;
+      // Quiet sync: refresh streak + canonical state without a spinner
+      // and without a toast.
       await _load();
       if (!mounted) return;
-      if (value && result.allDone && !wasAllDone) {
-        _confetti.play();
-        showInfo(context, 'Day complete! Every habit ticked.');
-      } else if (value) {
-        showInfo(context, '+$xpPerTask XP — nice one!');
-      } else {
-        showInfo(context, '−$xpPerTask XP');
-      }
-    } on AuthException catch (e) {
-      // The toggle may have partially landed; reload so the tile shows
-      // the true server state instead of the pre-tap one.
-      if (mounted) {
-        try {
-          await _load();
-        } catch (_) {}
-        if (mounted) showError(context, e);
-      }
+      if (value && _allDone && !wasAllDone) _confetti.play();
     } catch (e) {
+      // Roll the optimistic paint back, then show the real state.
       if (mounted) {
+        setState(() {
+          _doneToday = prevDone;
+          _profile = prevProfile;
+        });
+        showError(context, e);
         try {
           await _load();
         } catch (_) {}
-        if (mounted) showError(context, e);
       }
     } finally {
       _toggling.remove(habit.id);
@@ -144,8 +153,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final result = await showHabitEditDialog(context, habit);
     if (result == null || !mounted) return;
     try {
-      if (result.action == HabitEditAction.save &&
-          result.title.isNotEmpty) {
+      if (result.action == HabitEditAction.save && result.title.isNotEmpty) {
         await _habits.updateHabit(habit, title: result.title);
       } else if (result.action == HabitEditAction.delete) {
         // Deleting removes the habit's logs and takes back today's +2
@@ -288,7 +296,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: ListView(
                     padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
                     children: [
-                      _QuoteCard(quote: quoteForDay())
+                      _DailyLineCard(line: quoteForDay())
                           .animate()
                           .fadeIn(delay: 80.ms)
                           .slideY(begin: 0.1),
@@ -549,32 +557,74 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _QuoteCard extends StatelessWidget {
-  const _QuoteCard({required this.quote});
+/// The line of the day: one motivational line, the same all day,
+/// picked deterministically from the date (see logic/quotes.dart).
+/// Shown prominently on Home so the user sees today's line every time
+/// they open the app.
+class _DailyLineCard extends StatelessWidget {
+  const _DailyLineCard({required this.line});
 
-  final String quote;
+  final String line;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
       decoration: BoxDecoration(
         gradient: AppTheme.heroGradient,
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.format_quote, color: Colors.white70, size: 30),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              quote,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome, color: Colors.white70, size: 16),
+              const SizedBox(width: 6),
+              Text(
+                'LINE OF THE DAY',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  fontWeight: FontWeight.w800,
+                  fontSize: 11,
+                  letterSpacing: 1.4,
+                ),
               ),
-            ),
+              const SizedBox(width: 12),
+              // Flexible so a wide font / larger text scale truncates the
+              // caption instead of overflowing the card (the test font's
+              // glyphs are far wider than any real device font).
+              Expanded(
+                child: Text(
+                  'a new line tomorrow',
+                  textAlign: TextAlign.right,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.75),
+                    fontWeight: FontWeight.w600,
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.format_quote, color: Colors.white70, size: 30),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  line,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

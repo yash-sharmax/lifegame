@@ -59,8 +59,10 @@ void main() {
       controller.add(const AuthChange(event: AuthEvent.signedOut));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('Could not check your saved session'),
-          findsOneWidget);
+      expect(
+        find.textContaining('Could not check your saved session'),
+        findsOneWidget,
+      );
       expect(find.text('Retry'), findsOneWidget);
 
       // Retry re-checks the session; the fake reports a signed-in user
@@ -73,9 +75,7 @@ void main() {
       );
     }, skip: skip);
 
-    testWidgets('a restored session goes straight to the app', (
-      tester,
-    ) async {
+    testWidgets('a restored session goes straight to the app', (tester) async {
       final controller = StreamController<AuthChange>();
       addTearDown(controller.close);
       await tester.pumpWidget(
@@ -129,9 +129,6 @@ class _GateAuthRepo extends AuthRepository {
 
 class _GateProfileRepo extends ProfileRepository {
   @override
-  Future<Profile?> fetchMyProfile() async => const Profile(
-    id: 'user-1',
-    username: 'tester',
-    displayName: 'Tester',
-  );
+  Future<Profile?> fetchMyProfile() async =>
+      const Profile(id: 'user-1', username: 'tester', displayName: 'Tester');
 }

@@ -28,6 +28,11 @@ import 'dart:async';
 import 'package:appwrite/appwrite.dart';
 import 'package:appwrite/enums.dart';
 import 'package:appwrite/models.dart' as models;
+// The SDK does not export HttpMethod (needed for DELETE /account in
+// deleteAccount below), so it is imported from the SDK's internal
+// enums file. Pinned to appwrite ^28.3.0 in pubspec.yaml.
+// ignore: implementation_imports
+import 'package:appwrite/src/enums.dart';
 
 import '../config.dart';
 import '../logic/xp.dart';
@@ -258,9 +263,7 @@ class AuthRepository {
       // while this check was in flight) must hear that a session
       // actually exists — otherwise they stay stuck on the login screen.
       if (isNew) {
-        _changes.add(
-          AuthChange(event: AuthEvent.signedIn, user: _cachedUser),
-        );
+        _changes.add(AuthChange(event: AuthEvent.signedIn, user: _cachedUser));
       }
     } on AppwriteException catch (e) {
       if (e.code == 401) {
@@ -430,6 +433,38 @@ class AuthRepository {
       await _a.deleteSession(sessionId: 'current');
     } catch (_) {
       // Even if the server-side logout fails, drop the local session.
+    }
+    _cachedUser = null;
+    _sessionLoaded = false;
+    _sessionError = null;
+    _changes.add(const AuthChange(event: AuthEvent.signedOut));
+  }
+
+  /// Permanently deletes the signed-in account and everything in it:
+  /// all rows across every table (habits, logs, tasks, follows, the
+  /// username reservation and the profile row) and then the Appwrite
+  /// account itself.
+  ///
+  /// The data is deleted first — deleting the account first would kill
+  /// the session the data deletes need. If the account delete then
+  /// fails, the user is left with an (empty) account and can retry; the
+  /// local session is only cleared on full success.
+  Future<void> deleteAccount() async {
+    if (_cachedUser == null) throw const AuthException('Not signed in.');
+    await AccountRepository(db: _db).deleteAllMyData();
+    try {
+      // The Dart SDK has no Account.delete() for DELETE /account, so
+      // call the endpoint directly through the client's low-level call.
+      await _a.client.call(
+        HttpMethod.delete,
+        path: '/account',
+        headers: {
+          'X-Appwrite-Project': AppConfig.projectId,
+          'accept': 'application/json',
+        },
+      );
+    } catch (e) {
+      throw _wrapAuthError(e);
     }
     _cachedUser = null;
     _sessionLoaded = false;
@@ -766,9 +801,7 @@ class HabitRepository {
     return _writeQueue.run(() async {
       final profiles = ProfileRepository(db: _db);
       final logs = await _listLogsForHabit(habitId);
-      final doneToday = logs.any(
-        (l) => l.logDate == todayKey() && l.completed,
-      );
+      final doneToday = logs.any((l) => l.logDate == todayKey() && l.completed);
       for (final log in logs) {
         await _d.deleteRow(
           databaseId: _dbId,
@@ -978,16 +1011,12 @@ class HabitRepository {
     final log = await _getLogOrNull(logId);
     final done = log != null && (log['completed'] as bool? ?? false);
     if (done != expectDone) {
-      throw StateError(
-        'Habit toggle did not save properly. Please try again.',
-      );
+      throw StateError('Habit toggle did not save properly. Please try again.');
     }
     final profile = await ProfileRepository(db: _db).fetchMyProfile();
     if (profile == null) throw const AuthException('Profile not found.');
     if (profile.xp != expectXp || profile.currentStreak != expectStreak) {
-      throw StateError(
-        'Habit toggle did not save properly. Please try again.',
-      );
+      throw StateError('Habit toggle did not save properly. Please try again.');
     }
   }
 }
@@ -1108,11 +1137,7 @@ class TaskRepository {
   Future<void> deleteWeeklyTask(String id) async {
     return _writeQueue.run(() async {
       final wasDone = await _taskDone('weekly_tasks', id);
-      await _d.deleteRow(
-        databaseId: _dbId,
-        tableId: 'weekly_tasks',
-        rowId: id,
-      );
+      await _d.deleteRow(databaseId: _dbId, tableId: 'weekly_tasks', rowId: id);
       if (wasDone == true) {
         await _adjustXp(-xpPerTask);
       }
@@ -1266,5 +1291,135 @@ class SocialRepository {
       queries: [Query.equal('followingUid', userId), Query.limit(1)],
     );
     return list.total;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Feedback: messages the user sends from Profile → Support.
+// ---------------------------------------------------------------------------
+
+class FeedbackRepository {
+  FeedbackRepository({this._db});
+
+  final TablesDB? _db;
+
+  TablesDB get _d => _requireDb(_db);
+
+  String _requireUserId() {
+    final user = AuthRepository.cachedUser;
+    if (user == null) throw const AuthException('Not signed in.');
+    return user.uid;
+  }
+
+  /// Saves a feedback message to the `feedback` table (the table must
+  /// exist — see scripts/setup_appwrite.mjs; without it this throws
+  /// and the UI shows a friendly error instead of crashing).
+  Future<FeedbackEntry> submitFeedback(String text) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      throw const AuthException('Write something first.');
+    }
+    final userId = _requireUserId();
+    final doc = await _d.createRow(
+      databaseId: _dbId,
+      tableId: 'feedback',
+      rowId: ID.unique(),
+      data: {
+        'userId': userId,
+        'text': trimmed,
+        'createdAt': DateTime.now().toIso8601String(),
+      },
+      permissions: _ownerPerms(userId),
+    );
+    return FeedbackEntry.fromJson(_docJson(doc));
+  }
+
+  /// My feedback, newest first.
+  Future<List<FeedbackEntry>> listMyFeedback({int limit = 10}) async {
+    final userId = _requireUserId();
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'feedback',
+      queries: [
+        Query.equal('userId', userId),
+        Query.orderDesc(r'$createdAt'),
+        Query.limit(limit),
+      ],
+    );
+    return list.rows
+        .map((doc) => FeedbackEntry.fromJson(_docJson(doc)))
+        .toList();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Account deletion: removes ALL of a user's data across every table.
+// ---------------------------------------------------------------------------
+
+class AccountRepository {
+  AccountRepository({this._db});
+
+  final TablesDB? _db;
+
+  TablesDB get _d => _requireDb(_db);
+
+  String _requireUserId() {
+    final user = AuthRepository.cachedUser;
+    if (user == null) throw const AuthException('Not signed in.');
+    return user.uid;
+  }
+
+  /// Deletes every row in [tableId] where [field] == [value], paging
+  /// 100 at a time. Rows that are already gone are ignored.
+  Future<void> _deleteAllRows(
+    String tableId,
+    String field,
+    String value,
+  ) async {
+    while (true) {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: tableId,
+        queries: [Query.equal(field, value), Query.limit(100)],
+      );
+      if (list.rows.isEmpty) return;
+      for (final row in list.rows) {
+        await _deleteRowOrNull(tableId, row.$id);
+      }
+    }
+  }
+
+  Future<void> _deleteRowOrNull(String tableId, String rowId) async {
+    try {
+      await _d.deleteRow(databaseId: _dbId, tableId: tableId, rowId: rowId);
+    } on AppwriteException catch (e) {
+      if (e.code != 404) rethrow;
+    }
+  }
+
+  /// Deletes everything the signed-in user owns: habits (including
+  /// archived ones), habit logs, daily rewards, weekly + monthly tasks,
+  /// follows in both directions, the username reservation and the
+  /// profile row. Idempotent — calling it twice is safe.
+  /// Serialised through the write queue so it cannot race an in-flight
+  /// toggle that is writing XP for the same user.
+  Future<void> deleteAllMyData() async {
+    return _writeQueue.run(() async {
+      final userId = _requireUserId();
+      final profiles = ProfileRepository(db: _db);
+      final profile = await profiles.fetchMyProfile();
+
+      await _deleteAllRows('habits', 'ownerUid', userId);
+      await _deleteAllRows('habit_logs', 'ownerUid', userId);
+      await _deleteAllRows('daily_rewards', 'ownerUid', userId);
+      await _deleteAllRows('weekly_tasks', 'ownerUid', userId);
+      await _deleteAllRows('monthly_tasks', 'ownerUid', userId);
+      await _deleteAllRows('follows', 'followerUid', userId);
+      await _deleteAllRows('follows', 'followingUid', userId);
+      if (profile != null && profile.username.isNotEmpty) {
+        await _deleteRowOrNull('usernames', profile.username.toLowerCase());
+      }
+      await _deleteRowOrNull('users', userId);
+    });
   }
 }

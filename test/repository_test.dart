@@ -48,11 +48,7 @@ class FakeTablesDB extends TablesDB {
   );
 
   String _now() {
-    final stamp = DateTime.utc(
-      2026,
-      1,
-      1,
-    ).add(Duration(milliseconds: _seq++));
+    final stamp = DateTime.utc(2026, 1, 1).add(Duration(milliseconds: _seq++));
     return stamp.toIso8601String();
   }
 
@@ -157,23 +153,18 @@ class FakeTablesDB extends TablesDB {
               .toList();
         case 'greaterThan':
           rows = rows
-              .where(
-                (r) =>
-                    _compare(_valueOf(r, attribute!), values.first) > 0,
-              )
+              .where((r) => _compare(_valueOf(r, attribute!), values.first) > 0)
               .toList();
         case 'greaterThanEqual':
           rows = rows
               .where(
-                (r) =>
-                    _compare(_valueOf(r, attribute!), values.first) >= 0,
+                (r) => _compare(_valueOf(r, attribute!), values.first) >= 0,
               )
               .toList();
         case 'lessThanEqual':
           rows = rows
               .where(
-                (r) =>
-                    _compare(_valueOf(r, attribute!), values.first) <= 0,
+                (r) => _compare(_valueOf(r, attribute!), values.first) <= 0,
               )
               .toList();
         case 'startsWith':
@@ -187,14 +178,12 @@ class FakeTablesDB extends TablesDB {
         case 'orderAsc':
           final attrAsc = attribute!;
           rows.sort(
-            (a, b) =>
-                _compare(_valueOf(a, attrAsc), _valueOf(b, attrAsc)),
+            (a, b) => _compare(_valueOf(a, attrAsc), _valueOf(b, attrAsc)),
           );
         case 'orderDesc':
           final attrDesc = attribute!;
           rows.sort(
-            (a, b) =>
-                _compare(_valueOf(b, attrDesc), _valueOf(a, attrDesc)),
+            (a, b) => _compare(_valueOf(b, attrDesc), _valueOf(a, attrDesc)),
           );
         case 'limit':
           limit = values.first as int;
@@ -268,27 +257,28 @@ void main() {
   Future<Profile> myProfile() async => (await profiles.fetchMyProfile())!;
 
   group('toggle persistence (live-test regression, 14 Nov 2026)', () {
-    test('concurrent tick then untick leaves the stored state undone',
-        () async {
-      final habit = await habits.addHabit(title: 'XP Test', color: 0);
+    test(
+      'concurrent tick then untick leaves the stored state undone',
+      () async {
+        final habit = await habits.addHabit(title: 'XP Test', color: 0);
 
-      // Fired together, like two fast taps: without serialisation the
-      // untick reads the log before the tick has written it, no-ops,
-      // and the tick's +2 XP + log survive — the UI then shows 50/undone
-      // while the server holds 52/done.
-      await Future.wait([
-        habits.toggleHabit(habit: habit, date: today, completed: true),
-        habits.toggleHabit(habit: habit, date: today, completed: false),
-      ]);
+        // Fired together, like two fast taps: without serialisation the
+        // untick reads the log before the tick has written it, no-ops,
+        // and the tick's +2 XP + log survive — the UI then shows 50/undone
+        // while the server holds 52/done.
+        await Future.wait([
+          habits.toggleHabit(habit: habit, date: today, completed: true),
+          habits.toggleHabit(habit: habit, date: today, completed: false),
+        ]);
 
-      expect(await habits.listLogsForDate(today), isEmpty);
-      final after = await myProfile();
-      expect(after.xp, 50);
-      expect(after.currentStreak, 0);
-    });
+        expect(await habits.listLogsForDate(today), isEmpty);
+        final after = await myProfile();
+        expect(after.xp, 50);
+        expect(after.currentStreak, 0);
+      },
+    );
 
-    test('concurrent untick then tick leaves the stored state done',
-        () async {
+    test('concurrent untick then tick leaves the stored state done', () async {
       final habit = await habits.addHabit(title: 'XP Test', color: 0);
       await habits.toggleHabit(habit: habit, date: today, completed: true);
       expect((await myProfile()).xp, 52);
@@ -304,18 +294,20 @@ void main() {
       expect(after.currentStreak, 1);
     });
 
-    test('sequential tick then untick restores base XP and removes the log',
-        () async {
-      final habit = await habits.addHabit(title: 'XP Test', color: 0);
-      await habits.toggleHabit(habit: habit, date: today, completed: true);
-      expect((await myProfile()).xp, 52);
-      await habits.toggleHabit(habit: habit, date: today, completed: false);
+    test(
+      'sequential tick then untick restores base XP and removes the log',
+      () async {
+        final habit = await habits.addHabit(title: 'XP Test', color: 0);
+        await habits.toggleHabit(habit: habit, date: today, completed: true);
+        expect((await myProfile()).xp, 52);
+        await habits.toggleHabit(habit: habit, date: today, completed: false);
 
-      expect(await habits.listLogsForDate(today), isEmpty);
-      final after = await myProfile();
-      expect(after.xp, 50);
-      expect(after.currentStreak, 0);
-    });
+        expect(await habits.listLogsForDate(today), isEmpty);
+        final after = await myProfile();
+        expect(after.xp, 50);
+        expect(after.currentStreak, 0);
+      },
+    );
   });
 
   group('deleteHabit keeps XP and streak consistent', () {
@@ -334,28 +326,33 @@ void main() {
       expect(after.longestStreak, 1);
     });
 
-    test('deleting a never-done habit leaves XP and streak untouched',
-        () async {
-      // A second habit done today backs the seeded streak with a real log.
-      final doneHabit = await habits.addHabit(title: 'Wake up at 4am', color: 0);
-      await habits.toggleHabit(
-        habit: doneHabit,
-        date: today,
-        completed: true,
-      );
-      expect((await myProfile()).xp, 52);
-      expect((await myProfile()).currentStreak, 1);
+    test(
+      'deleting a never-done habit leaves XP and streak untouched',
+      () async {
+        // A second habit done today backs the seeded streak with a real log.
+        final doneHabit = await habits.addHabit(
+          title: 'Wake up at 4am',
+          color: 0,
+        );
+        await habits.toggleHabit(
+          habit: doneHabit,
+          date: today,
+          completed: true,
+        );
+        expect((await myProfile()).xp, 52);
+        expect((await myProfile()).currentStreak, 1);
 
-      final habit = await habits.addHabit(title: 'XP Test', color: 0);
-      await habits.deleteHabit(habit.id);
+        final habit = await habits.addHabit(title: 'XP Test', color: 0);
+        await habits.deleteHabit(habit.id);
 
-      final remaining = await habits.listMyHabits();
-      expect(remaining.map((h) => h.id), [doneHabit.id]);
-      expect((await habits.listLogsForDate(today)).length, 1);
-      final after = await myProfile();
-      expect(after.xp, 52);
-      expect(after.currentStreak, 1);
-    });
+        final remaining = await habits.listMyHabits();
+        expect(remaining.map((h) => h.id), [doneHabit.id]);
+        expect((await habits.listLogsForDate(today)).length, 1);
+        final after = await myProfile();
+        expect(after.xp, 52);
+        expect(after.currentStreak, 1);
+      },
+    );
   });
 
   group('task deletes keep XP consistent', () {
@@ -381,6 +378,126 @@ void main() {
 
       expect(await tasks.listWeeklyTasks(week), isEmpty);
       expect((await myProfile()).xp, 50);
+    });
+  });
+  group('feedback', () {
+    late FeedbackRepository feedback;
+
+    setUp(() {
+      feedback = FeedbackRepository(db: db);
+    });
+
+    test('submitting feedback saves a row with my user id', () async {
+      final entry = await feedback.submitFeedback('Love the app!');
+      expect(entry.text, 'Love the app!');
+      expect(entry.userId, 'user-1');
+      expect(entry.createdAt, isNotNull);
+      final mine = await feedback.listMyFeedback();
+      expect(mine.map((e) => e.text), ['Love the app!']);
+    });
+
+    test('the newest feedback comes first', () async {
+      await feedback.submitFeedback('First');
+      await feedback.submitFeedback('Second');
+      final mine = await feedback.listMyFeedback();
+      expect(mine.map((e) => e.text), ['Second', 'First']);
+    });
+
+    test('empty feedback is rejected', () async {
+      expect(
+        () => feedback.submitFeedback('   '),
+        throwsA(isA<AuthException>()),
+      );
+    });
+  });
+
+  group('account deletion removes all user rows', () {
+    late AccountRepository account;
+    late SocialRepository social;
+
+    setUp(() {
+      account = AccountRepository(db: db);
+      social = SocialRepository(db: db);
+    });
+
+    test(
+      'deleteAllMyData removes every row that belongs to the user',
+      () async {
+        // A second user to follow, so "other people's data survives" can
+        // be asserted too.
+        await db.createRow(
+          databaseId: 'lifegame',
+          tableId: 'users',
+          rowId: 'user-2',
+          data: {
+            'displayName': 'Other User',
+            'username': 'otheruser',
+            'currentStreak': 0,
+            'longestStreak': 0,
+            'xp': 10,
+            'email': 'other@example.com',
+            'avatar': null,
+            'lastActiveDate': null,
+          },
+        );
+        final habit = await habits.addHabit(title: 'XP Test', color: 0);
+        await habits.toggleHabit(habit: habit, date: today, completed: true);
+        await tasks.addWeeklyTask('Buy groceries', weekStartKey());
+        final weekly = (await tasks.listWeeklyTasks(weekStartKey())).first;
+        await tasks.toggleWeeklyTask(weekly.id, true);
+        await tasks.addMonthlyTask('Read a book', monthKey());
+        await db.createRow(
+          databaseId: 'lifegame',
+          tableId: 'daily_rewards',
+          rowId: 'user-1_$today',
+          data: {
+            'ownerUid': 'user-1',
+            'date': today,
+            'xp': 50,
+            'kind': 'daily_complete',
+          },
+        );
+        await db.createRow(
+          databaseId: 'lifegame',
+          tableId: 'usernames',
+          rowId: 'tester',
+          data: {'username': 'tester', 'ownerUid': 'user-1'},
+        );
+        await social.follow('user-2');
+        // Sanity: 50 seed XP + 2 (habit) + 2 (weekly task).
+        expect((await profiles.fetchMyProfile())?.xp, 54);
+
+        await account.deleteAllMyData();
+
+        expect(await habits.listMyHabits(), isEmpty);
+        expect(await habits.listLogsForDate(today), isEmpty);
+        expect(await tasks.listWeeklyTasks(weekStartKey()), isEmpty);
+        expect(await tasks.listMonthlyTasks(monthKey()), isEmpty);
+        expect(await social.followingIds(), isEmpty);
+        expect(await profiles.fetchMyProfile(), isNull);
+        expect(await profiles.isUsernameTaken('tester'), isFalse);
+        final rewards = await db.listRows(
+          databaseId: 'lifegame',
+          tableId: 'daily_rewards',
+          queries: [Query.equal('ownerUid', 'user-1')],
+        );
+        expect(rewards.total, 0);
+        // The other user's profile must survive.
+        expect((await profiles.fetchProfile('user-2'))?.username, 'otheruser');
+      },
+    );
+
+    test('deleteAllMyData is idempotent', () async {
+      await account.deleteAllMyData();
+      await account.deleteAllMyData();
+      expect(await profiles.fetchMyProfile(), isNull);
+      expect(await habits.listMyHabits(), isEmpty);
+    });
+
+    test('deleteAccount without a signed-in user throws', () async {
+      AuthRepository.debugSetCachedUserForTest(null);
+      final auth = AuthRepository();
+      expect(() => auth.deleteAccount(), throwsA(isA<AuthException>()));
     });
   });
 }

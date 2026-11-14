@@ -21,8 +21,7 @@ class LeaderboardScreen extends StatefulWidget {
 
 class _LeaderboardScreenState extends State<LeaderboardScreen>
     with SingleTickerProviderStateMixin {
-  ProfileRepository get _profiles =>
-      widget.profileRepo ?? ProfileRepository();
+  ProfileRepository get _profiles => widget.profileRepo ?? ProfileRepository();
 
   late final TabController _tabs;
   List<LeaderboardEntry> _global = [];
@@ -74,69 +73,68 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
     return ResponsiveCenter(
       maxWidth: 980,
       child: Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-          child: Row(
-            children: [
-              const Text(
-                'Leaderboard',
-                style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
-              ),
-              const Spacer(),
-              IconButton(
-                onPressed: _load,
-                icon: const Icon(Icons.refresh),
-                tooltip: 'Refresh',
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: TabBar(
-              controller: _tabs,
-              dividerColor: Colors.transparent,
-              indicator: BoxDecoration(
-                gradient: AppTheme.violetGradient,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              indicatorSize: TabBarIndicatorSize.tab,
-              labelColor: Colors.white,
-              unselectedLabelColor: AppTheme.inkSoft,
-              labelStyle: const TextStyle(fontWeight: FontWeight.w700),
-              tabs: const [
-                Tab(text: 'Global'),
-                Tab(text: 'Friends'),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+            child: Row(
+              children: [
+                const Text(
+                  'Leaderboard',
+                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
+                ),
+                const Spacer(),
+                IconButton(
+                  onPressed: _load,
+                  icon: const Icon(Icons.refresh),
+                  tooltip: 'Refresh',
+                ),
               ],
             ),
           ),
-        ),
-        Expanded(
-          child: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : TabBarView(
-                  controller: _tabs,
-                  children: [
-                    _BoardList(entries: _global, myId: _myId),
-                    _BoardList(
-                      entries: _friends,
-                      myId: _myId,
-                      emptyTitle: 'No friends on the board yet',
-                      emptySubtitle:
-                          'Follow people from Search and they will show up here.',
-                    ),
-                  ],
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: TabBar(
+                controller: _tabs,
+                dividerColor: Colors.transparent,
+                indicator: BoxDecoration(
+                  gradient: AppTheme.violetGradient,
+                  borderRadius: BorderRadius.circular(12),
                 ),
-        ),
-      ],
-    ),
-  );
+                indicatorSize: TabBarIndicatorSize.tab,
+                labelColor: Colors.white,
+                unselectedLabelColor: AppTheme.inkSoft,
+                labelStyle: const TextStyle(fontWeight: FontWeight.w700),
+                tabs: const [
+                  Tab(text: 'Global'),
+                  Tab(text: 'Friends'),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : TabBarView(
+                    controller: _tabs,
+                    children: [
+                      _BoardList(entries: _global, myId: _myId),
+                      _BoardList(
+                        entries: _friends,
+                        myId: _myId,
+                        emptyTitle: 'No friends on the board yet',
+                        emptySubtitle: 'Follow people from Search and they will show up here.',
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -208,9 +206,7 @@ class _LeaderboardRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final profile = entry.profile;
     return Material(
-      color: isMe
-          ? AppTheme.violet.withValues(alpha: 0.08)
-          : Colors.white,
+      color: isMe ? AppTheme.violet.withValues(alpha: 0.08) : Colors.white,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         onTap: onTap,
@@ -230,11 +226,7 @@ class _LeaderboardRow extends StatelessWidget {
               SizedBox(
                 width: 34,
                 child: entry.rank <= 3
-                    ? Icon(
-                        Icons.emoji_events,
-                        color: _rankColor,
-                        size: 26,
-                      )
+                    ? Icon(Icons.emoji_events, color: _rankColor, size: 26)
                     : Text(
                         '#${entry.rank}',
                         style: const TextStyle(

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
 import '../data/models.dart';
@@ -11,8 +12,12 @@ import '../widgets/common.dart';
 import '../widgets/habit_dialog.dart';
 import 'auth_screen.dart';
 
+/// Email shown for support — the developer's own address. It is copied
+/// to the clipboard on tap (no extra dependency needed for a mail link).
+const String _supportEmail = 'yashsharmaup2008@gmail.com';
+
 /// The user's own profile: stats, all habits, weekly + monthly tasks,
-/// settings and logout.
+/// support + feedback, settings and logout.
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({
     super.key,
@@ -21,6 +26,7 @@ class ProfileScreen extends StatefulWidget {
     this.taskRepo,
     this.socialRepo,
     this.authRepo,
+    this.feedbackRepo,
   });
 
   final ProfileRepository? profileRepo;
@@ -28,6 +34,7 @@ class ProfileScreen extends StatefulWidget {
   final TaskRepository? taskRepo;
   final SocialRepository? socialRepo;
   final AuthRepository? authRepo;
+  final FeedbackRepository? feedbackRepo;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -39,6 +46,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   TaskRepository get _tasks => widget.taskRepo ?? TaskRepository();
   SocialRepository get _social => widget.socialRepo ?? SocialRepository();
   AuthRepository get _auth => widget.authRepo ?? AuthRepository();
+  FeedbackRepository get _feedback =>
+      widget.feedbackRepo ?? FeedbackRepository();
 
   Profile? _profile;
   List<Habit> _habitsList = [];
@@ -48,6 +57,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int _followers = 0;
   int _following = 0;
   bool _loading = true;
+  bool _deletingAccount = false;
   StreamSubscription<void>? _habitChanges;
   StreamSubscription<void>? _taskChanges;
 
@@ -210,8 +220,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final result = await showHabitEditDialog(context, habit);
     if (result == null || !mounted) return;
     try {
-      if (result.action == HabitEditAction.save &&
-          result.title.isNotEmpty) {
+      if (result.action == HabitEditAction.save && result.title.isNotEmpty) {
         await _habits.updateHabit(habit, title: result.title);
         await _load();
       } else if (result.action == HabitEditAction.delete) {
@@ -234,6 +243,185 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  /// Tapping a task's checkbox flips it instantly; the write syncs in
+  /// the background (same optimistic pattern as Home's habit toggle).
+  /// A failed write rolls the checkbox back to the server state.
+  Future<void> _toggleWeekly(String id, bool done) async {
+    final prev = _weekly;
+    setState(() {
+      _weekly = _weekly
+          .map(
+            (t) => t.id == id
+                ? WeeklyTask(
+                    id: t.id,
+                    userId: t.userId,
+                    title: t.title,
+                    weekStart: t.weekStart,
+                    done: done,
+                  )
+                : t,
+          )
+          .toList();
+    });
+    try {
+      await _tasks.toggleWeeklyTask(id, done);
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _weekly = prev);
+        showError(context, e);
+        try {
+          await _load();
+        } catch (_) {}
+      }
+    }
+  }
+
+  Future<void> _toggleMonthly(String id, bool done) async {
+    final prev = _monthly;
+    setState(() {
+      _monthly = _monthly
+          .map(
+            (t) => t.id == id
+                ? MonthlyTask(
+                    id: t.id,
+                    userId: t.userId,
+                    title: t.title,
+                    month: t.month,
+                    done: done,
+                  )
+                : t,
+          )
+          .toList();
+    });
+    try {
+      await _tasks.toggleMonthlyTask(id, done);
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _monthly = prev);
+        showError(context, e);
+        try {
+          await _load();
+        } catch (_) {}
+      }
+    }
+  }
+
+  void _showHowItWorks() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Text('How Life Game works'),
+        content: const SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('• Add habits on the Home tab and tick them off each day.'),
+              SizedBox(height: 8),
+              Text('• Every completion is +2 XP. Unticking takes 2 XP back.'),
+              SizedBox(height: 8),
+              Text('• Level = XP ÷ 100 + 1. A level takes 50 completions.'),
+              SizedBox(height: 8),
+              Text('• Streak = days in a row with at least one habit done.'),
+              SizedBox(height: 8),
+              Text(
+                '• Weekly and monthly tasks live here, on Profile — they give XP too, but no streak.',
+              ),
+              SizedBox(height: 8),
+              Text(
+                '• Follow people from Search or the leaderboard to see them on the Friends leaderboard.',
+              ),
+              SizedBox(height: 8),
+              Text(
+                '• Your data is stored in your own account. Only you can change it; other users can only see your public profile (name, XP, streak).',
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _copySupportEmail() async {
+    await Clipboard.setData(const ClipboardData(text: _supportEmail));
+    if (mounted) showInfo(context, 'Support email copied.');
+  }
+
+  /// Two-step delete: a plain-language warning dialog with an
+  /// explicit "I understand" checkbox, then the real delete.
+  /// While it runs the screen shows a blocking overlay; on success the
+  /// auth gate signs the user out to the login screen.
+  Future<void> _deleteAccount() async {
+    var understood = false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          title: const Text('Delete your account?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'This permanently deletes your account and everything in it — your habits, logs, tasks, XP, streak, followers and your username. This cannot be undone.',
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Checkbox(
+                    value: understood,
+                    onChanged: (v) =>
+                        setDialogState(() => understood = v ?? false),
+                  ),
+                  const Expanded(
+                    child: Text('I understand, delete everything'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: understood
+                  ? () => Navigator.of(context).pop(true)
+                  : null,
+              child: const Text('Delete my account'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _deletingAccount = true);
+    try {
+      await _auth.deleteAccount();
+      // Success: the auth gate reacts to the signed-out event and
+      // shows the login screen; this screen unmounts with it.
+    } catch (e) {
+      if (mounted) {
+        setState(() => _deletingAccount = false);
+        showError(context, e);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = _profile;
@@ -246,13 +434,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       items: _weekly
           .map((t) => _TaskItem(id: t.id, title: t.title, done: t.done))
           .toList(),
-      onToggle: (id, done) async {
-        await _tasks.toggleWeeklyTask(id, done);
-        await _load();
-        if (context.mounted) {
-          showInfo(context, done ? '+$xpPerTask XP' : '−$xpPerTask XP');
-        }
-      },
+      onToggle: _toggleWeekly,
       onDelete: (id) async {
         await _tasks.deleteWeeklyTask(id);
         await _load();
@@ -265,13 +447,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       items: _monthly
           .map((t) => _TaskItem(id: t.id, title: t.title, done: t.done))
           .toList(),
-      onToggle: (id, done) async {
-        await _tasks.toggleMonthlyTask(id, done);
-        await _load();
-        if (context.mounted) {
-          showInfo(context, done ? '+$xpPerTask XP' : '−$xpPerTask XP');
-        }
-      },
+      onToggle: _toggleMonthly,
       onDelete: (id) async {
         await _tasks.deleteMonthlyTask(id);
         await _load();
@@ -280,125 +456,382 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
     return ResponsiveCenter(
       maxWidth: 980,
-      child: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
-          children: [
-            Row(
+      child: Stack(
+        children: [
+          RefreshIndicator(
+            onRefresh: _load,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
               children: [
-                const Text(
-                  'Profile',
-                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
-                ),
-                const Spacer(),
-                IconButton(
-                  onPressed: _editProfile,
-                  tooltip: 'Edit profile',
-                  icon: const Icon(Icons.edit_outlined),
-                ),
+                Row(
+                  children: [
+                    const Text(
+                      'Profile',
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      onPressed: _editProfile,
+                      tooltip: 'Edit profile',
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
+                  ],
+                ).animate().fadeIn().slideY(begin: -0.1),
+                const SizedBox(height: 8),
+                if (_loading)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 48),
+                      child: CircularProgressIndicator(),
+                    ),
+                  )
+                else if (profile == null)
+                  const EmptyState(
+                    icon: Icons.person_off_outlined,
+                    title: 'No profile yet',
+                    subtitle: 'Sign in again to set up your profile.',
+                  )
+                else ...[
+                  _ProfileHeader(
+                    profile: profile,
+                    rank: _rank,
+                    followers: _followers,
+                    following: _following,
+                  ).animate().fadeIn(delay: 60.ms).slideY(begin: 0.1),
+                  const SizedBox(height: 16),
+                  XpBar(xp: profile.xp)
+                      .animate()
+                      .fadeIn(delay: 120.ms)
+                      .slideY(begin: 0.1),
+                  const SizedBox(height: 24),
+                  _SectionTitle(
+                    title: 'My habits',
+                    count: _habitsList.length,
+                    onAdd: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const _AddHabitHint()),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  if (_habitsList.isEmpty)
+                    const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(18),
+                        child: Text(
+                          'No habits yet — add your first one from the Home tab.',
+                          style: TextStyle(color: AppTheme.inkSoft),
+                        ),
+                      ),
+                    )
+                  else
+                    ..._habitsList.map(
+                      (habit) => Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _HabitRow(
+                          habit: habit,
+                          onTap: () => _editHabit(habit),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 24),
+                  if (wide)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: weeklySection),
+                        const SizedBox(width: 16),
+                        Expanded(child: monthlySection),
+                      ],
+                    )
+                  else ...[
+                    weeklySection,
+                    const SizedBox(height: 24),
+                    monthlySection,
+                  ],
+                  const SizedBox(height: 24),
+                  _FeedbackSection(feedbackRepo: _feedback)
+                      .animate()
+                      .fadeIn()
+                      .slideY(begin: 0.1),
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Support',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 10),
+                  Card(
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: const Icon(Icons.help_outline),
+                          title: const Text('How Life Game works'),
+                          subtitle: const Text(
+                            'Habits, XP, streaks and levels, in one place',
+                          ),
+                          trailing: const Icon(
+                            Icons.chevron_right,
+                            color: AppTheme.inkSoft,
+                          ),
+                          onTap: _showHowItWorks,
+                        ),
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: const Icon(Icons.email_outlined),
+                          title: const Text('Email support'),
+                          subtitle: const Text(_supportEmail),
+                          trailing: const Icon(
+                            Icons.copy_outlined,
+                            color: AppTheme.inkSoft,
+                            size: 20,
+                          ),
+                          onTap: _copySupportEmail,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Settings',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 10),
+                  Card(
+                    child: Column(
+                      children: [
+                        const ListTile(
+                          leading: Icon(Icons.info_outline),
+                          title: Text('About Life Game'),
+                          subtitle: Text(
+                            'Version 2.2.0+6 • Flutter • Appwrite',
+                          ),
+                        ),
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: const Icon(
+                            Icons.delete_forever,
+                            color: Colors.red,
+                          ),
+                          title: const Text(
+                            'Delete account',
+                            style: TextStyle(color: Colors.red),
+                          ),
+                          subtitle: const Text(
+                            'Removes your account and all your data',
+                          ),
+                          onTap: _deleteAccount,
+                        ),
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: const Icon(Icons.logout, color: Colors.red),
+                          title: const Text(
+                            'Log out',
+                            style: TextStyle(color: Colors.red),
+                          ),
+                          onTap: _signOut,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
-            ).animate().fadeIn().slideY(begin: -0.1),
-            const SizedBox(height: 8),
-            if (_loading)
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.symmetric(vertical: 48),
-                  child: CircularProgressIndicator(),
-                ),
-              )
-            else if (profile == null)
-              const EmptyState(
-                icon: Icons.person_off_outlined,
-                title: 'No profile yet',
-                subtitle: 'Sign in again to set up your profile.',
-              )
-            else ...[
-              _ProfileHeader(
-                profile: profile,
-                rank: _rank,
-                followers: _followers,
-                following: _following,
-              ).animate().fadeIn(delay: 60.ms).slideY(begin: 0.1),
-              const SizedBox(height: 16),
-              XpBar(xp: profile.xp)
-                  .animate()
-                  .fadeIn(delay: 120.ms)
-                  .slideY(begin: 0.1),
-              const SizedBox(height: 24),
-              _SectionTitle(
-                title: 'My habits',
-                count: _habitsList.length,
-                onAdd: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const _AddHabitHint()),
+            ),
+          ),
+          if (_deletingAccount)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.45),
+                alignment: Alignment.center,
+                child: const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(width: 16),
+                        Text('Deleting your account…'),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-              const SizedBox(height: 10),
-              if (_habitsList.isEmpty)
-                const Card(
-                  child: Padding(
-                    padding: EdgeInsets.all(18),
-                    child: Text(
-                      'No habits yet — add your first one from the Home tab.',
-                      style: TextStyle(color: AppTheme.inkSoft),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Feedback: a short form that saves to the `feedback` table, plus the
+/// user's previously sent messages. Kept on Profile so feedback lives
+/// next to Support, not on the main tabs.
+class _FeedbackSection extends StatefulWidget {
+  const _FeedbackSection({required this.feedbackRepo});
+
+  final FeedbackRepository feedbackRepo;
+
+  @override
+  State<_FeedbackSection> createState() => _FeedbackSectionState();
+}
+
+class _FeedbackSectionState extends State<_FeedbackSection> {
+  final _controller = TextEditingController();
+  List<FeedbackEntry> _sent = [];
+  bool _loading = true;
+  bool _sending = false;
+  bool _justSent = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final list = await widget.feedbackRepo.listMyFeedback();
+      if (mounted) setState(() => _sent = list);
+    } catch (_) {
+      // Feedback is optional: a missing table (setup not run yet)
+      // must not break the whole Profile screen.
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _send() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty || _sending) return;
+    setState(() {
+      _sending = true;
+      _justSent = false;
+    });
+    try {
+      await widget.feedbackRepo.submitFeedback(text);
+      _controller.clear();
+      if (mounted) setState(() => _justSent = true);
+      await _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  String _dateLabel(DateTime? date) {
+    if (date == null) return '';
+    return '${date.day}/${date.month}/${date.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Feedback',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 2),
+        const Text(
+          'Tell us what works, what does not, and what you want next.',
+          style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+        ),
+        const SizedBox(height: 10),
+        TextField(
+          controller: _controller,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            hintText: 'Write your feedback here…',
+          ),
+        ),
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerRight,
+          child: FilledButton.icon(
+            onPressed: _sending ? null : _send,
+            icon: _sending
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2,
                     ),
-                  ),
-                )
-              else
-                ..._habitsList.map(
-                  (habit) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _HabitRow(
-                      habit: habit,
-                      onTap: () => _editHabit(habit),
+                  )
+                : const Icon(Icons.send, size: 18),
+            label: Text(_sending ? 'Sending…' : 'Send feedback'),
+          ),
+        ),
+        if (_justSent) ...[
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppTheme.teal.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.check_circle, color: AppTheme.teal, size: 20),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Thank you — your feedback was sent.',
+                    style: TextStyle(
+                      color: AppTheme.teal,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
-              const SizedBox(height: 24),
-              if (wide)
-                Row(
+              ],
+            ),
+          ),
+        ],
+        if (_loading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_sent.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          const Text(
+            'Your feedback',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+          ),
+          const SizedBox(height: 8),
+          ..._sent.map(
+            (entry) => Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: weeklySection),
-                    const SizedBox(width: 16),
-                    Expanded(child: monthlySection),
-                  ],
-                )
-              else ...[
-                weeklySection,
-                const SizedBox(height: 24),
-                monthlySection,
-              ],
-              const SizedBox(height: 24),
-              const Text(
-                'Settings',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 10),
-              Card(
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading: const Icon(Icons.info_outline),
-                      title: const Text('About Life Game'),
-                      subtitle: const Text('Version 2.2 • Flutter • Appwrite'),
-                    ),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.logout, color: Colors.red),
-                      title: const Text(
-                        'Log out',
-                        style: TextStyle(color: Colors.red),
+                    Text(entry.text),
+                    const SizedBox(height: 6),
+                    Text(
+                      _dateLabel(entry.createdAt),
+                      style: const TextStyle(
+                        color: AppTheme.inkSoft,
+                        fontSize: 12,
                       ),
-                      onTap: _signOut,
                     ),
                   ],
                 ),
               ),
-            ],
-          ],
-        ),
-      ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -625,10 +1058,7 @@ class _TaskSection extends StatelessWidget {
             Expanded(
               child: Text(
                 subtitle,
-                style: const TextStyle(
-                  color: AppTheme.inkSoft,
-                  fontSize: 13,
-                ),
+                style: const TextStyle(color: AppTheme.inkSoft, fontSize: 13),
                 overflow: TextOverflow.ellipsis,
               ),
             ),

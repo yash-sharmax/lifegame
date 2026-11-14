@@ -12,11 +12,11 @@ data** — every list starts empty and the user fills it.
 | Tab / Screen | What it does |
 |---|---|
 | Auth | Log in, Create account (email + password + unique username), Forgot password (email reset link), Reset password (recovery deep link), Continue with Google |
-| Home | Greeting + rotating motivational quote, streak flame, XP bar to next level, today's habits with big animated checkboxes, confetti when the whole day is done |
+| Home | Greeting + a **line of the day** (same line all day, a new one tomorrow), streak flame, XP bar to next level, today's habits with big animated checkboxes, confetti when the whole day is done |
 | Dashboard | Monthly progress ring **with % in the centre**, weekly bar charts with % labels, 14-day trend chart, Top Habits, stats cards (XP, streaks, 30-day %) |
 | Leaderboard | Two tabs — **Global** (everyone by XP) and **Friends** (people you follow + you, by XP). Tap a row for a public profile |
 | Search | Search users by username / display name, follow & unfollow |
-| Profile | Avatar, display name, username, bio, XP/streak/global rank, **all** habits (add/edit/delete), Weekly Tasks, Monthly Tasks, settings, logout |
+| Profile | Avatar, display name, username, bio, XP/streak/global rank, **all** habits (add/edit/delete), Weekly Tasks, Monthly Tasks, Support (how it works + email support), Feedback form, settings, account deletion, logout |
 
 ## XP & streak rules
 
@@ -106,3 +106,7 @@ flutter test      # XP/streak unit tests + auth-gate + home empty-state widget t
 security rules in `firestore.rules`, setup in `FIREBASE.md`.
 2.2.0 — backend moved from Firebase to Appwrite (Auth + TablesDB);
 permissions in `APPWRITE.md`, setup via `scripts/setup_appwrite.mjs`.
+2.2.0+6 — UI overhaul from real-use feedback: no level-up popup
+(level lives in the top XP bar), deterministic line of the day,
+optimistic habit/task taps, polished Dashboard charts, Profile gained
+Support + Feedback (`feedback` table) + account deletion.

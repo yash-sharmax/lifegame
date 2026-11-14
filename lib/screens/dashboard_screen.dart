@@ -175,6 +175,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             'Monthly Progress',
             style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
           ),
+          const SizedBox(height: 2),
+          Text(
+            '${_monthLogs.length} of ${_habitCount * _daysElapsedThisMonth()} possible so far',
+            style: const TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+          ),
           const SizedBox(height: 8),
           ProgressRing(
             fraction: monthFraction,
@@ -267,213 +272,345 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _weeklyCard(List<MapEntry<String, double>> weekly) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Weekly completion',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 180,
-            child: BarChart(
-              BarChartData(
-                maxY: 1.0,
-                barGroups: [
-                  for (var i = 0; i < weekly.length; i++)
-                    BarChartGroupData(
-                      x: i,
-                      barRods: [
-                        BarChartRodData(
-                          toY: weekly[i].value,
-                          width: 34,
-                          borderRadius: const BorderRadius.vertical(
-                            top: Radius.circular(10),
-                          ),
-                          gradient: AppTheme.violetGradient,
-                        ),
-                      ],
-                    ),
-                ],
-                titlesData: FlTitlesData(
-                  leftTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  rightTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  topTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      getTitlesWidget: (value, meta) => Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: Text(
-                          '${(weekly[value.toInt()].value * 100).round()}%',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      getTitlesWidget: (value, meta) => Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text(
-                          weekly[value.toInt()].key,
-                          style: const TextStyle(
-                            color: AppTheme.inkSoft,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                gridData: const FlGridData(show: false),
-                borderData: FlBorderData(show: false),
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  ).animate().fadeIn(delay: 160.ms).slideY(begin: 0.1);
-
-  Widget _trendCard(List<double> trend) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Daily trend — last 14 days',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 170,
-            child: LineChart(
-              LineChartData(
-                minY: 0,
-                maxY: 1.0,
-                lineBarsData: [
-                  LineChartBarData(
-                    spots: [
-                      for (var i = 0; i < trend.length; i++)
-                        FlSpot(i.toDouble(), trend[i]),
-                    ],
-                    isCurved: true,
-                    color: AppTheme.pink,
-                    barWidth: 3.5,
-                    dotData: const FlDotData(show: false),
-                    belowBarData: BarAreaData(
-                      show: true,
-                      gradient: LinearGradient(
-                        colors: [
-                          AppTheme.pink.withValues(alpha: 0.35),
-                          AppTheme.pink.withValues(alpha: 0.02),
-                        ],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ),
-                    ),
-                  ),
-                ],
-                titlesData: const FlTitlesData(
-                  leftTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  rightTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  topTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                ),
-                gridData: FlGridData(
-                  show: true,
-                  drawVerticalLine: false,
-                  getDrawingHorizontalLine: (_) =>
-                      FlLine(color: const Color(0xFFEDEAF5), strokeWidth: 1),
-                ),
-                borderData: FlBorderData(show: false),
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.1);
-
-  Widget _topHabitsCard() => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Top habits',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 12),
-          if (_topHabits.isEmpty)
+  Widget _weeklyCard(List<MapEntry<String, double>> weekly) {
+    final allZero = weekly.every((e) => e.value == 0);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             const Text(
-              'Complete habits to see your top performers here.',
-              style: TextStyle(color: AppTheme.inkSoft),
-            )
-          else
-            ..._topHabits.asMap().entries.map((entry) {
-              final title = entry.value.key;
-              final count = entry.value.value;
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 15,
-                      backgroundColor: AppTheme.violet.withValues(alpha: 0.12),
-                      child: Text(
-                        '${entry.key + 1}',
-                        style: const TextStyle(
-                          color: AppTheme.violet,
-                          fontWeight: FontWeight.w800,
+              'Weekly completion',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 2),
+            const Text(
+              'Share of your plan finished each week',
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            if (allZero)
+              const _ChartEmptyState(
+                text: 'No completions yet — tick a habit to start this chart.',
+              )
+            else
+              SizedBox(
+                height: 180,
+                child: BarChart(
+                  BarChartData(
+                    maxY: 1.0,
+                    barGroups: [
+                      for (var i = 0; i < weekly.length; i++)
+                        BarChartGroupData(
+                          x: i,
+                          barRods: [
+                            BarChartRodData(
+                              toY: weekly[i].value,
+                              width: 34,
+                              borderRadius: const BorderRadius.vertical(
+                                top: Radius.circular(10),
+                              ),
+                              gradient: AppTheme.violetGradient,
+                              // Light full-height track behind each bar
+                              // so 0% weeks still read as a chart.
+                              backDrawRodData: BackgroundBarChartRodData(
+                                show: true,
+                                toY: 1.0,
+                                color: const Color(0xFFEDEAF5),
+                              ),
+                            ),
+                          ],
+                        ),
+                    ],
+                    titlesData: FlTitlesData(
+                      leftTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false),
+                      ),
+                      rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false),
+                      ),
+                      topTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          getTitlesWidget: (value, meta) => Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Text(
+                              '${(weekly[value.toInt()].value * 100).round()}%',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          getTitlesWidget: (value, meta) => Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(
+                              weekly[value.toInt()].key,
+                              style: const TextStyle(
+                                color: AppTheme.inkSoft,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                    Text(
-                      '$count times',
-                      style: const TextStyle(
-                        color: AppTheme.inkSoft,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
+                    gridData: const FlGridData(show: false),
+                    borderData: FlBorderData(show: false),
+                  ),
+                  duration: const Duration(milliseconds: 600),
+                  curve: Curves.easeOutCubic,
                 ),
-              );
-            }),
-        ],
+              ),
+          ],
+        ),
       ),
-    ),
-  ).animate().fadeIn(delay: 240.ms).slideY(begin: 0.1);
+    ).animate().fadeIn(delay: 160.ms).slideY(begin: 0.1);
+  }
+
+  Widget _trendCard(List<double> trend) {
+    final allZero = trend.every((v) => v == 0);
+    final now = DateTime.now();
+    final startDay = now.subtract(const Duration(days: 13));
+    String dayLabel(int index) {
+      if (index == trend.length - 1) return 'Today';
+      if (index == 0) {
+        const months = [
+          '',
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ];
+        final day = startDay.add(Duration(days: index));
+        return '${day.day} ${months[day.month]}';
+      }
+      return '';
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Daily trend — last 14 days',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 2),
+            const Text(
+              'Share of habits done each day',
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            if (allZero)
+              const _ChartEmptyState(
+                text: 'No completions yet — tick a habit to start your trend.',
+              )
+            else
+              SizedBox(
+                height: 170,
+                child: LineChart(
+                  LineChartData(
+                    minY: 0,
+                    maxY: 1.0,
+                    lineBarsData: [
+                      LineChartBarData(
+                        spots: [
+                          for (var i = 0; i < trend.length; i++)
+                            FlSpot(i.toDouble(), trend[i]),
+                        ],
+                        isCurved: true,
+                        color: AppTheme.pink,
+                        barWidth: 3.5,
+                        dotData: const FlDotData(show: false),
+                        belowBarData: BarAreaData(
+                          show: true,
+                          gradient: LinearGradient(
+                            colors: [
+                              AppTheme.pink.withValues(alpha: 0.35),
+                              AppTheme.pink.withValues(alpha: 0.02),
+                            ],
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                          ),
+                        ),
+                      ),
+                    ],
+                    titlesData: FlTitlesData(
+                      leftTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 36,
+                          interval: 0.5,
+                          getTitlesWidget: (value, meta) => Text(
+                            '${(value * 100).round()}%',
+                            style: const TextStyle(
+                              color: AppTheme.inkSoft,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                      rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false),
+                      ),
+                      topTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false),
+                      ),
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 26,
+                          interval: 1,
+                          getTitlesWidget: (value, meta) => Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(
+                              dayLabel(value.toInt()),
+                              style: const TextStyle(
+                                color: AppTheme.inkSoft,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    gridData: FlGridData(
+                      show: true,
+                      drawVerticalLine: false,
+                      getDrawingHorizontalLine: (_) => FlLine(
+                        color: const Color(0xFFEDEAF5),
+                        strokeWidth: 1,
+                      ),
+                    ),
+                    borderData: FlBorderData(show: false),
+                  ),
+                  duration: const Duration(milliseconds: 600),
+                  curve: Curves.easeOutCubic,
+                ),
+              ),
+          ],
+        ),
+      ),
+    ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.1);
+  }
+
+  Widget _topHabitsCard() {
+    final maxCount = _topHabits.isEmpty
+        ? 0
+        : _topHabits.map((e) => e.value).reduce((a, b) => a > b ? a : b);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Top habits',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 2),
+            const Text(
+              'Most completed in the last 90 days',
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            if (_topHabits.isEmpty)
+              const Text(
+                'Complete habits to see your top performers here.',
+                style: TextStyle(color: AppTheme.inkSoft),
+              )
+            else
+              ..._topHabits.asMap().entries.map((entry) {
+                final title = entry.value.key;
+                final count = entry.value.value;
+                final fraction = maxCount == 0 ? 0.0 : count / maxCount;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 7),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 15,
+                        backgroundColor: AppTheme.violet.withValues(
+                          alpha: 0.12,
+                        ),
+                        child: Text(
+                          '${entry.key + 1}',
+                          style: const TextStyle(
+                            color: AppTheme.violet,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 5),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(999),
+                              child: TweenAnimationBuilder<double>(
+                                tween: Tween<double>(begin: 0, end: fraction),
+                                duration: const Duration(milliseconds: 700),
+                                curve: Curves.easeOutCubic,
+                                builder: (context, value, _) =>
+                                    LinearProgressIndicator(
+                                      value: value,
+                                      minHeight: 6,
+                                      backgroundColor: const Color(0xFFEDEAF5),
+                                      valueColor:
+                                          const AlwaysStoppedAnimation<Color>(
+                                            AppTheme.teal,
+                                          ),
+                                    ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        '$count times',
+                        style: const TextStyle(
+                          color: AppTheme.inkSoft,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+          ],
+        ),
+      ),
+    ).animate().fadeIn(delay: 240.ms).slideY(begin: 0.1);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -560,6 +697,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     _topHabitsCard(),
                   ],
                 ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact inline empty state shown inside a chart card when the user
+/// has habits but no completions yet — a chart with all-zero bars reads
+/// as broken, a short line explains what to do.
+class _ChartEmptyState extends StatelessWidget {
+  const _ChartEmptyState({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
+      decoration: BoxDecoration(
+        color: AppTheme.background,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.insights_outlined, color: AppTheme.violet, size: 26),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                color: AppTheme.inkSoft,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
               ),
             ),
           ),

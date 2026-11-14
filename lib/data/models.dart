@@ -223,3 +223,26 @@ class LeaderboardEntry {
   final Profile profile;
   final int rank;
 }
+
+/// One feedback message a user sent from Profile → Support.
+/// Stored in the `feedback` table (see APPWRITE.md).
+class FeedbackEntry {
+  const FeedbackEntry({
+    required this.id,
+    required this.userId,
+    required this.text,
+    this.createdAt,
+  });
+
+  factory FeedbackEntry.fromJson(Map<String, dynamic> json) => FeedbackEntry(
+    id: json['id'] as String,
+    userId: json['userId'] as String? ?? '',
+    text: json['text'] as String? ?? '',
+    createdAt: _parseDate(json['createdAt'] ?? json[r'$createdAt']),
+  );
+
+  final String id;
+  final String userId;
+  final String text;
+  final DateTime? createdAt;
+}
