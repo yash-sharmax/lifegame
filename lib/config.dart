@@ -1,37 +1,47 @@
-/// App configuration: Firebase project wiring + public URLs.
+/// App configuration: Appwrite project wiring + public URLs.
 ///
-/// The Firebase web config lives in [DefaultFirebaseOptions] and is passed
-/// at build time with `--dart-define FIREBASE_*=...` (see that file).
-/// Until it is provided, the app runs in "unconfigured" mode: it renders
-/// the login screen and explains that setup is still pending.
+/// The Appwrite project ID is passed at build time with
+/// `--dart-define APPWRITE_PROJECT_ID=...` (database ID defaults to
+/// 'lifegame' and can be overridden with APPWRITE_DATABASE_ID).
+/// Until a real project ID is provided, the app runs in "unconfigured"
+/// mode: it renders the login screen and explains that setup is still
+/// pending.
+///
+/// No secrets live here: the endpoint + project ID are public-by-design
+/// identifiers (they ship inside the web bundle of every Appwrite app).
+/// The API key is used ONLY by the setup script (see APPWRITE.md and
+/// scripts/setup_appwrite.mjs) — never in the app, never in the repo.
 library;
 
-import 'firebase_options.dart';
-
 class AppConfig {
-  static bool get isConfigured => DefaultFirebaseOptions.isConfigured;
+  /// Appwrite Cloud endpoint.
+  static const String endpoint = 'https://cloud.appwrite.io/v1';
 
-  /// reCAPTCHA v3 site key for Firebase App Check (web).
-  /// Empty until the key is created in Google Cloud / reCAPTCHA admin and
-  /// passed with `--dart-define FIREBASE_RECAPTCHA_SITE_KEY=...`.
-  /// App Check is switched on only when this is non-empty; enforcement
-  /// must also be turned on in the Firebase console (see FIREBASE.md).
-  static const recaptchaSiteKey = String.fromEnvironment(
-    'FIREBASE_RECAPTCHA_SITE_KEY',
-    defaultValue: '',
+  static const String projectId = String.fromEnvironment(
+    'APPWRITE_PROJECT_ID',
+    defaultValue: 'placeholder-project-id',
   );
 
-  static bool get appCheckConfigured => recaptchaSiteKey.isNotEmpty;
+  static const String databaseId = String.fromEnvironment(
+    'APPWRITE_DATABASE_ID',
+    defaultValue: 'lifegame',
+  );
 
-  /// Where Firebase password-reset emails must land back in the app.
-  /// Registered as an Authorised domain / redirect in the Firebase console.
+  static bool get isConfigured => !projectId.contains('placeholder');
+
+  /// Where Appwrite password-recovery emails must land back in the app.
+  /// The app's host must be registered as a Web platform in the Appwrite
+  /// console (the setup script does this — see APPWRITE.md).
   static const String resetContinueUrl = 'https://yashx.xyz/lifegame';
+
+  /// Base URL of the app (used as the OAuth2 success/failure redirect).
+  static const String appUrl = 'https://yashx.xyz/lifegame';
 }
 
-/// Thrown whenever a feature needs Firebase and no project is configured.
-class FirebaseNotConfigured implements Exception {
+/// Thrown whenever a feature needs Appwrite and no project is configured.
+class AppwriteNotConfigured implements Exception {
   @override
   String toString() =>
-      'Firebase is not configured yet. Add the FIREBASE_* values with '
-      '--dart-define and rebuild.';
+      'Appwrite is not configured yet. Add the APPWRITE_PROJECT_ID value '
+      'with --dart-define and rebuild.';
 }

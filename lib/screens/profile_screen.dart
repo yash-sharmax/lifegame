@@ -373,7 +373,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ListTile(
                     leading: const Icon(Icons.info_outline),
                     title: const Text('About Life Game'),
-                    subtitle: const Text('Version 2.0 • Flutter • Firebase'),
+                    subtitle: const Text('Version 2.2 • Flutter • Appwrite'),
                   ),
                   const Divider(height: 1),
                   ListTile(

@@ -1,19 +1,21 @@
-/// Data models mirroring the Firestore collections (see FIREBASE.md).
+/// Data models mirroring the Appwrite collections (see APPWRITE.md).
 ///
-/// Field names are camelCase, matching the documents in Firestore.
-/// `createdAt` is stored as a Firestore [Timestamp]; `fromJson` also
-/// accepts ISO strings so tests can pass plain maps.
+/// Field names are camelCase, matching the document attributes.
+/// `createdAt` comes from Appwrite's system `$createdAt` field (an ISO
+/// string); `fromJson` also accepts a plain `createdAt` string so tests
+/// can pass plain maps.
 library;
-
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 DateTime? _parseDate(dynamic value) {
   if (value == null) return null;
-  if (value is Timestamp) return value.toDate();
   if (value is DateTime) return value;
   if (value is String) return DateTime.tryParse(value);
   return null;
 }
+
+/// createdAt from an Appwrite document: system `$createdAt` first.
+DateTime? _createdAt(Map<String, dynamic> json) =>
+    _parseDate(json[r'$createdAt'] ?? json['createdAt']);
 
 class Profile {
   const Profile({
@@ -39,10 +41,11 @@ class Profile {
     currentStreak: (json['currentStreak'] as num?)?.toInt() ?? 0,
     longestStreak: (json['longestStreak'] as num?)?.toInt() ?? 0,
     lastActiveDate: json['lastActiveDate'] as String?,
-    createdAt: _parseDate(json['createdAt']),
+    createdAt: _createdAt(json),
   );
 
   /// The document fields for a brand-new profile (XP starts at 0).
+  /// `createdAt` is Appwrite's system `$createdAt` — never sent by us.
   Map<String, dynamic> toMap() => {
     'username': username,
     'displayName': displayName,
@@ -52,7 +55,6 @@ class Profile {
     'currentStreak': currentStreak,
     'longestStreak': longestStreak,
     'lastActiveDate': lastActiveDate,
-    'createdAt': FieldValue.serverTimestamp(),
   };
 
   final String id;
@@ -122,15 +124,15 @@ class Habit {
     title: json['title'] as String,
     color: (json['color'] as num?)?.toInt() ?? 0xFF7C3AED,
     archived: json['archived'] as bool? ?? false,
-    createdAt: _parseDate(json['createdAt']),
+    createdAt: _createdAt(json),
   );
 
+  /// `createdAt` is Appwrite's system `$createdAt` — never sent by us.
   Map<String, dynamic> toMap(String userId) => {
     'ownerUid': userId,
     'title': title,
     'color': color,
     'archived': archived,
-    'createdAt': FieldValue.serverTimestamp(),
   };
 
   final String id;

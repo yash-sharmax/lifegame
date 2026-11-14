@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
 import '../config.dart';
-import '../data/firebase_service.dart';
 import '../data/repositories.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
@@ -113,7 +112,7 @@ class _AuthScreenState extends State<AuthScreen> {
       }
     } on AuthException catch (e) {
       if (mounted) showError(context, e);
-    } on FirebaseNotConfigured catch (e) {
+    } on AppwriteNotConfigured catch (e) {
       if (mounted) showError(context, e);
     } catch (e) {
       if (mounted) showError(context, e);
@@ -128,7 +127,7 @@ class _AuthScreenState extends State<AuthScreen> {
       await _auth.signInWithGoogle();
     } on AuthException catch (e) {
       if (mounted) showError(context, e);
-    } on FirebaseNotConfigured catch (e) {
+    } on AppwriteNotConfigured catch (e) {
       if (mounted) showError(context, e);
     } catch (e) {
       if (mounted) showError(context, e);
@@ -227,7 +226,7 @@ class _AuthScreenState extends State<AuthScreen> {
                               ),
                               child: const Text(
                                 'Setup in progress — sign-in will work once '
-                                'the Firebase project is connected.',
+                                'the Appwrite project is connected.',
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
@@ -295,9 +294,9 @@ class _AuthScreenState extends State<AuthScreen> {
                                   ),
                                 ),
                               ),
-                              validator: (v) => (v ?? '').length >= 6
+                              validator: (v) => (v ?? '').length >= 8
                                   ? null
-                                  : 'At least 6 characters',
+                                  : 'At least 8 characters',
                             ),
                           if (_mode != AuthMode.forgot) const SizedBox(height: 8),
                           if (_mode == AuthMode.login)
@@ -420,12 +419,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     super.initState();
     // Prefill the display name from the auth account (e.g. the name on
     // the Google account used to sign in).
-    final firebaseUser = FirebaseService.authOrNull?.currentUser;
-    final displayName =
-        widget.authRepo?.currentUser?.displayName ??
-        (firebaseUser == null
-            ? null
-            : AppAuthUser.fromFirebase(firebaseUser).displayName);
+    final displayName = widget.authRepo?.currentUser?.displayName;
     if (displayName != null) {
       _displayName.text = displayName;
     }
@@ -526,9 +520,9 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
 /// Set a new password after clicking a recovery link.
 ///
-/// [resetCode] is the `oobCode` from the Firebase reset link
-/// (?mode=resetPassword&oobCode=...). When it is present, the new password
-/// is set with `confirmPasswordReset`; without it (signed-in user changing
+/// [recoveryUserId] and [recoverySecret] come from the Appwrite reset
+/// link (?userId=...&secret=...). When they are present, the new password
+/// is set with `updateRecovery`; without them (signed-in user changing
 /// their password) `updatePassword` is used instead.
 /// [onResetDone] runs after a successful reset so the auth gate can return
 /// to the login screen.
@@ -536,12 +530,14 @@ class ResetPasswordScreen extends StatefulWidget {
   const ResetPasswordScreen({
     super.key,
     this.authRepo,
-    this.resetCode,
+    this.recoveryUserId,
+    this.recoverySecret,
     this.onResetDone,
   });
 
   final AuthRepository? authRepo;
-  final String? resetCode;
+  final String? recoveryUserId;
+  final String? recoverySecret;
   final VoidCallback? onResetDone;
 
   @override
@@ -566,9 +562,10 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     setState(() => _busy = true);
     try {
       final repo = widget.authRepo ?? AuthRepository();
-      if (widget.resetCode != null) {
+      if (widget.recoveryUserId != null && widget.recoverySecret != null) {
         await repo.confirmPasswordReset(
-          code: widget.resetCode!,
+          userId: widget.recoveryUserId!,
+          secret: widget.recoverySecret!,
           newPassword: _password.text,
         );
       } else {
@@ -609,9 +606,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                 decoration: const InputDecoration(
                   labelText: 'New password',
                 ),
-                validator: (v) => (v ?? '').length >= 6
+                validator: (v) => (v ?? '').length >= 8
                     ? null
-                    : 'At least 6 characters',
+                    : 'At least 8 characters',
               ),
               const SizedBox(height: 14),
               TextFormField(

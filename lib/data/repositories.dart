@@ -1,23 +1,34 @@
-/// All Firebase access lives in this file (plus [FirebaseService]).
+/// All Appwrite access lives in this file (plus [AppwriteService]).
 ///
-/// Screens must never call Firebase directly. Repositories degrade
-/// gracefully when Firebase is unconfigured: every method throws
-/// [FirebaseNotConfigured], which the UI turns into a friendly notice.
+/// Screens must never call Appwrite directly. Repositories degrade
+/// gracefully when Appwrite is unconfigured: every method throws
+/// [AppwriteNotConfigured], which the UI turns into a friendly notice.
 ///
 /// For widget tests, screens accept optional repository instances; tests
 /// pass in-memory fakes that subclass these classes.
+///
+/// NOTE: Appwrite has no multi-document transactions. Writes that the
+/// Firebase version did in one batch (e.g. tick habit + grant bonus +
+/// update profile) are sequential here — a failure midway can leave a
+/// partial state (e.g. the log exists but the bonus was not granted).
+/// The daily-reward document id (`{uid}_{date}`) makes the bonus
+/// idempotent, so retrying a tick can never double-grant it.
+/// See APPWRITE.md ("Security model") for the honest write-up.
 library;
 
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';
+
+import 'package:appwrite/appwrite.dart';
+import 'package:appwrite/enums.dart';
+import 'package:appwrite/models.dart' as models;
 
 import '../config.dart';
 import '../logic/xp.dart';
-import 'firebase_service.dart';
+import 'appwrite_service.dart';
 import 'models.dart';
 
 // ---------------------------------------------------------------------------
-// Small auth types (so screens never import firebase_auth directly)
+// Small auth types (so screens never import appwrite directly)
 // ---------------------------------------------------------------------------
 
 /// Thrown for auth failures with a user-facing message.
@@ -30,28 +41,40 @@ class AuthException implements Exception {
   String toString() => message;
 }
 
-String _friendlyAuthError(FirebaseAuthException e) {
-  return switch (e.code) {
-    'user-not-found' ||
-    'wrong-password' ||
-    'invalid-credential' => 'Wrong email or password. Try again.',
-    'email-already-in-use' =>
-      'An account with this email already exists. Log in instead.',
-    'weak-password' => 'Password is too weak — use at least 6 characters.',
-    'invalid-email' => 'That email address does not look right.',
-    'user-disabled' => 'This account has been disabled.',
-    'too-many-requests' =>
-      'Too many attempts. Wait a bit, then try again.',
-    'network-request-failed' =>
-      'No network connection. Check your internet and try again.',
-    'requires-recent-login' =>
-      'Please log in again, then try this once more.',
-    _ => e.message ?? 'Something went wrong. Please try again.',
-  };
+String _friendlyAuthError(AppwriteException e) {
+  final type = e.type ?? '';
+  final message = e.message ?? '';
+  if (e.code == 401 || type == 'user_invalid_credentials') {
+    return 'Wrong email or password. Try again.';
+  }
+  if (e.code == 409) {
+    if (type.contains('user_already_exists')) {
+      return 'An account with this email already exists. Log in instead.';
+    }
+    return 'That username is already taken. Try another one.';
+  }
+  if (e.code == 400) {
+    if (type.contains('password')) {
+      return 'Password is too weak — use at least 8 characters.';
+    }
+    if (type.contains('email') || type.contains('invalid')) {
+      return 'That email address does not look right.';
+    }
+    if (message.isNotEmpty) return message;
+    return 'Something went wrong. Please try again.';
+  }
+  if (e.code == 429) {
+    return 'Too many attempts. Wait a bit, then try again.';
+  }
+  if (e.code == 0) {
+    return 'No network connection. Check your internet and try again.';
+  }
+  if (message.isNotEmpty) return message;
+  return 'Something went wrong. Please try again.';
 }
 
 AuthException _wrapAuthError(Object e) {
-  if (e is FirebaseAuthException) return AuthException(_friendlyAuthError(e));
+  if (e is AppwriteException) return AuthException(_friendlyAuthError(e));
   if (e is AuthException) return e;
   return AuthException(e.toString());
 }
@@ -65,11 +88,10 @@ class AppAuthUser {
     this.photoURL,
   });
 
-  factory AppAuthUser.fromFirebase(User user) => AppAuthUser(
-    uid: user.uid,
+  factory AppAuthUser.fromAppwrite(models.User user) => AppAuthUser(
+    uid: user.$id,
     email: user.email,
-    displayName: user.displayName,
-    photoURL: user.photoURL,
+    displayName: user.name.isEmpty ? null : user.name,
   );
 
   final String uid;
@@ -91,23 +113,50 @@ class AuthChange {
 // Helpers
 // ---------------------------------------------------------------------------
 
-FirebaseAuth _requireAuth(FirebaseAuth? injected) {
-  final auth = injected ?? FirebaseService.authOrNull;
-  if (auth == null) throw FirebaseNotConfigured();
-  return auth;
+Account _requireAccount(Account? injected) {
+  final a = injected ?? AppwriteService.accountOrNull;
+  if (a == null) throw AppwriteNotConfigured();
+  return a;
 }
 
-FirebaseFirestore _requireDb(FirebaseFirestore? injected) {
-  final db = injected ?? FirebaseService.dbOrNull;
-  if (db == null) throw FirebaseNotConfigured();
-  return db;
+TablesDB _requireDb(TablesDB? injected) {
+  final d = injected ?? AppwriteService.dbOrNull;
+  if (d == null) throw AppwriteNotConfigured();
+  return d;
 }
 
-String _requireUserId(FirebaseAuth auth) {
-  final user = auth.currentUser;
-  if (user == null) throw const AuthException('Not signed in.');
-  return user.uid;
-}
+String get _dbId => AppConfig.databaseId;
+
+
+/// Merge an Appwrite document into the shape our models expect.
+Map<String, dynamic> _docJson(models.Row doc) => {
+  'id': doc.$id,
+  r'$createdAt': doc.$createdAt,
+  ...doc.data,
+};
+
+List<String> _ownerPerms(String uid) => [
+  Permission.read(Role.user(uid)),
+  Permission.update(Role.user(uid)),
+  Permission.delete(Role.user(uid)),
+];
+
+/// Profile documents: anyone signed in may read them (leaderboard and
+/// search need this); only the owner may change them.
+List<String> _profilePerms(String uid) => [
+  Permission.read(Role.users()),
+  Permission.update(Role.user(uid)),
+  Permission.delete(Role.user(uid)),
+];
+
+/// Username reservation documents: readable by any signed-in user
+/// (uniqueness checks), changeable only by the owner.
+List<String> _usernamePerms(String uid) => [
+  Permission.read(Role.users()),
+  Permission.create(Role.user(uid)),
+  Permission.update(Role.user(uid)),
+  Permission.delete(Role.user(uid)),
+];
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -116,23 +165,68 @@ String _requireUserId(FirebaseAuth auth) {
 class AuthRepository {
   AuthRepository({this._auth, this._db});
 
-  final FirebaseAuth? _auth;
-  final FirebaseFirestore? _db;
+  final Account? _auth;
+  final TablesDB? _db;
 
-  FirebaseAuth get _a => _requireAuth(_auth);
-  FirebaseFirestore get _d => _requireDb(_db);
+  Account get _a => _requireAccount(_auth);
+  TablesDB get _d => _requireDb(_db);
 
-  AppAuthUser? get currentUser {
-    final user = _auth?.currentUser ?? FirebaseService.authOrNull?.currentUser;
-    return user == null ? null : AppAuthUser.fromFirebase(user);
+  // Session state is static: screens create fresh repository instances,
+  // but the signed-in user is one per app run.
+  static AppAuthUser? _cachedUser;
+  static bool _sessionLoaded = false;
+  static final _changes = StreamController<AuthChange>.broadcast();
+
+  /// The signed-in user if the session was already loaded, else null.
+  /// Use [currentUserAsync] when the session may not be loaded yet.
+  static AppAuthUser? get cachedUser => _cachedUser;
+
+  AppAuthUser? get currentUser => _cachedUser;
+
+  /// Loads the session once (from the stored Appwrite session cookie).
+  /// Safe to call repeatedly; later calls are no-ops until sign-out.
+  Future<void> ensureSession() async {
+    if (_sessionLoaded) return;
+    _sessionLoaded = true;
+    try {
+      final user = await _a.get();
+      _cachedUser = AppAuthUser.fromAppwrite(user);
+    } on AppwriteException catch (e) {
+      if (e.code == 401) {
+        _cachedUser = null;
+        return;
+      }
+      // Transient error (e.g. network): let a later call retry.
+      _sessionLoaded = false;
+      _cachedUser = null;
+    } catch (_) {
+      _sessionLoaded = false;
+      _cachedUser = null;
+    }
   }
 
-  Stream<AuthChange> get onAuthStateChange {
-    final auth = _a;
-    return auth.authStateChanges().map(
-      (user) => AuthChange(
+  Future<AppAuthUser?> currentUserAsync() async {
+    await ensureSession();
+    return _cachedUser;
+  }
+
+  /// Emits the current session state first, then live sign-in/out events.
+  Stream<AuthChange> get onAuthStateChange async* {
+    await ensureSession();
+    yield AuthChange(
+      event: _cachedUser == null ? AuthEvent.signedOut : AuthEvent.signedIn,
+      user: _cachedUser,
+    );
+    yield* _changes.stream;
+  }
+
+  void _setUser(AppAuthUser? user) {
+    _cachedUser = user;
+    _sessionLoaded = true;
+    _changes.add(
+      AuthChange(
         event: user == null ? AuthEvent.signedOut : AuthEvent.signedIn,
-        user: user == null ? null : AppAuthUser.fromFirebase(user),
+        user: user,
       ),
     );
   }
@@ -142,16 +236,22 @@ class AuthRepository {
     required String password,
   }) async {
     try {
-      await _a.signInWithEmailAndPassword(email: email, password: password);
+      await _a.createEmailPasswordSession(email: email, password: password);
+      final user = await _a.get();
+      _setUser(AppAuthUser.fromAppwrite(user));
     } catch (e) {
       throw _wrapAuthError(e);
     }
   }
 
   /// Creates the auth account AND the profile + username documents.
-  /// Returns true when the user is signed in right away (Firebase signs
+  /// Returns true when the user is signed in right away (Appwrite signs
   /// in immediately after email+password signup; email verification is
   /// not enforced).
+  ///
+  /// If the username document is taken in a race, the auth account
+  /// already exists — the user just lands on the one-time username
+  /// setup screen on next login (see [ProfileRepository.createProfile]).
   Future<bool> signUp({
     required String email,
     required String password,
@@ -162,27 +262,46 @@ class AuthRepository {
     final db = _d;
     final lower = username.toLowerCase();
     try {
-      final cred = await auth.createUserWithEmailAndPassword(
+      final name = displayName.isEmpty ? lower : displayName;
+      final user = await auth.create(
+        userId: ID.unique(),
         email: email,
         password: password,
+        name: name,
       );
-      final user = cred.user;
-      if (user == null) return false;
-      final name = displayName.isEmpty ? lower : displayName;
-      await user.updateDisplayName(name);
+      await auth.createEmailPasswordSession(email: email, password: password);
+      _setUser(AppAuthUser.fromAppwrite(user));
       final profile = Profile(
-        id: user.uid,
+        id: user.$id,
         username: lower,
         displayName: name,
       );
-      final batch = db.batch();
-      batch.set(db.collection('users').doc(user.uid), profile.toMap());
-      batch.set(db.collection('usernames').doc(lower), {
-        'username': lower,
-        'ownerUid': user.uid,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      await batch.commit();
+      await db.createRow(
+        databaseId: _dbId,
+        tableId: 'users',
+        rowId: user.$id,
+        data: profile.toMap(),
+        permissions: _profilePerms(user.$id),
+      );
+      try {
+        await db.createRow(
+          databaseId: _dbId,
+          tableId: 'usernames',
+          rowId: lower,
+          data: {
+            'username': lower,
+            'ownerUid': user.$id,
+          },
+          permissions: _usernamePerms(user.$id),
+        );
+      } on AppwriteException catch (e) {
+        if (e.code == 409) {
+          throw const AuthException(
+            'That username is already taken. Try another one.',
+          );
+        }
+        rethrow;
+      }
       return true;
     } catch (e) {
       throw _wrapAuthError(e);
@@ -191,7 +310,11 @@ class AuthRepository {
 
   Future<void> signInWithGoogle() async {
     try {
-      await _a.signInWithProvider(GoogleAuthProvider());
+      await _a.createOAuth2Session(
+        provider: OAuthProvider.google,
+        success: AppConfig.appUrl,
+        failure: AppConfig.appUrl,
+      );
     } catch (e) {
       throw _wrapAuthError(e);
     }
@@ -199,33 +322,28 @@ class AuthRepository {
 
   Future<void> sendPasswordReset(String email) async {
     try {
-      await _a.sendPasswordResetEmail(
+      await _a.createRecovery(
         email: email,
-        actionCodeSettings: ActionCodeSettings(
-          url: AppConfig.resetContinueUrl,
-          handleCodeInApp: true,
-        ),
+        url: AppConfig.resetContinueUrl,
       );
     } catch (e) {
       throw _wrapAuthError(e);
     }
   }
 
-  /// The `oobCode` from the reset link (?mode=resetPassword&oobCode=...).
-  Future<String> verifyResetCode(String code) async {
-    try {
-      return await _a.verifyPasswordResetCode(code);
-    } catch (e) {
-      throw _wrapAuthError(e);
-    }
-  }
-
+  /// The `userId` + `secret` from the recovery link
+  /// (`?userId=...&secret=...` on the reset continue URL).
   Future<void> confirmPasswordReset({
-    required String code,
+    required String userId,
+    required String secret,
     required String newPassword,
   }) async {
     try {
-      await _a.confirmPasswordReset(code: code, newPassword: newPassword);
+      await _a.updateRecovery(
+        userId: userId,
+        secret: secret,
+        password: newPassword,
+      );
     } catch (e) {
       throw _wrapAuthError(e);
     }
@@ -233,16 +351,23 @@ class AuthRepository {
 
   Future<void> updatePassword(String newPassword) async {
     try {
-      final user = _a.currentUser;
-      if (user == null) throw const AuthException('Not signed in.');
-      await user.updatePassword(newPassword);
+      await _a.updatePassword(password: newPassword);
     } catch (e) {
       throw _wrapAuthError(e);
     }
   }
 
   Future<void> signOut() async {
-    await _a.signOut();
+    try {
+      await _a.deleteSession(sessionId: 'current');
+    } catch (_) {
+      // Even if the server-side logout fails, drop the local session.
+    }
+    _cachedUser = null;
+    _sessionLoaded = false;
+    _changes.add(
+      const AuthChange(event: AuthEvent.signedOut),
+    );
   }
 }
 
@@ -251,38 +376,56 @@ class AuthRepository {
 // ---------------------------------------------------------------------------
 
 class ProfileRepository {
-  ProfileRepository({this._auth, this._db});
+  ProfileRepository({this._db});
 
-  final FirebaseAuth? _auth;
-  final FirebaseFirestore? _db;
+  final TablesDB? _db;
 
-  FirebaseAuth get _a => _requireAuth(_auth);
-  FirebaseFirestore get _d => _requireDb(_db);
+  TablesDB get _d => _requireDb(_db);
+
+  String _requireUserId() {
+    final user = AuthRepository.cachedUser;
+    if (user == null) throw const AuthException('Not signed in.');
+    return user.uid;
+  }
 
   Future<Profile?> fetchMyProfile() async {
-    final userId = _requireUserId(_a);
+    final userId = _requireUserId();
     return fetchProfile(userId);
   }
 
   Future<Profile?> fetchProfile(String userId) async {
-    final doc = await _d.collection('users').doc(userId).get();
-    if (!doc.exists || doc.data() == null) return null;
-    return Profile.fromJson({'id': doc.id, ...doc.data()!});
+    try {
+      final doc = await _d.getRow(
+        databaseId: _dbId,
+        tableId: 'users',
+        rowId: userId,
+      );
+      return Profile.fromJson(_docJson(doc));
+    } on AppwriteException catch (e) {
+      if (e.code == 404) return null;
+      rethrow;
+    }
   }
 
   Future<bool> isUsernameTaken(String username) async {
-    final doc = await _d
-        .collection('usernames')
-        .doc(username.toLowerCase())
-        .get();
-    return doc.exists;
+    try {
+      await _d.getRow(
+        databaseId: _dbId,
+        tableId: 'usernames',
+        rowId: username.toLowerCase(),
+      );
+      return true;
+    } on AppwriteException catch (e) {
+      if (e.code == 404) return false;
+      rethrow;
+    }
   }
 
   Future<Profile> createProfile({
     required String username,
     required String displayName,
   }) async {
-    final userId = _requireUserId(_a);
+    final userId = _requireUserId();
     final lower = username.toLowerCase();
     final name = displayName.isEmpty ? lower : displayName;
     final profile = Profile(
@@ -290,14 +433,41 @@ class ProfileRepository {
       username: lower,
       displayName: name,
     );
-    final batch = _d.batch();
-    batch.set(_d.collection('users').doc(userId), profile.toMap());
-    batch.set(_d.collection('usernames').doc(lower), {
-      'username': lower,
-      'ownerUid': userId,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-    await batch.commit();
+    try {
+      await _d.createRow(
+        databaseId: _dbId,
+        tableId: 'users',
+        rowId: userId,
+        data: profile.toMap(),
+        permissions: _profilePerms(userId),
+      );
+    } on AppwriteException catch (e) {
+      if (e.code == 409) {
+        // Profile already exists (e.g. double-submit): return it.
+        final existing = await fetchProfile(userId);
+        if (existing != null) return existing;
+      }
+      rethrow;
+    }
+    try {
+      await _d.createRow(
+        databaseId: _dbId,
+        tableId: 'usernames',
+        rowId: lower,
+        data: {
+          'username': lower,
+          'ownerUid': userId,
+        },
+        permissions: _usernamePerms(userId),
+      );
+    } on AppwriteException catch (e) {
+      if (e.code == 409) {
+        throw const AuthException(
+          'That username is already taken. Try another one.',
+        );
+      }
+      rethrow;
+    }
     return profile;
   }
 
@@ -305,11 +475,16 @@ class ProfileRepository {
     required String displayName,
     required String bio,
   }) async {
-    final userId = _requireUserId(_a);
-    await _d.collection('users').doc(userId).update({
-      'displayName': displayName,
-      'bio': bio,
-    });
+    final userId = _requireUserId();
+    await _d.updateRow(
+      databaseId: _dbId,
+      tableId: 'users',
+      rowId: userId,
+      data: {
+        'displayName': displayName,
+        'bio': bio,
+      },
+    );
     final updated = await fetchProfile(userId);
     if (updated == null) throw const AuthException('Profile not found.');
     return updated;
@@ -321,27 +496,32 @@ class ProfileRepository {
     required int longestStreak,
     required String? lastActiveDate,
   }) async {
-    final userId = _requireUserId(_a);
+    final userId = _requireUserId();
     final profile = await fetchProfile(userId);
     if (profile == null) return;
-    await _d.collection('users').doc(userId).update({
-      'xp': (profile.xp + xpDelta).clamp(0, 100000000),
-      'currentStreak': currentStreak,
-      'longestStreak': longestStreak,
-      'lastActiveDate': lastActiveDate,
-    });
+    await _d.updateRow(
+      databaseId: _dbId,
+      tableId: 'users',
+      rowId: userId,
+      data: {
+        'xp': (profile.xp + xpDelta).clamp(0, 100000000),
+        'currentStreak': currentStreak,
+        'longestStreak': longestStreak,
+        'lastActiveDate': lastActiveDate,
+      },
+    );
   }
 
   Future<List<LeaderboardEntry>> fetchGlobalLeaderboard({
     int limit = 50,
   }) async {
-    final snap = await _d
-        .collection('users')
-        .orderBy('xp', descending: true)
-        .limit(limit)
-        .get();
-    final profiles = snap.docs
-        .map((doc) => Profile.fromJson({'id': doc.id, ...doc.data()}))
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'users',
+      queries: [Query.orderDesc('xp'), Query.limit(limit)],
+    );
+    final profiles = list.rows
+        .map((doc) => Profile.fromJson(_docJson(doc)))
         .toList();
     return [
       for (var i = 0; i < profiles.length; i++)
@@ -350,26 +530,14 @@ class ProfileRepository {
   }
 
   Future<List<LeaderboardEntry>> fetchFriendsLeaderboard() async {
-    final userId = _requireUserId(_a);
-    final social = SocialRepository(auth: _auth, db: _db);
+    final userId = _requireUserId();
+    final social = SocialRepository(db: _db);
     final following = await social.followingIds();
     final ids = {...following, userId}.toList();
     final profiles = <Profile>[];
-    // whereIn caps at 30 ids — fetch in chunks for big friend lists.
-    for (var start = 0; start < ids.length; start += 30) {
-      final chunk = ids.sublist(
-        start,
-        (start + 30).clamp(0, ids.length),
-      );
-      final snap = await _d
-          .collection('users')
-          .where(FieldPath.documentId, whereIn: chunk)
-          .get();
-      profiles.addAll(
-        snap.docs.map(
-          (doc) => Profile.fromJson({'id': doc.id, ...doc.data()}),
-        ),
-      );
+    for (final id in ids) {
+      final profile = await fetchProfile(id);
+      if (profile != null) profiles.add(profile);
     }
     profiles.sort((a, b) => b.xp.compareTo(a.xp));
     return [
@@ -382,31 +550,33 @@ class ProfileRepository {
   Future<int> fetchGlobalRank() async {
     final me = await fetchMyProfile();
     if (me == null) return 0;
-    final snap = await _d
-        .collection('users')
-        .where('xp', isGreaterThan: me.xp)
-        .count()
-        .get();
-    return (snap.count ?? 0) + 1;
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'users',
+      queries: [Query.greaterThan('xp', me.xp), Query.limit(1)],
+    );
+    return list.total + 1;
   }
 
   Future<List<Profile>> searchProfiles(String query) async {
     final q = query.trim().toLowerCase();
     if (q.isEmpty) return [];
-    // Username prefix search. Firestore has no LIKE/ILIKE, so only
-    // username prefixes match (display names are not searched — see
-    // FIREBASE.md). Usernames are stored lowercase.
-    final end = '$q\uf8ff';
-    final snap = await _d
-        .collection('users')
-        .where('username', isGreaterThanOrEqualTo: q)
-        .where('username', isLessThan: end)
-        .orderBy('username')
-        .limit(20)
-        .get();
-    return snap.docs
-        .map((doc) => Profile.fromJson({'id': doc.id, ...doc.data()}))
-        .toList();
+    // Username prefix search. Appwrite has no LIKE/ILIKE; only username
+    // prefixes match (display names are not searched — see APPWRITE.md).
+    // Usernames are stored lowercase.
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'usernames',
+      queries: [Query.startsWith('username', q), Query.limit(20)],
+    );
+    final profiles = <Profile>[];
+    for (final doc in list.rows) {
+      final ownerUid = doc.data['ownerUid'] as String?;
+      if (ownerUid == null) continue;
+      final profile = await fetchProfile(ownerUid);
+      if (profile != null) profiles.add(profile);
+    }
+    return profiles;
   }
 }
 
@@ -429,24 +599,31 @@ class ToggleResult {
 String _logDocId(String habitId, String date) => '${habitId}_$date';
 
 class HabitRepository {
-  HabitRepository({this._auth, this._db});
+  HabitRepository({this._db});
 
-  final FirebaseAuth? _auth;
-  final FirebaseFirestore? _db;
+  final TablesDB? _db;
 
-  FirebaseAuth get _a => _requireAuth(_auth);
-  FirebaseFirestore get _d => _requireDb(_db);
+  TablesDB get _d => _requireDb(_db);
+
+  String _requireUserId() {
+    final user = AuthRepository.cachedUser;
+    if (user == null) throw const AuthException('Not signed in.');
+    return user.uid;
+  }
 
   Future<List<Habit>> listMyHabits() async {
-    final userId = _requireUserId(_a);
-    final snap = await _d
-        .collection('habits')
-        .where('ownerUid', isEqualTo: userId)
-        .where('archived', isEqualTo: false)
-        .orderBy('createdAt')
-        .get();
-    return snap.docs
-        .map((doc) => Habit.fromJson({'id': doc.id, ...doc.data()}))
+    final userId = _requireUserId();
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'habits',
+      queries: [
+        Query.equal('ownerUid', userId),
+        Query.equal('archived', false),
+        Query.orderAsc(r'$createdAt'),
+      ],
+    );
+    return list.rows
+        .map((doc) => Habit.fromJson(_docJson(doc)))
         .toList();
   }
 
@@ -454,16 +631,20 @@ class HabitRepository {
     required String title,
     required int color,
   }) async {
-    final userId = _requireUserId(_a);
-    final ref = _d.collection('habits').doc();
-    await ref.set({
-      'ownerUid': userId,
-      'title': title,
-      'color': color,
-      'archived': false,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-    return Habit(id: ref.id, userId: userId, title: title, color: color);
+    final userId = _requireUserId();
+    final doc = await _d.createRow(
+      databaseId: _dbId,
+      tableId: 'habits',
+      rowId: ID.unique(),
+      data: {
+        'ownerUid': userId,
+        'title': title,
+        'color': color,
+        'archived': false,
+      },
+      permissions: _ownerPerms(userId),
+    );
+    return Habit(id: doc.$id, userId: userId, title: title, color: color);
   }
 
   Future<void> updateHabit(Habit habit, {String? title, int? color}) async {
@@ -471,66 +652,105 @@ class HabitRepository {
     if (title != null) updates['title'] = title;
     if (color != null) updates['color'] = color;
     if (updates.isEmpty) return;
-    await _d.collection('habits').doc(habit.id).update(updates);
+    await _d.updateRow(
+      databaseId: _dbId,
+      tableId: 'habits',
+      rowId: habit.id,
+      data: updates,
+    );
   }
 
   Future<void> archiveHabit(String habitId) async {
-    await _d.collection('habits').doc(habitId).update({'archived': true});
+    await _d.updateRow(
+      databaseId: _dbId,
+      tableId: 'habits',
+      rowId: habitId,
+      data: {'archived': true},
+    );
+  }
+
+  Future<Map<String, dynamic>?> _getLogOrNull(String logId) async {
+    try {
+      final doc = await _d.getRow(
+        databaseId: _dbId,
+        tableId: 'habit_logs',
+        rowId: logId,
+      );
+      return _docJson(doc);
+    } on AppwriteException catch (e) {
+      if (e.code == 404) return null;
+      rethrow;
+    }
   }
 
   Future<List<HabitLog>> listLogsForDate(String date) async {
-    final userId = _requireUserId(_a);
-    final snap = await _d
-        .collection('habit_logs')
-        .where('ownerUid', isEqualTo: userId)
-        .where('date', isEqualTo: date)
-        .where('completed', isEqualTo: true)
-        .get();
-    return snap.docs
-        .map((doc) => HabitLog.fromJson({'id': doc.id, ...doc.data()}))
+    final userId = _requireUserId();
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'habit_logs',
+      queries: [
+        Query.equal('ownerUid', userId),
+        Query.equal('date', date),
+        Query.equal('completed', true),
+      ],
+    );
+    return list.rows
+        .map((doc) => HabitLog.fromJson(_docJson(doc)))
         .toList();
   }
 
   Future<List<HabitLog>> listLogsInRange(String start, String end) async {
-    final userId = _requireUserId(_a);
-    final snap = await _d
-        .collection('habit_logs')
-        .where('ownerUid', isEqualTo: userId)
-        .where('completed', isEqualTo: true)
-        .where('date', isGreaterThanOrEqualTo: start)
-        .where('date', isLessThanOrEqualTo: end)
-        .orderBy('date')
-        .get();
-    return snap.docs
-        .map((doc) => HabitLog.fromJson({'id': doc.id, ...doc.data()}))
+    final userId = _requireUserId();
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'habit_logs',
+      queries: [
+        Query.equal('ownerUid', userId),
+        Query.equal('completed', true),
+        Query.greaterThanEqual('date', start),
+        Query.lessThanEqual('date', end),
+        Query.orderAsc('date'),
+      ],
+    );
+    return list.rows
+        .map((doc) => HabitLog.fromJson(_docJson(doc)))
         .toList();
   }
 
   /// Distinct dates (newest first) with at least one completed habit.
   Future<List<String>> activeDates({int limit = 370}) async {
-    final userId = _requireUserId(_a);
-    final snap = await _d
-        .collection('habit_logs')
-        .where('ownerUid', isEqualTo: userId)
-        .where('completed', isEqualTo: true)
-        .orderBy('date', descending: true)
-        .limit(limit)
-        .get();
+    final userId = _requireUserId();
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'habit_logs',
+      queries: [
+        Query.equal('ownerUid', userId),
+        Query.equal('completed', true),
+        Query.orderDesc('date'),
+        Query.limit(limit),
+      ],
+    );
     final dates = <String>{};
-    for (final doc in snap.docs) {
-      final date = doc.data()['date'] as String?;
+    for (final doc in list.rows) {
+      final date = doc.data['date'] as String?;
       if (date != null) dates.add(date);
     }
     return dates.toList();
   }
 
   Future<bool> dailyBonusGranted(String date) async {
-    final userId = _requireUserId(_a);
-    final doc = await _d
-        .collection('daily_rewards')
-        .doc('${userId}_$date')
-        .get();
-    return doc.exists;
+    final userId = _requireUserId();
+    try {
+      await _d.getRow(
+        databaseId: _dbId,
+        tableId: 'daily_rewards',
+        rowId: '${userId}_$date',
+      );
+      return true;
+    } on AppwriteException catch (e) {
+      if (e.code == 404) return false;
+      rethrow;
+    }
   }
 
   /// Tick or untick a habit for [date]. Handles XP, streak and the
@@ -540,32 +760,34 @@ class HabitRepository {
     required String date,
     required bool completed,
   }) async {
-    final profiles = ProfileRepository(auth: _auth, db: _db);
+    final profiles = ProfileRepository(db: _db);
     final me = await profiles.fetchMyProfile();
     if (me == null) throw const AuthException('Profile not found.');
-    final userId = _requireUserId(_a);
+    final userId = _requireUserId();
     final today = todayKey();
-    final logRef = _d
-        .collection('habit_logs')
-        .doc(_logDocId(habit.id, date));
+    final logId = _logDocId(habit.id, date);
 
-    final existing = await logRef.get();
+    final existing = await _getLogOrNull(logId);
     final alreadyDone =
-        existing.exists &&
-        (existing.data()?['completed'] as bool? ?? false);
+        existing != null && (existing['completed'] as bool? ?? false);
 
     var xpDelta = 0;
     var bonusGranted = false;
 
     if (completed && !alreadyDone) {
-      await logRef.set({
-        'ownerUid': userId,
-        'habitId': habit.id,
-        'date': date,
-        'completed': true,
-        'xpEarned': xpPerHabit,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      await _d.createRow(
+        databaseId: _dbId,
+        tableId: 'habit_logs',
+        rowId: logId,
+        data: {
+          'ownerUid': userId,
+          'habitId': habit.id,
+          'date': date,
+          'completed': true,
+          'xpEarned': xpPerHabit,
+        },
+        permissions: _ownerPerms(userId),
+      );
       xpDelta += xpPerHabit;
 
       final newStreak = streakAfterTick(
@@ -578,29 +800,43 @@ class HabitRepository {
           : me.longestStreak;
 
       // All of today's habits done? Grant the +50 bonus once per day.
+      // The reward document id ({uid}_{date}) makes it idempotent: a
+      // 409 means it was already granted (e.g. a retried tick).
       final habits = await listMyHabits();
       final todaysLogs = await listLogsForDate(date);
       final allDone = habits.isNotEmpty &&
           todaysLogs.length >= habits.length;
-      final batch = _d.batch();
       if (allDone && date == today && !await dailyBonusGranted(date)) {
-        batch.set(_d.collection('daily_rewards').doc('${userId}_$date'), {
-          'ownerUid': userId,
-          'date': date,
-          'xp': xpDailyCompleteBonus,
-          'kind': 'daily_complete',
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-        xpDelta += xpDailyCompleteBonus;
-        bonusGranted = true;
+        try {
+          await _d.createRow(
+            databaseId: _dbId,
+            tableId: 'daily_rewards',
+            rowId: '${userId}_$date',
+            data: {
+              'ownerUid': userId,
+              'date': date,
+              'xp': xpDailyCompleteBonus,
+              'kind': 'daily_complete',
+            },
+            permissions: _ownerPerms(userId),
+          );
+          xpDelta += xpDailyCompleteBonus;
+          bonusGranted = true;
+        } on AppwriteException catch (e) {
+          if (e.code != 409) rethrow;
+        }
       }
-      batch.update(_d.collection('users').doc(userId), {
-        'xp': (me.xp + xpDelta).clamp(0, 100000000),
-        'currentStreak': newStreak,
-        'longestStreak': longest,
-        'lastActiveDate': date,
-      });
-      await batch.commit();
+      await _d.updateRow(
+        databaseId: _dbId,
+        tableId: 'users',
+        rowId: userId,
+        data: {
+          'xp': (me.xp + xpDelta).clamp(0, 100000000),
+          'currentStreak': newStreak,
+          'longestStreak': longest,
+          'lastActiveDate': date,
+        },
+      );
       return ToggleResult(
         xpDelta: xpDelta,
         bonusGranted: bonusGranted,
@@ -609,7 +845,11 @@ class HabitRepository {
     }
 
     if (!completed && alreadyDone) {
-      await logRef.delete();
+      await _d.deleteRow(
+        databaseId: _dbId,
+        tableId: 'habit_logs',
+        rowId: logId,
+      );
       xpDelta -= xpPerHabit;
       // Recompute the streak from the remaining active dates.
       final dates = await activeDates();
@@ -635,76 +875,114 @@ class HabitRepository {
 // ---------------------------------------------------------------------------
 
 class TaskRepository {
-  TaskRepository({this._auth, this._db});
+  TaskRepository({this._db});
 
-  final FirebaseAuth? _auth;
-  final FirebaseFirestore? _db;
+  final TablesDB? _db;
 
-  FirebaseAuth get _a => _requireAuth(_auth);
-  FirebaseFirestore get _d => _requireDb(_db);
+  TablesDB get _d => _requireDb(_db);
+
+  String _requireUserId() {
+    final user = AuthRepository.cachedUser;
+    if (user == null) throw const AuthException('Not signed in.');
+    return user.uid;
+  }
 
   Future<List<WeeklyTask>> listWeeklyTasks(String weekStart) async {
-    final userId = _requireUserId(_a);
-    final snap = await _d
-        .collection('weekly_tasks')
-        .where('ownerUid', isEqualTo: userId)
-        .where('weekStart', isEqualTo: weekStart)
-        .orderBy('createdAt')
-        .get();
-    return snap.docs
-        .map((doc) => WeeklyTask.fromJson({'id': doc.id, ...doc.data()}))
+    final userId = _requireUserId();
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'weekly_tasks',
+      queries: [
+        Query.equal('ownerUid', userId),
+        Query.equal('weekStart', weekStart),
+        Query.orderAsc(r'$createdAt'),
+      ],
+    );
+    return list.rows
+        .map((doc) => WeeklyTask.fromJson(_docJson(doc)))
         .toList();
   }
 
   Future<void> addWeeklyTask(String title, String weekStart) async {
-    final userId = _requireUserId(_a);
-    await _d.collection('weekly_tasks').add({
-      'ownerUid': userId,
-      'title': title,
-      'weekStart': weekStart,
-      'done': false,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+    final userId = _requireUserId();
+    await _d.createRow(
+      databaseId: _dbId,
+      tableId: 'weekly_tasks',
+      rowId: ID.unique(),
+      data: {
+        'ownerUid': userId,
+        'title': title,
+        'weekStart': weekStart,
+        'done': false,
+      },
+      permissions: _ownerPerms(userId),
+    );
   }
 
   Future<void> toggleWeeklyTask(String id, bool done) async {
-    await _d.collection('weekly_tasks').doc(id).update({'done': done});
+    await _d.updateRow(
+      databaseId: _dbId,
+      tableId: 'weekly_tasks',
+      rowId: id,
+      data: {'done': done},
+    );
   }
 
   Future<void> deleteWeeklyTask(String id) async {
-    await _d.collection('weekly_tasks').doc(id).delete();
+    await _d.deleteRow(
+      databaseId: _dbId,
+      tableId: 'weekly_tasks',
+      rowId: id,
+    );
   }
 
   Future<List<MonthlyTask>> listMonthlyTasks(String month) async {
-    final userId = _requireUserId(_a);
-    final snap = await _d
-        .collection('monthly_tasks')
-        .where('ownerUid', isEqualTo: userId)
-        .where('month', isEqualTo: month)
-        .orderBy('createdAt')
-        .get();
-    return snap.docs
-        .map((doc) => MonthlyTask.fromJson({'id': doc.id, ...doc.data()}))
+    final userId = _requireUserId();
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'monthly_tasks',
+      queries: [
+        Query.equal('ownerUid', userId),
+        Query.equal('month', month),
+        Query.orderAsc(r'$createdAt'),
+      ],
+    );
+    return list.rows
+        .map((doc) => MonthlyTask.fromJson(_docJson(doc)))
         .toList();
   }
 
   Future<void> addMonthlyTask(String title, String month) async {
-    final userId = _requireUserId(_a);
-    await _d.collection('monthly_tasks').add({
-      'ownerUid': userId,
-      'title': title,
-      'month': month,
-      'done': false,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+    final userId = _requireUserId();
+    await _d.createRow(
+      databaseId: _dbId,
+      tableId: 'monthly_tasks',
+      rowId: ID.unique(),
+      data: {
+        'ownerUid': userId,
+        'title': title,
+        'month': month,
+        'done': false,
+      },
+      permissions: _ownerPerms(userId),
+    );
   }
 
   Future<void> toggleMonthlyTask(String id, bool done) async {
-    await _d.collection('monthly_tasks').doc(id).update({'done': done});
+    await _d.updateRow(
+      databaseId: _dbId,
+      tableId: 'monthly_tasks',
+      rowId: id,
+      data: {'done': done},
+    );
   }
 
   Future<void> deleteMonthlyTask(String id) async {
-    await _d.collection('monthly_tasks').doc(id).delete();
+    await _d.deleteRow(
+      databaseId: _dbId,
+      tableId: 'monthly_tasks',
+      rowId: id,
+    );
   }
 }
 
@@ -713,72 +991,90 @@ class TaskRepository {
 // ---------------------------------------------------------------------------
 
 class SocialRepository {
-  SocialRepository({this._auth, this._db});
+  SocialRepository({this._db});
 
-  final FirebaseAuth? _auth;
-  final FirebaseFirestore? _db;
+  final TablesDB? _db;
 
-  FirebaseAuth get _a => _requireAuth(_auth);
-  FirebaseFirestore get _d => _requireDb(_db);
+  TablesDB get _d => _requireDb(_db);
+
+  String _requireUserId() {
+    final user = AuthRepository.cachedUser;
+    if (user == null) throw const AuthException('Not signed in.');
+    return user.uid;
+  }
 
   String _followDocId(String followerId, String followingId) =>
       '${followerId}_$followingId';
 
   Future<void> follow(String followingId) async {
-    final userId = _requireUserId(_a);
-    await _d
-        .collection('follows')
-        .doc(_followDocId(userId, followingId))
-        .set({
-          'followerUid': userId,
-          'followingUid': followingId,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+    final userId = _requireUserId();
+    await _d.createRow(
+      databaseId: _dbId,
+      tableId: 'follows',
+      rowId: _followDocId(userId, followingId),
+      data: {
+        'followerUid': userId,
+        'followingUid': followingId,
+      },
+      permissions: [
+        Permission.read(Role.users()),
+        Permission.update(Role.user(userId)),
+        Permission.delete(Role.user(userId)),
+      ],
+    );
   }
 
   Future<void> unfollow(String followingId) async {
-    final userId = _requireUserId(_a);
-    await _d
-        .collection('follows')
-        .doc(_followDocId(userId, followingId))
-        .delete();
+    final userId = _requireUserId();
+    await _d.deleteRow(
+      databaseId: _dbId,
+      tableId: 'follows',
+      rowId: _followDocId(userId, followingId),
+    );
   }
 
   Future<bool> isFollowing(String followingId) async {
-    final userId = _requireUserId(_a);
-    final doc = await _d
-        .collection('follows')
-        .doc(_followDocId(userId, followingId))
-        .get();
-    return doc.exists;
+    final userId = _requireUserId();
+    try {
+      await _d.getRow(
+        databaseId: _dbId,
+        tableId: 'follows',
+        rowId: _followDocId(userId, followingId),
+      );
+      return true;
+    } on AppwriteException catch (e) {
+      if (e.code == 404) return false;
+      rethrow;
+    }
   }
 
   Future<List<String>> followingIds() async {
-    final userId = _requireUserId(_a);
-    final snap = await _d
-        .collection('follows')
-        .where('followerUid', isEqualTo: userId)
-        .get();
-    return snap.docs
-        .map((doc) => doc.data()['followingUid'] as String)
+    final userId = _requireUserId();
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'follows',
+      queries: [Query.equal('followerUid', userId)],
+    );
+    return list.rows
+        .map((doc) => doc.data['followingUid'] as String)
         .toList();
   }
 
   Future<int> followingCount(String userId) async {
-    final snap = await _d
-        .collection('follows')
-        .where('followerUid', isEqualTo: userId)
-        .count()
-        .get();
-    return snap.count ?? 0;
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'follows',
+      queries: [Query.equal('followerUid', userId), Query.limit(1)],
+    );
+    return list.total;
   }
 
   Future<int> followersCount(String userId) async {
-    final snap = await _d
-        .collection('follows')
-        .where('followingUid', isEqualTo: userId)
-        .count()
-        .get();
-    return snap.count ?? 0;
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'follows',
+      queries: [Query.equal('followingUid', userId), Query.limit(1)],
+    );
+    return list.total;
   }
 }

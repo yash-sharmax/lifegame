@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'config.dart';
-import 'data/firebase_service.dart';
+import 'data/appwrite_service.dart';
 import 'data/repositories.dart';
 import 'screens/auth_screen.dart';
 import 'screens/dashboard_screen.dart';
@@ -15,7 +15,7 @@ import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await FirebaseService.init();
+  AppwriteService.init();
   runApp(const LifeGameApp());
 }
 
@@ -34,9 +34,9 @@ class LifeGameApp extends StatelessWidget {
 }
 
 /// Decides what the user sees:
-/// - Firebase not configured yet → login screen (with a setup notice).
-/// - Password-reset link opened (?mode=resetPassword&oobCode=...) →
-///   reset-password screen.
+/// - Appwrite not configured yet → login screen (with a setup notice).
+/// - Password-reset link opened (?userId=...&secret=...) → reset-password
+///   screen.
 /// - No session → login / signup / forgot password.
 /// - Session but no profile row → one-time username setup.
 /// - Session + profile → the main app shell.
@@ -52,18 +52,21 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State<AuthGate> {
   StreamSubscription<AuthChange>? _authSub;
-  String? _resetCode;
+  String? _recoveryUserId;
+  String? _recoverySecret;
 
   @override
   void initState() {
     super.initState();
-    // Firebase password-reset links land on the app URL with
-    // ?mode=resetPassword&oobCode=<code>. Detect it via Uri.base.
+    // Appwrite password-reset links land on the app URL with
+    // ?userId=<id>&secret=<secret>. Detect it via Uri.base.
     try {
       final params = Uri.base.queryParameters;
-      if (params['mode'] == 'resetPassword' &&
-          (params['oobCode'] ?? '').isNotEmpty) {
-        _resetCode = params['oobCode'];
+      final userId = params['userId'];
+      final secret = params['secret'];
+      if ((userId ?? '').isNotEmpty && (secret ?? '').isNotEmpty) {
+        _recoveryUserId = userId;
+        _recoverySecret = secret;
       }
     } catch (_) {
       // Uri.base is unavailable in some environments — ignore.
@@ -72,7 +75,10 @@ class _AuthGateState extends State<AuthGate> {
       final repo = widget.authRepo ?? AuthRepository();
       _authSub = repo.onAuthStateChange.listen((change) {
         if (change.event == AuthEvent.signedOut) {
-          setState(() => _resetCode = null);
+          setState(() {
+            _recoveryUserId = null;
+            _recoverySecret = null;
+          });
         }
       });
     }
@@ -86,11 +92,15 @@ class _AuthGateState extends State<AuthGate> {
 
   @override
   Widget build(BuildContext context) {
-    if (_resetCode != null) {
+    if (_recoveryUserId != null && _recoverySecret != null) {
       return ResetPasswordScreen(
         authRepo: widget.authRepo,
-        resetCode: _resetCode,
-        onResetDone: () => setState(() => _resetCode = null),
+        recoveryUserId: _recoveryUserId,
+        recoverySecret: _recoverySecret,
+        onResetDone: () => setState(() {
+          _recoveryUserId = null;
+          _recoverySecret = null;
+        }),
       );
     }
     if (!AppConfig.isConfigured) {
