@@ -28267,10 +28267,10 @@ return new A.dO(J.ay(a))},
 aFs(a){var s=a.d
 if(s.length===0)s=null
 return new A.a4z(a.a,s)},
-n3(a){var s=!B.c.p("placeholder-project-id","placeholder")?$.aK4:null
+n3(a){var s=!B.c.p("6af869f7001a2600151f","placeholder")?$.aK4:null
 if(s==null)throw A.i(new A.jh())
 return s},
-cf(a){var s=!B.c.p("placeholder-project-id","placeholder")?$.LV:null
+cf(a){var s=!B.c.p("6af869f7001a2600151f","placeholder")?$.LV:null
 if(s==null)throw A.i(new A.jh())
 return s},
 lj(a){var s=A.p(t.N,t.z)
@@ -29949,7 +29949,7 @@ return q}catch(p){q=A.a1(p)
 if(q instanceof A.wJ){s=q
 throw A.i(A.b_x("Invalid "+a+": "+s.a,s.b,s.gyz()))}else if(t.bE.b(q)){r=q
 throw A.i(A.cB("Invalid "+a+' "'+b+'": '+r.gxh(),r.gyz(),r.gcA()))}else throw p}},
-aV1(){var s,r,q="placeholder-project-id",p="https://cloud.appwrite.io/v1",o="https://",n="http://",m="https://tor.cloud.appwrite.io/v1"
+aV1(){var s,r,q="6af869f7001a2600151f",p="https://cloud.appwrite.io/v1",o="https://",n="http://",m="https://tor.cloud.appwrite.io/v1"
 if(B.c.p(q,"placeholder"))return
 if($.aK5!=null)return
 s=new A.a6n(p)
@@ -95054,7 +95054,7 @@ return A.l(new A.a4e(null).KF(),$async$wa)
 case 2:q=4
 n=t.N
 s=7
-return A.l(A.n3(null).a.$3$headers$path(B.lT,A.ab(["X-Appwrite-Project","placeholder-project-id","accept","application/json"],n,n),"/account"),$async$wa)
+return A.l(A.n3(null).a.$3$headers$path(B.lT,A.ab(["X-Appwrite-Project","6af869f7001a2600151f","accept","application/json"],n,n),"/account"),$async$wa)
 case 7:q=1
 s=6
 break
@@ -95375,7 +95375,7 @@ var $async$zM=A.w(function(b,c){if(b===1)return A.x(c,r)
 for(;;)switch(s){case 0:k=p.dN()
 j=A.b([],t.pT)
 o=t.s,n=0
-case 3:m=!B.c.p("placeholder-project-id","placeholder")?$.LV:null
+case 3:m=!B.c.p("6af869f7001a2600151f","placeholder")?$.LV:null
 if(m==null)A.a3(new A.jh())
 s=5
 return A.l(m.fD("lifegame",A.b([B.C.bI(new A.bT("equal","ownerUid",k).b9(),null),B.C.bI(new A.bT("equal","habitId",a).b9(),null),B.C.bI(new A.bT("limit",null,100).b9(),null),B.C.bI(new A.bT("offset",null,n).b9(),null)],o),"habit_logs"),$async$zM)
@@ -95525,7 +95525,7 @@ e=f.dX(g,new A.abB())
 f=f.ga9(g)
 case 3:if(!f.u()){s=4
 break}p=f.gN()
-o=!B.c.p("placeholder-project-id","placeholder")?$.LV:null
+o=!B.c.p("6af869f7001a2600151f","placeholder")?$.LV:null
 if(o==null)A.a3(new A.jh())
 s=5
 return A.l(o.mf("lifegame",p.a,"habit_logs"),$async$$0)
@@ -95977,7 +95977,7 @@ jY(a,b,c){return this.acn(a,b,c)},
 acn(a,b,c){var s=0,r=A.A(t.H),q,p=this,o,n,m,l,k,j
 var $async$jY=A.w(function(d,e){if(d===1)return A.x(e,r)
 for(;;)switch(s){case 0:o=t.s,n=p.a
-case 3:m=!B.c.p("placeholder-project-id","placeholder")?$.LV:null
+case 3:m=!B.c.p("6af869f7001a2600151f","placeholder")?$.LV:null
 if(m==null)A.a3(new A.jh())
 s=5
 return A.l(m.fD("lifegame",A.b([B.C.bI(new A.bT("equal",b,c).b9(),null),B.C.bI(new A.bT("limit",null,100).b9(),null)],o),a),$async$jY)
@@ -96072,13 +96072,13 @@ p=r
 if(J.bX(p==null?"":p)!==0){p=q
 p=J.bX(p==null?"":p)!==0}else p=!1
 if(p){n.f=r
-n.r=q}}catch(o){}if(!B.c.p("placeholder-project-id","placeholder"))n.d=n.gTW().gtA().ib(new A.aqS(n))},
+n.r=q}}catch(o){}if(!B.c.p("6af869f7001a2600151f","placeholder"))n.d=n.gTW().gtA().ib(new A.aqS(n))},
 l(){var s=this.d
 if(s!=null)s.aP()
 this.aB()},
 F(a){var s,r,q=this,p=null,o=q.f
 if(o!=null&&q.r!=null){q.a.toString
-return new A.DU(p,o,q.r,new A.aqO(q),p)}if(B.c.p("placeholder-project-id","placeholder")){q.a.toString
+return new A.DU(p,o,q.r,new A.aqO(q),p)}if(B.c.p("6af869f7001a2600151f","placeholder")){q.a.toString
 return new A.uu(p,p,p,p)}s=q.e
 if(s==null)return B.B3
 if(s.a===B.ho){r=$.pK
@@ -96283,7 +96283,7 @@ case 5:return A.y(null,r)
 case 1:return A.x(p.at(-1),r)}})
 return A.z($async$zx,r)},
 F(a){var s,r,q,p=this,o=null,n="Create account",m=t.p,l=A.fp(A.dH(A.dD(A.cb(A.b([A.ch(o,B.Km,B.n,o,o,B.Eb,o,64,o,o,o,o,o,64),B.bT,B.a0P],m),B.x,B.fP,B.q,0)),o,o),-0.2),k=A.bF(28),j=A.b([A.aA(p.gao4(),o,o,o,o,A.T(a).ok.e,o,o),B.dO,A.aA(p.ganE(),o,o,o,o,B.cN,o,o)],m)
-if(B.c.p("placeholder-project-id","placeholder"))B.b.L(j,A.b([B.aB,A.ch(o,B.a0V,B.n,o,o,new A.bM(B.ff.eX(0.12),o,o,A.bF(12),o,o,B.U),o,o,o,o,B.l6,o,o,o)],m))
+if(B.c.p("6af869f7001a2600151f","placeholder"))B.b.L(j,A.b([B.aB,A.ch(o,B.a0V,B.n,o,o,new A.bM(B.ff.eX(0.12),o,o,A.bF(12),o,o,B.U),o,o,o,o,B.l6,o,o,o)],m))
 if(p.a.d!=null){s=B.fS.eX(0.08)
 r=A.bF(12)
 q=A.b([A.aA("Could not check your saved session: "+A.n(p.a.d),o,o,o,o,B.Cy,o,o)],m)
