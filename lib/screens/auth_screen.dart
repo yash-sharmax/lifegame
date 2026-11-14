@@ -1,19 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config.dart';
+import '../data/firebase_service.dart';
 import '../data/repositories.dart';
-import '../data/supabase_service.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
 void showError(BuildContext context, Object e) {
-  final message = e is AuthException
-      ? e.message
-      : e is SupabaseNotConfigured
-          ? e.toString()
-          : e.toString();
+  final message = e is AuthException ? e.message : e.toString();
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(content: Text(message), backgroundColor: Colors.red.shade600),
   );
@@ -118,7 +113,7 @@ class _AuthScreenState extends State<AuthScreen> {
       }
     } on AuthException catch (e) {
       if (mounted) showError(context, e);
-    } on SupabaseNotConfigured catch (e) {
+    } on FirebaseNotConfigured catch (e) {
       if (mounted) showError(context, e);
     } catch (e) {
       if (mounted) showError(context, e);
@@ -133,7 +128,7 @@ class _AuthScreenState extends State<AuthScreen> {
       await _auth.signInWithGoogle();
     } on AuthException catch (e) {
       if (mounted) showError(context, e);
-    } on SupabaseNotConfigured catch (e) {
+    } on FirebaseNotConfigured catch (e) {
       if (mounted) showError(context, e);
     } catch (e) {
       if (mounted) showError(context, e);
@@ -232,7 +227,7 @@ class _AuthScreenState extends State<AuthScreen> {
                               ),
                               child: const Text(
                                 'Setup in progress — sign-in will work once '
-                                'the Supabase project is connected.',
+                                'the Firebase project is connected.',
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
@@ -423,17 +418,16 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   @override
   void initState() {
     super.initState();
-    final meta =
-        widget.authRepo?.currentUser?.userMetadata ??
-        SupabaseService.clientOrNull?.auth.currentUser?.userMetadata;
-    if (meta != null) {
-      _displayName.text =
-          (meta['display_name'] as String?) ??
-          (meta['full_name'] as String?) ??
-          '';
-      if (meta['username'] is String) {
-        _username.text = meta['username'] as String;
-      }
+    // Prefill the display name from the auth account (e.g. the name on
+    // the Google account used to sign in).
+    final firebaseUser = FirebaseService.authOrNull?.currentUser;
+    final displayName =
+        widget.authRepo?.currentUser?.displayName ??
+        (firebaseUser == null
+            ? null
+            : AppAuthUser.fromFirebase(firebaseUser).displayName);
+    if (displayName != null) {
+      _displayName.text = displayName;
     }
   }
 
@@ -531,10 +525,24 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 }
 
 /// Set a new password after clicking a recovery link.
+///
+/// [resetCode] is the `oobCode` from the Firebase reset link
+/// (?mode=resetPassword&oobCode=...). When it is present, the new password
+/// is set with `confirmPasswordReset`; without it (signed-in user changing
+/// their password) `updatePassword` is used instead.
+/// [onResetDone] runs after a successful reset so the auth gate can return
+/// to the login screen.
 class ResetPasswordScreen extends StatefulWidget {
-  const ResetPasswordScreen({super.key, this.authRepo});
+  const ResetPasswordScreen({
+    super.key,
+    this.authRepo,
+    this.resetCode,
+    this.onResetDone,
+  });
 
   final AuthRepository? authRepo;
+  final String? resetCode;
+  final VoidCallback? onResetDone;
 
   @override
   State<ResetPasswordScreen> createState() => _ResetPasswordScreenState();
@@ -558,10 +566,18 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     setState(() => _busy = true);
     try {
       final repo = widget.authRepo ?? AuthRepository();
-      await repo.updatePassword(_password.text);
+      if (widget.resetCode != null) {
+        await repo.confirmPasswordReset(
+          code: widget.resetCode!,
+          newPassword: _password.text,
+        );
+      } else {
+        await repo.updatePassword(_password.text);
+        await repo.signOut();
+      }
       if (!mounted) return;
       showInfo(context, 'Password updated. Log in with your new password.');
-      await repo.signOut();
+      widget.onResetDone?.call();
     } on AuthException catch (e) {
       if (mounted) showError(context, e);
     } catch (e) {

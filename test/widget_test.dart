@@ -7,7 +7,7 @@ import 'package:lifegame/screens/home_screen.dart';
 
 void main() {
   testWidgets('unconfigured app shows the login screen', (tester) async {
-    // No SUPABASE_URL dart-define is passed in tests, so the app runs
+    // No FIREBASE_* dart-define is passed in tests, so the app runs
     // unconfigured and the auth gate must show the login screen.
     await tester.pumpWidget(const LifeGameApp());
     await tester.pump();
@@ -55,7 +55,7 @@ void main() {
   });
 }
 
-/// Fake repositories that return empty data without touching Supabase.
+/// Fake repositories that return empty data without touching Firebase.
 class _EmptyHabitRepo extends HabitRepository {
   @override
   Future<List<Habit>> listMyHabits() async => [];

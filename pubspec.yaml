@@ -1,7 +1,7 @@
 name: lifegame
 description: "Life Game — habit tracker. Win your day, level up your life."
 publish_to: 'none'
-version: 2.0.0+1
+version: 2.1.0+2
 
 environment:
   sdk: ^3.13.7
@@ -10,10 +10,13 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  supabase_flutter: ^2.9.0
   flutter_animate: ^4.5.0
   confetti: ^0.7.0
   fl_chart: ^0.69.0
+  firebase_core: ^5.1.0
+  firebase_auth: ^7.0.1
+  cloud_firestore: ^7.1.0
+  firebase_app_check: ^0.5.1
 
 dev_dependencies:
   flutter_test:

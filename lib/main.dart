@@ -1,11 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'config.dart';
+import 'data/firebase_service.dart';
 import 'data/repositories.dart';
-import 'data/supabase_service.dart';
 import 'screens/auth_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/home_screen.dart';
@@ -16,7 +15,7 @@ import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await SupabaseService.init();
+  await FirebaseService.init();
   runApp(const LifeGameApp());
 }
 
@@ -35,12 +34,12 @@ class LifeGameApp extends StatelessWidget {
 }
 
 /// Decides what the user sees:
-/// - Supabase not configured yet → login screen (with a setup notice).
+/// - Firebase not configured yet → login screen (with a setup notice).
+/// - Password-reset link opened (?mode=resetPassword&oobCode=...) →
+///   reset-password screen.
 /// - No session → login / signup / forgot password.
 /// - Session but no profile row → one-time username setup.
 /// - Session + profile → the main app shell.
-/// Also watches for password-recovery events (reset link clicked) and
-/// opens the reset-password screen.
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key, this.authRepo, this.profileRepo});
 
@@ -52,19 +51,28 @@ class AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<AuthGate> {
-  StreamSubscription<AuthState>? _authSub;
-  bool _recoveryMode = false;
+  StreamSubscription<AuthChange>? _authSub;
+  String? _resetCode;
 
   @override
   void initState() {
     super.initState();
+    // Firebase password-reset links land on the app URL with
+    // ?mode=resetPassword&oobCode=<code>. Detect it via Uri.base.
+    try {
+      final params = Uri.base.queryParameters;
+      if (params['mode'] == 'resetPassword' &&
+          (params['oobCode'] ?? '').isNotEmpty) {
+        _resetCode = params['oobCode'];
+      }
+    } catch (_) {
+      // Uri.base is unavailable in some environments — ignore.
+    }
     if (AppConfig.isConfigured) {
       final repo = widget.authRepo ?? AuthRepository();
-      _authSub = repo.onAuthStateChange.listen((state) {
-        if (state.event == AuthChangeEvent.passwordRecovery) {
-          setState(() => _recoveryMode = true);
-        } else if (state.event == AuthChangeEvent.signedOut) {
-          setState(() => _recoveryMode = false);
+      _authSub = repo.onAuthStateChange.listen((change) {
+        if (change.event == AuthEvent.signedOut) {
+          setState(() => _resetCode = null);
         }
       });
     }
@@ -78,19 +86,22 @@ class _AuthGateState extends State<AuthGate> {
 
   @override
   Widget build(BuildContext context) {
-    if (_recoveryMode) {
-      return ResetPasswordScreen(authRepo: widget.authRepo);
+    if (_resetCode != null) {
+      return ResetPasswordScreen(
+        authRepo: widget.authRepo,
+        resetCode: _resetCode,
+        onResetDone: () => setState(() => _resetCode = null),
+      );
     }
     if (!AppConfig.isConfigured) {
       return AuthScreen(authRepo: widget.authRepo);
     }
     final repo = widget.authRepo ?? AuthRepository();
-    return StreamBuilder<AuthState>(
+    return StreamBuilder<AuthChange>(
       stream: repo.onAuthStateChange,
       builder: (context, snapshot) {
-        final session =
-            Supabase.instance.client.auth.currentSession;
-        if (session == null) {
+        final user = repo.currentUser;
+        if (user == null) {
           return AuthScreen(authRepo: widget.authRepo);
         }
         final profileRepo = widget.profileRepo ?? ProfileRepository();

@@ -1,30 +1,112 @@
-/// All Supabase access lives in this file (plus [SupabaseService]).
+/// All Firebase access lives in this file (plus [FirebaseService]).
 ///
-/// Screens must never call Supabase directly. Repositories degrade
-/// gracefully when Supabase is unconfigured: every method throws
-/// [SupabaseNotConfigured], which the UI turns into a friendly notice.
+/// Screens must never call Firebase directly. Repositories degrade
+/// gracefully when Firebase is unconfigured: every method throws
+/// [FirebaseNotConfigured], which the UI turns into a friendly notice.
 ///
 /// For widget tests, screens accept optional repository instances; tests
 /// pass in-memory fakes that subclass these classes.
 library;
 
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../config.dart';
 import '../logic/xp.dart';
+import 'firebase_service.dart';
 import 'models.dart';
-import 'supabase_service.dart';
 
-SupabaseClient _requireClient() {
-  final client = SupabaseService.clientOrNull;
-  if (client == null) throw SupabaseNotConfigured();
-  return client;
+// ---------------------------------------------------------------------------
+// Small auth types (so screens never import firebase_auth directly)
+// ---------------------------------------------------------------------------
+
+/// Thrown for auth failures with a user-facing message.
+class AuthException implements Exception {
+  const AuthException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }
 
-String _requireUserId(SupabaseClient client) {
-  final user = client.auth.currentUser;
+String _friendlyAuthError(FirebaseAuthException e) {
+  return switch (e.code) {
+    'user-not-found' ||
+    'wrong-password' ||
+    'invalid-credential' => 'Wrong email or password. Try again.',
+    'email-already-in-use' =>
+      'An account with this email already exists. Log in instead.',
+    'weak-password' => 'Password is too weak — use at least 6 characters.',
+    'invalid-email' => 'That email address does not look right.',
+    'user-disabled' => 'This account has been disabled.',
+    'too-many-requests' =>
+      'Too many attempts. Wait a bit, then try again.',
+    'network-request-failed' =>
+      'No network connection. Check your internet and try again.',
+    'requires-recent-login' =>
+      'Please log in again, then try this once more.',
+    _ => e.message ?? 'Something went wrong. Please try again.',
+  };
+}
+
+AuthException _wrapAuthError(Object e) {
+  if (e is FirebaseAuthException) return AuthException(_friendlyAuthError(e));
+  if (e is AuthException) return e;
+  return AuthException(e.toString());
+}
+
+/// The signed-in user, as the UI needs it.
+class AppAuthUser {
+  const AppAuthUser({
+    required this.uid,
+    this.email,
+    this.displayName,
+    this.photoURL,
+  });
+
+  factory AppAuthUser.fromFirebase(User user) => AppAuthUser(
+    uid: user.uid,
+    email: user.email,
+    displayName: user.displayName,
+    photoURL: user.photoURL,
+  );
+
+  final String uid;
+  final String? email;
+  final String? displayName;
+  final String? photoURL;
+}
+
+enum AuthEvent { signedIn, signedOut, passwordRecovery, userChanged }
+
+class AuthChange {
+  const AuthChange({required this.event, this.user});
+
+  final AuthEvent event;
+  final AppAuthUser? user;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+FirebaseAuth _requireAuth(FirebaseAuth? injected) {
+  final auth = injected ?? FirebaseService.authOrNull;
+  if (auth == null) throw FirebaseNotConfigured();
+  return auth;
+}
+
+FirebaseFirestore _requireDb(FirebaseFirestore? injected) {
+  final db = injected ?? FirebaseService.dbOrNull;
+  if (db == null) throw FirebaseNotConfigured();
+  return db;
+}
+
+String _requireUserId(FirebaseAuth auth) {
+  final user = auth.currentUser;
   if (user == null) throw const AuthException('Not signed in.');
-  return user.id;
+  return user.uid;
 }
 
 // ---------------------------------------------------------------------------
@@ -32,60 +114,135 @@ String _requireUserId(SupabaseClient client) {
 // ---------------------------------------------------------------------------
 
 class AuthRepository {
-  AuthRepository({this._client});
+  AuthRepository({this._auth, this._db});
 
-  final SupabaseClient? _client;
-  SupabaseClient get _c => _client ?? _requireClient();
+  final FirebaseAuth? _auth;
+  final FirebaseFirestore? _db;
 
-  User? get currentUser => _client == null
-      ? SupabaseService.clientOrNull?.auth.currentUser
-      : _client.auth.currentUser;
+  FirebaseAuth get _a => _requireAuth(_auth);
+  FirebaseFirestore get _d => _requireDb(_db);
 
-  Stream<AuthState> get onAuthStateChange =>
-      _c.auth.onAuthStateChange;
+  AppAuthUser? get currentUser {
+    final user = _auth?.currentUser ?? FirebaseService.authOrNull?.currentUser;
+    return user == null ? null : AppAuthUser.fromFirebase(user);
+  }
+
+  Stream<AuthChange> get onAuthStateChange {
+    final auth = _a;
+    return auth.authStateChanges().map(
+      (user) => AuthChange(
+        event: user == null ? AuthEvent.signedOut : AuthEvent.signedIn,
+        user: user == null ? null : AppAuthUser.fromFirebase(user),
+      ),
+    );
+  }
 
   Future<void> signIn({
     required String email,
     required String password,
   }) async {
-    await _c.auth.signInWithPassword(email: email, password: password);
+    try {
+      await _a.signInWithEmailAndPassword(email: email, password: password);
+    } catch (e) {
+      throw _wrapAuthError(e);
+    }
   }
 
+  /// Creates the auth account AND the profile + username documents.
+  /// Returns true when the user is signed in right away (Firebase signs
+  /// in immediately after email+password signup; email verification is
+  /// not enforced).
   Future<bool> signUp({
     required String email,
     required String password,
     required String username,
     required String displayName,
   }) async {
-    final res = await _c.auth.signUp(
-      email: email,
-      password: password,
-      data: {'username': username, 'display_name': displayName},
-    );
-    // A session right away means email confirmation is off — the user is
-    // in. Otherwise they must confirm via email first.
-    return res.session != null;
+    final auth = _a;
+    final db = _d;
+    final lower = username.toLowerCase();
+    try {
+      final cred = await auth.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      final user = cred.user;
+      if (user == null) return false;
+      final name = displayName.isEmpty ? lower : displayName;
+      await user.updateDisplayName(name);
+      final profile = Profile(
+        id: user.uid,
+        username: lower,
+        displayName: name,
+      );
+      final batch = db.batch();
+      batch.set(db.collection('users').doc(user.uid), profile.toMap());
+      batch.set(db.collection('usernames').doc(lower), {
+        'username': lower,
+        'ownerUid': user.uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      await batch.commit();
+      return true;
+    } catch (e) {
+      throw _wrapAuthError(e);
+    }
   }
 
   Future<void> signInWithGoogle() async {
-    await _c.auth.signInWithOAuth(
-      OAuthProvider.google,
-      redirectTo: AppConfig.googleRedirectUrl.isEmpty
-          ? null
-          : AppConfig.googleRedirectUrl,
-    );
+    try {
+      await _a.signInWithProvider(GoogleAuthProvider());
+    } catch (e) {
+      throw _wrapAuthError(e);
+    }
   }
 
   Future<void> sendPasswordReset(String email) async {
-    await _c.auth.resetPasswordForEmail(email);
+    try {
+      await _a.sendPasswordResetEmail(
+        email: email,
+        actionCodeSettings: ActionCodeSettings(
+          url: AppConfig.resetContinueUrl,
+          handleCodeInApp: true,
+        ),
+      );
+    } catch (e) {
+      throw _wrapAuthError(e);
+    }
+  }
+
+  /// The `oobCode` from the reset link (?mode=resetPassword&oobCode=...).
+  Future<String> verifyResetCode(String code) async {
+    try {
+      return await _a.verifyPasswordResetCode(code);
+    } catch (e) {
+      throw _wrapAuthError(e);
+    }
+  }
+
+  Future<void> confirmPasswordReset({
+    required String code,
+    required String newPassword,
+  }) async {
+    try {
+      await _a.confirmPasswordReset(code: code, newPassword: newPassword);
+    } catch (e) {
+      throw _wrapAuthError(e);
+    }
   }
 
   Future<void> updatePassword(String newPassword) async {
-    await _c.auth.updateUser(UserAttributes(password: newPassword));
+    try {
+      final user = _a.currentUser;
+      if (user == null) throw const AuthException('Not signed in.');
+      await user.updatePassword(newPassword);
+    } catch (e) {
+      throw _wrapAuthError(e);
+    }
   }
 
   Future<void> signOut() async {
-    await _c.auth.signOut();
+    await _a.signOut();
   }
 }
 
@@ -94,64 +251,68 @@ class AuthRepository {
 // ---------------------------------------------------------------------------
 
 class ProfileRepository {
-  ProfileRepository({this._client});
+  ProfileRepository({this._auth, this._db});
 
-  final SupabaseClient? _client;
-  SupabaseClient get _c => _client ?? _requireClient();
+  final FirebaseAuth? _auth;
+  final FirebaseFirestore? _db;
+
+  FirebaseAuth get _a => _requireAuth(_auth);
+  FirebaseFirestore get _d => _requireDb(_db);
 
   Future<Profile?> fetchMyProfile() async {
-    final userId = _requireUserId(_c);
+    final userId = _requireUserId(_a);
     return fetchProfile(userId);
   }
 
   Future<Profile?> fetchProfile(String userId) async {
-    final row = await _c
-        .from('profiles')
-        .select()
-        .eq('id', userId)
-        .maybeSingle();
-    if (row == null) return null;
-    return Profile.fromJson(row);
+    final doc = await _d.collection('users').doc(userId).get();
+    if (!doc.exists || doc.data() == null) return null;
+    return Profile.fromJson({'id': doc.id, ...doc.data()!});
   }
 
   Future<bool> isUsernameTaken(String username) async {
-    final row = await _c
-        .from('profiles')
-        .select('id')
-        .eq('username', username.toLowerCase())
-        .maybeSingle();
-    return row != null;
+    final doc = await _d
+        .collection('usernames')
+        .doc(username.toLowerCase())
+        .get();
+    return doc.exists;
   }
 
   Future<Profile> createProfile({
     required String username,
     required String displayName,
   }) async {
-    final userId = _requireUserId(_c);
-    final row = await _c
-        .from('profiles')
-        .insert({
-          'id': userId,
-          'username': username.toLowerCase(),
-          'display_name': displayName,
-        })
-        .select()
-        .single();
-    return Profile.fromJson(row);
+    final userId = _requireUserId(_a);
+    final lower = username.toLowerCase();
+    final name = displayName.isEmpty ? lower : displayName;
+    final profile = Profile(
+      id: userId,
+      username: lower,
+      displayName: name,
+    );
+    final batch = _d.batch();
+    batch.set(_d.collection('users').doc(userId), profile.toMap());
+    batch.set(_d.collection('usernames').doc(lower), {
+      'username': lower,
+      'ownerUid': userId,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    await batch.commit();
+    return profile;
   }
 
   Future<Profile> updateProfile({
     required String displayName,
     required String bio,
   }) async {
-    final userId = _requireUserId(_c);
-    final row = await _c
-        .from('profiles')
-        .update({'display_name': displayName, 'bio': bio})
-        .eq('id', userId)
-        .select()
-        .single();
-    return Profile.fromJson(row);
+    final userId = _requireUserId(_a);
+    await _d.collection('users').doc(userId).update({
+      'displayName': displayName,
+      'bio': bio,
+    });
+    final updated = await fetchProfile(userId);
+    if (updated == null) throw const AuthException('Profile not found.');
+    return updated;
   }
 
   Future<void> applyXpAndStreak({
@@ -160,30 +321,27 @@ class ProfileRepository {
     required int longestStreak,
     required String? lastActiveDate,
   }) async {
-    final userId = _requireUserId(_c);
+    final userId = _requireUserId(_a);
     final profile = await fetchProfile(userId);
     if (profile == null) return;
-    await _c
-        .from('profiles')
-        .update({
-          'xp': (profile.xp + xpDelta).clamp(0, 100000000),
-          'current_streak': currentStreak,
-          'longest_streak': longestStreak,
-          'last_active_date': lastActiveDate,
-        })
-        .eq('id', userId);
+    await _d.collection('users').doc(userId).update({
+      'xp': (profile.xp + xpDelta).clamp(0, 100000000),
+      'currentStreak': currentStreak,
+      'longestStreak': longestStreak,
+      'lastActiveDate': lastActiveDate,
+    });
   }
 
   Future<List<LeaderboardEntry>> fetchGlobalLeaderboard({
     int limit = 50,
   }) async {
-    final rows = await _c
-        .from('profiles')
-        .select()
-        .order('xp', ascending: false)
-        .limit(limit);
-    final profiles = (rows as List)
-        .map((e) => Profile.fromJson(e as Map<String, dynamic>))
+    final snap = await _d
+        .collection('users')
+        .orderBy('xp', descending: true)
+        .limit(limit)
+        .get();
+    final profiles = snap.docs
+        .map((doc) => Profile.fromJson({'id': doc.id, ...doc.data()}))
         .toList();
     return [
       for (var i = 0; i < profiles.length; i++)
@@ -192,18 +350,28 @@ class ProfileRepository {
   }
 
   Future<List<LeaderboardEntry>> fetchFriendsLeaderboard() async {
-    final userId = _requireUserId(_c);
-    final social = SocialRepository(client: _client);
+    final userId = _requireUserId(_a);
+    final social = SocialRepository(auth: _auth, db: _db);
     final following = await social.followingIds();
     final ids = {...following, userId}.toList();
-    final rows = await _c
-        .from('profiles')
-        .select()
-        .inFilter('id', ids)
-        .order('xp', ascending: false);
-    final profiles = (rows as List)
-        .map((e) => Profile.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final profiles = <Profile>[];
+    // whereIn caps at 30 ids — fetch in chunks for big friend lists.
+    for (var start = 0; start < ids.length; start += 30) {
+      final chunk = ids.sublist(
+        start,
+        (start + 30).clamp(0, ids.length),
+      );
+      final snap = await _d
+          .collection('users')
+          .where(FieldPath.documentId, whereIn: chunk)
+          .get();
+      profiles.addAll(
+        snap.docs.map(
+          (doc) => Profile.fromJson({'id': doc.id, ...doc.data()}),
+        ),
+      );
+    }
+    profiles.sort((a, b) => b.xp.compareTo(a.xp));
     return [
       for (var i = 0; i < profiles.length; i++)
         LeaderboardEntry(profile: profiles[i], rank: i + 1),
@@ -214,27 +382,30 @@ class ProfileRepository {
   Future<int> fetchGlobalRank() async {
     final me = await fetchMyProfile();
     if (me == null) return 0;
-    final res = await _c
-        .from('profiles')
-        .select('id')
-        .gt('xp', me.xp)
-        .count(CountOption.exact);
-    final ahead = res.count;
-    return ahead + 1;
+    final snap = await _d
+        .collection('users')
+        .where('xp', isGreaterThan: me.xp)
+        .count()
+        .get();
+    return (snap.count ?? 0) + 1;
   }
 
   Future<List<Profile>> searchProfiles(String query) async {
-    final q = query.trim();
+    final q = query.trim().toLowerCase();
     if (q.isEmpty) return [];
-    final like = '%$q%';
-    final rows = await _c
-        .from('profiles')
-        .select()
-        .or('username.ilike.$like,display_name.ilike.$like')
-        .order('xp', ascending: false)
-        .limit(20);
-    return (rows as List)
-        .map((e) => Profile.fromJson(e as Map<String, dynamic>))
+    // Username prefix search. Firestore has no LIKE/ILIKE, so only
+    // username prefixes match (display names are not searched — see
+    // FIREBASE.md). Usernames are stored lowercase.
+    final end = '$q\uf8ff';
+    final snap = await _d
+        .collection('users')
+        .where('username', isGreaterThanOrEqualTo: q)
+        .where('username', isLessThan: end)
+        .orderBy('username')
+        .limit(20)
+        .get();
+    return snap.docs
+        .map((doc) => Profile.fromJson({'id': doc.id, ...doc.data()}))
         .toList();
   }
 }
@@ -255,22 +426,27 @@ class ToggleResult {
   final bool allDone;
 }
 
-class HabitRepository {
-  HabitRepository({this._client});
+String _logDocId(String habitId, String date) => '${habitId}_$date';
 
-  final SupabaseClient? _client;
-  SupabaseClient get _c => _client ?? _requireClient();
+class HabitRepository {
+  HabitRepository({this._auth, this._db});
+
+  final FirebaseAuth? _auth;
+  final FirebaseFirestore? _db;
+
+  FirebaseAuth get _a => _requireAuth(_auth);
+  FirebaseFirestore get _d => _requireDb(_db);
 
   Future<List<Habit>> listMyHabits() async {
-    final userId = _requireUserId(_c);
-    final rows = await _c
-        .from('habits')
-        .select()
-        .eq('user_id', userId)
-        .eq('archived', false)
-        .order('created_at', ascending: true);
-    return (rows as List)
-        .map((e) => Habit.fromJson(e as Map<String, dynamic>))
+    final userId = _requireUserId(_a);
+    final snap = await _d
+        .collection('habits')
+        .where('ownerUid', isEqualTo: userId)
+        .where('archived', isEqualTo: false)
+        .orderBy('createdAt')
+        .get();
+    return snap.docs
+        .map((doc) => Habit.fromJson({'id': doc.id, ...doc.data()}))
         .toList();
   }
 
@@ -278,83 +454,83 @@ class HabitRepository {
     required String title,
     required int color,
   }) async {
-    final userId = _requireUserId(_c);
-    final row = await _c
-        .from('habits')
-        .insert({'user_id': userId, 'title': title, 'color': color})
-        .select()
-        .single();
-    return Habit.fromJson(row);
+    final userId = _requireUserId(_a);
+    final ref = _d.collection('habits').doc();
+    await ref.set({
+      'ownerUid': userId,
+      'title': title,
+      'color': color,
+      'archived': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    return Habit(id: ref.id, userId: userId, title: title, color: color);
   }
 
   Future<void> updateHabit(Habit habit, {String? title, int? color}) async {
     final updates = <String, Object>{};
     if (title != null) updates['title'] = title;
     if (color != null) updates['color'] = color;
-    await _c.from('habits').update(updates).eq('id', habit.id);
+    if (updates.isEmpty) return;
+    await _d.collection('habits').doc(habit.id).update(updates);
   }
 
   Future<void> archiveHabit(String habitId) async {
-    await _c
-        .from('habits')
-        .update({'archived': true})
-        .eq('id', habitId);
+    await _d.collection('habits').doc(habitId).update({'archived': true});
   }
 
   Future<List<HabitLog>> listLogsForDate(String date) async {
-    final userId = _requireUserId(_c);
-    final rows = await _c
-        .from('habit_logs')
-        .select()
-        .eq('user_id', userId)
-        .eq('log_date', date)
-        .eq('completed', true);
-    return (rows as List)
-        .map((e) => HabitLog.fromJson(e as Map<String, dynamic>))
+    final userId = _requireUserId(_a);
+    final snap = await _d
+        .collection('habit_logs')
+        .where('ownerUid', isEqualTo: userId)
+        .where('date', isEqualTo: date)
+        .where('completed', isEqualTo: true)
+        .get();
+    return snap.docs
+        .map((doc) => HabitLog.fromJson({'id': doc.id, ...doc.data()}))
         .toList();
   }
 
   Future<List<HabitLog>> listLogsInRange(String start, String end) async {
-    final userId = _requireUserId(_c);
-    final rows = await _c
-        .from('habit_logs')
-        .select()
-        .eq('user_id', userId)
-        .eq('completed', true)
-        .gte('log_date', start)
-        .lte('log_date', end)
-        .order('log_date', ascending: true);
-    return (rows as List)
-        .map((e) => HabitLog.fromJson(e as Map<String, dynamic>))
+    final userId = _requireUserId(_a);
+    final snap = await _d
+        .collection('habit_logs')
+        .where('ownerUid', isEqualTo: userId)
+        .where('completed', isEqualTo: true)
+        .where('date', isGreaterThanOrEqualTo: start)
+        .where('date', isLessThanOrEqualTo: end)
+        .orderBy('date')
+        .get();
+    return snap.docs
+        .map((doc) => HabitLog.fromJson({'id': doc.id, ...doc.data()}))
         .toList();
   }
 
   /// Distinct dates (newest first) with at least one completed habit.
   Future<List<String>> activeDates({int limit = 370}) async {
-    final userId = _requireUserId(_c);
-    final rows = await _c
-        .from('habit_logs')
-        .select('log_date')
-        .eq('user_id', userId)
-        .eq('completed', true)
-        .order('log_date', ascending: false)
-        .limit(limit);
+    final userId = _requireUserId(_a);
+    final snap = await _d
+        .collection('habit_logs')
+        .where('ownerUid', isEqualTo: userId)
+        .where('completed', isEqualTo: true)
+        .orderBy('date', descending: true)
+        .limit(limit)
+        .get();
     final dates = <String>{};
-    for (final row in rows as List) {
-      dates.add(row['log_date'] as String);
+    for (final doc in snap.docs) {
+      final date = doc.data()['date'] as String?;
+      if (date != null) dates.add(date);
     }
     return dates.toList();
   }
 
   Future<bool> dailyBonusGranted(String date) async {
-    final userId = _requireUserId(_c);
-    final row = await _c
-        .from('daily_rewards')
-        .select('user_id')
-        .eq('user_id', userId)
-        .eq('reward_date', date)
-        .maybeSingle();
-    return row != null;
+    final userId = _requireUserId(_a);
+    final doc = await _d
+        .collection('daily_rewards')
+        .doc('${userId}_$date')
+        .get();
+    return doc.exists;
   }
 
   /// Tick or untick a habit for [date]. Handles XP, streak and the
@@ -364,35 +540,32 @@ class HabitRepository {
     required String date,
     required bool completed,
   }) async {
-    final profiles = ProfileRepository(client: _client);
+    final profiles = ProfileRepository(auth: _auth, db: _db);
     final me = await profiles.fetchMyProfile();
     if (me == null) throw const AuthException('Profile not found.');
-    final userId = _requireUserId(_c);
+    final userId = _requireUserId(_a);
     final today = todayKey();
+    final logRef = _d
+        .collection('habit_logs')
+        .doc(_logDocId(habit.id, date));
 
-    // What is the current state of this log?
-    final existing = await _c
-        .from('habit_logs')
-        .select()
-        .eq('habit_id', habit.id)
-        .eq('log_date', date)
-        .maybeSingle();
-    final alreadyDone = existing != null && existing['completed'] == true;
+    final existing = await logRef.get();
+    final alreadyDone =
+        existing.exists &&
+        (existing.data()?['completed'] as bool? ?? false);
 
     var xpDelta = 0;
     var bonusGranted = false;
 
     if (completed && !alreadyDone) {
-      await _c.from('habit_logs').upsert(
-        {
-          'habit_id': habit.id,
-          'user_id': userId,
-          'log_date': date,
-          'completed': true,
-          'xp_earned': xpPerHabit,
-        },
-        onConflict: 'habit_id,log_date',
-      );
+      await logRef.set({
+        'ownerUid': userId,
+        'habitId': habit.id,
+        'date': date,
+        'completed': true,
+        'xpEarned': xpPerHabit,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
       xpDelta += xpPerHabit;
 
       final newStreak = streakAfterTick(
@@ -409,23 +582,25 @@ class HabitRepository {
       final todaysLogs = await listLogsForDate(date);
       final allDone = habits.isNotEmpty &&
           todaysLogs.length >= habits.length;
+      final batch = _d.batch();
       if (allDone && date == today && !await dailyBonusGranted(date)) {
-        await _c.from('daily_rewards').insert({
-          'user_id': userId,
-          'reward_date': date,
+        batch.set(_d.collection('daily_rewards').doc('${userId}_$date'), {
+          'ownerUid': userId,
+          'date': date,
           'xp': xpDailyCompleteBonus,
           'kind': 'daily_complete',
+          'createdAt': FieldValue.serverTimestamp(),
         });
         xpDelta += xpDailyCompleteBonus;
         bonusGranted = true;
       }
-
-      await profiles.applyXpAndStreak(
-        xpDelta: xpDelta,
-        currentStreak: newStreak,
-        longestStreak: longest,
-        lastActiveDate: date,
-      );
+      batch.update(_d.collection('users').doc(userId), {
+        'xp': (me.xp + xpDelta).clamp(0, 100000000),
+        'currentStreak': newStreak,
+        'longestStreak': longest,
+        'lastActiveDate': date,
+      });
+      await batch.commit();
       return ToggleResult(
         xpDelta: xpDelta,
         bonusGranted: bonusGranted,
@@ -434,7 +609,7 @@ class HabitRepository {
     }
 
     if (!completed && alreadyDone) {
-      await _c.from('habit_logs').delete().eq('id', existing['id'] as String);
+      await logRef.delete();
       xpDelta -= xpPerHabit;
       // Recompute the streak from the remaining active dates.
       final dates = await activeDates();
@@ -460,69 +635,76 @@ class HabitRepository {
 // ---------------------------------------------------------------------------
 
 class TaskRepository {
-  TaskRepository({this._client});
+  TaskRepository({this._auth, this._db});
 
-  final SupabaseClient? _client;
-  SupabaseClient get _c => _client ?? _requireClient();
+  final FirebaseAuth? _auth;
+  final FirebaseFirestore? _db;
+
+  FirebaseAuth get _a => _requireAuth(_auth);
+  FirebaseFirestore get _d => _requireDb(_db);
 
   Future<List<WeeklyTask>> listWeeklyTasks(String weekStart) async {
-    final userId = _requireUserId(_c);
-    final rows = await _c
-        .from('weekly_tasks')
-        .select()
-        .eq('user_id', userId)
-        .eq('week_start', weekStart)
-        .order('created_at', ascending: true);
-    return (rows as List)
-        .map((e) => WeeklyTask.fromJson(e as Map<String, dynamic>))
+    final userId = _requireUserId(_a);
+    final snap = await _d
+        .collection('weekly_tasks')
+        .where('ownerUid', isEqualTo: userId)
+        .where('weekStart', isEqualTo: weekStart)
+        .orderBy('createdAt')
+        .get();
+    return snap.docs
+        .map((doc) => WeeklyTask.fromJson({'id': doc.id, ...doc.data()}))
         .toList();
   }
 
   Future<void> addWeeklyTask(String title, String weekStart) async {
-    final userId = _requireUserId(_c);
-    await _c.from('weekly_tasks').insert({
-      'user_id': userId,
+    final userId = _requireUserId(_a);
+    await _d.collection('weekly_tasks').add({
+      'ownerUid': userId,
       'title': title,
-      'week_start': weekStart,
+      'weekStart': weekStart,
+      'done': false,
+      'createdAt': FieldValue.serverTimestamp(),
     });
   }
 
   Future<void> toggleWeeklyTask(String id, bool done) async {
-    await _c.from('weekly_tasks').update({'done': done}).eq('id', id);
+    await _d.collection('weekly_tasks').doc(id).update({'done': done});
   }
 
   Future<void> deleteWeeklyTask(String id) async {
-    await _c.from('weekly_tasks').delete().eq('id', id);
+    await _d.collection('weekly_tasks').doc(id).delete();
   }
 
   Future<List<MonthlyTask>> listMonthlyTasks(String month) async {
-    final userId = _requireUserId(_c);
-    final rows = await _c
-        .from('monthly_tasks')
-        .select()
-        .eq('user_id', userId)
-        .eq('month', month)
-        .order('created_at', ascending: true);
-    return (rows as List)
-        .map((e) => MonthlyTask.fromJson(e as Map<String, dynamic>))
+    final userId = _requireUserId(_a);
+    final snap = await _d
+        .collection('monthly_tasks')
+        .where('ownerUid', isEqualTo: userId)
+        .where('month', isEqualTo: month)
+        .orderBy('createdAt')
+        .get();
+    return snap.docs
+        .map((doc) => MonthlyTask.fromJson({'id': doc.id, ...doc.data()}))
         .toList();
   }
 
   Future<void> addMonthlyTask(String title, String month) async {
-    final userId = _requireUserId(_c);
-    await _c.from('monthly_tasks').insert({
-      'user_id': userId,
+    final userId = _requireUserId(_a);
+    await _d.collection('monthly_tasks').add({
+      'ownerUid': userId,
       'title': title,
       'month': month,
+      'done': false,
+      'createdAt': FieldValue.serverTimestamp(),
     });
   }
 
   Future<void> toggleMonthlyTask(String id, bool done) async {
-    await _c.from('monthly_tasks').update({'done': done}).eq('id', id);
+    await _d.collection('monthly_tasks').doc(id).update({'done': done});
   }
 
   Future<void> deleteMonthlyTask(String id) async {
-    await _c.from('monthly_tasks').delete().eq('id', id);
+    await _d.collection('monthly_tasks').doc(id).delete();
   }
 }
 
@@ -531,65 +713,72 @@ class TaskRepository {
 // ---------------------------------------------------------------------------
 
 class SocialRepository {
-  SocialRepository({this._client});
+  SocialRepository({this._auth, this._db});
 
-  final SupabaseClient? _client;
-  SupabaseClient get _c => _client ?? _requireClient();
+  final FirebaseAuth? _auth;
+  final FirebaseFirestore? _db;
+
+  FirebaseAuth get _a => _requireAuth(_auth);
+  FirebaseFirestore get _d => _requireDb(_db);
+
+  String _followDocId(String followerId, String followingId) =>
+      '${followerId}_$followingId';
 
   Future<void> follow(String followingId) async {
-    final userId = _requireUserId(_c);
-    await _c.from('follows').insert({
-      'follower_id': userId,
-      'following_id': followingId,
-    });
+    final userId = _requireUserId(_a);
+    await _d
+        .collection('follows')
+        .doc(_followDocId(userId, followingId))
+        .set({
+          'followerUid': userId,
+          'followingUid': followingId,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
   }
 
   Future<void> unfollow(String followingId) async {
-    final userId = _requireUserId(_c);
-    await _c
-        .from('follows')
-        .delete()
-        .eq('follower_id', userId)
-        .eq('following_id', followingId);
+    final userId = _requireUserId(_a);
+    await _d
+        .collection('follows')
+        .doc(_followDocId(userId, followingId))
+        .delete();
   }
 
   Future<bool> isFollowing(String followingId) async {
-    final userId = _requireUserId(_c);
-    final row = await _c
-        .from('follows')
-        .select('follower_id')
-        .eq('follower_id', userId)
-        .eq('following_id', followingId)
-        .maybeSingle();
-    return row != null;
+    final userId = _requireUserId(_a);
+    final doc = await _d
+        .collection('follows')
+        .doc(_followDocId(userId, followingId))
+        .get();
+    return doc.exists;
   }
 
   Future<List<String>> followingIds() async {
-    final userId = _requireUserId(_c);
-    final rows = await _c
-        .from('follows')
-        .select('following_id')
-        .eq('follower_id', userId);
-    return (rows as List)
-        .map((e) => e['following_id'] as String)
+    final userId = _requireUserId(_a);
+    final snap = await _d
+        .collection('follows')
+        .where('followerUid', isEqualTo: userId)
+        .get();
+    return snap.docs
+        .map((doc) => doc.data()['followingUid'] as String)
         .toList();
   }
 
   Future<int> followingCount(String userId) async {
-    final res = await _c
-        .from('follows')
-        .select('follower_id')
-        .eq('follower_id', userId)
-        .count(CountOption.exact);
-    return res.count;
+    final snap = await _d
+        .collection('follows')
+        .where('followerUid', isEqualTo: userId)
+        .count()
+        .get();
+    return snap.count ?? 0;
   }
 
   Future<int> followersCount(String userId) async {
-    final res = await _c
-        .from('follows')
-        .select('follower_id')
-        .eq('following_id', userId)
-        .count(CountOption.exact);
-    return res.count;
+    final snap = await _d
+        .collection('follows')
+        .where('followingUid', isEqualTo: userId)
+        .count()
+        .get();
+    return snap.count ?? 0;
   }
 }

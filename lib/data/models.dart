@@ -1,5 +1,19 @@
-/// Data models mirroring supabase/schema.sql.
+/// Data models mirroring the Firestore collections (see FIREBASE.md).
+///
+/// Field names are camelCase, matching the documents in Firestore.
+/// `createdAt` is stored as a Firestore [Timestamp]; `fromJson` also
+/// accepts ISO strings so tests can pass plain maps.
 library;
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+DateTime? _parseDate(dynamic value) {
+  if (value == null) return null;
+  if (value is Timestamp) return value.toDate();
+  if (value is DateTime) return value;
+  if (value is String) return DateTime.tryParse(value);
+  return null;
+}
 
 class Profile {
   const Profile({
@@ -18,17 +32,28 @@ class Profile {
   factory Profile.fromJson(Map<String, dynamic> json) => Profile(
     id: json['id'] as String,
     username: json['username'] as String? ?? '',
-    displayName: json['display_name'] as String? ?? '',
-    avatarUrl: json['avatar_url'] as String?,
+    displayName: json['displayName'] as String? ?? '',
+    avatarUrl: json['avatarUrl'] as String?,
     bio: json['bio'] as String? ?? '',
     xp: (json['xp'] as num?)?.toInt() ?? 0,
-    currentStreak: (json['current_streak'] as num?)?.toInt() ?? 0,
-    longestStreak: (json['longest_streak'] as num?)?.toInt() ?? 0,
-    lastActiveDate: json['last_active_date'] as String?,
-    createdAt: json['created_at'] == null
-        ? null
-        : DateTime.tryParse(json['created_at'] as String),
+    currentStreak: (json['currentStreak'] as num?)?.toInt() ?? 0,
+    longestStreak: (json['longestStreak'] as num?)?.toInt() ?? 0,
+    lastActiveDate: json['lastActiveDate'] as String?,
+    createdAt: _parseDate(json['createdAt']),
   );
+
+  /// The document fields for a brand-new profile (XP starts at 0).
+  Map<String, dynamic> toMap() => {
+    'username': username,
+    'displayName': displayName,
+    'avatarUrl': avatarUrl,
+    'bio': bio,
+    'xp': xp,
+    'currentStreak': currentStreak,
+    'longestStreak': longestStreak,
+    'lastActiveDate': lastActiveDate,
+    'createdAt': FieldValue.serverTimestamp(),
+  };
 
   final String id;
   final String username;
@@ -93,20 +118,19 @@ class Habit {
 
   factory Habit.fromJson(Map<String, dynamic> json) => Habit(
     id: json['id'] as String,
-    userId: json['user_id'] as String,
+    userId: json['ownerUid'] as String,
     title: json['title'] as String,
     color: (json['color'] as num?)?.toInt() ?? 0xFF7C3AED,
     archived: json['archived'] as bool? ?? false,
-    createdAt: json['created_at'] == null
-        ? null
-        : DateTime.tryParse(json['created_at'] as String),
+    createdAt: _parseDate(json['createdAt']),
   );
 
-  Map<String, dynamic> toInsert(String userId) => {
-    'user_id': userId,
+  Map<String, dynamic> toMap(String userId) => {
+    'ownerUid': userId,
     'title': title,
     'color': color,
     'archived': archived,
+    'createdAt': FieldValue.serverTimestamp(),
   };
 
   final String id;
@@ -129,11 +153,11 @@ class HabitLog {
 
   factory HabitLog.fromJson(Map<String, dynamic> json) => HabitLog(
     id: json['id'] as String,
-    habitId: json['habit_id'] as String,
-    userId: json['user_id'] as String,
-    logDate: json['log_date'] as String,
+    habitId: json['habitId'] as String,
+    userId: json['ownerUid'] as String,
+    logDate: json['date'] as String,
     completed: json['completed'] as bool? ?? true,
-    xpEarned: (json['xp_earned'] as num?)?.toInt() ?? 0,
+    xpEarned: (json['xpEarned'] as num?)?.toInt() ?? 0,
   );
 
   final String id;
@@ -155,9 +179,9 @@ class WeeklyTask {
 
   factory WeeklyTask.fromJson(Map<String, dynamic> json) => WeeklyTask(
     id: json['id'] as String,
-    userId: json['user_id'] as String,
+    userId: json['ownerUid'] as String,
     title: json['title'] as String,
-    weekStart: json['week_start'] as String,
+    weekStart: json['weekStart'] as String,
     done: json['done'] as bool? ?? false,
   );
 
@@ -179,7 +203,7 @@ class MonthlyTask {
 
   factory MonthlyTask.fromJson(Map<String, dynamic> json) => MonthlyTask(
     id: json['id'] as String,
-    userId: json['user_id'] as String,
+    userId: json['ownerUid'] as String,
     title: json['title'] as String,
     month: json['month'] as String,
     done: json['done'] as bool? ?? false,

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data/models.dart';
 import '../data/repositories.dart';
@@ -374,7 +373,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ListTile(
                     leading: const Icon(Icons.info_outline),
                     title: const Text('About Life Game'),
-                    subtitle: const Text('Version 2.0 • Flutter • Supabase'),
+                    subtitle: const Text('Version 2.0 • Flutter • Firebase'),
                   ),
                   const Divider(height: 1),
                   ListTile(
