@@ -58,6 +58,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int _following = 0;
   bool _loading = true;
   bool _deletingAccount = false;
+  // Guards a rapid second tap on the same task while its write is still
+  // syncing (same pattern as Home's _toggling set).
+  final Set<String> _togglingTasks = {};
   StreamSubscription<void>? _habitChanges;
   StreamSubscription<void>? _taskChanges;
 
@@ -243,11 +246,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  /// Tapping a task's checkbox flips it instantly; the write syncs in
-  /// the background (same optimistic pattern as Home's habit toggle).
-  /// A failed write rolls the checkbox back to the server state.
+  /// Tapping a task's checkbox flips it instantly — and the XP paints
+  /// instantly too (same optimistic pattern as Home's habit toggle).
+  /// The write syncs in the background; a failed write rolls the
+  /// checkbox and the XP back to the server state.
+  /// (Before v2.2.0+7 only the checkbox flipped optimistically; the XP
+  /// number waited for the full network refetch, so the tap felt slow
+  /// even though the tick itself was instant.)
   Future<void> _toggleWeekly(String id, bool done) async {
+    if (_togglingTasks.contains(id)) return;
     final prev = _weekly;
+    final prevProfile = _profile;
+    var wasDone = false;
+    for (final t in prev) {
+      if (t.id == id) {
+        wasDone = t.done;
+        break;
+      }
+    }
+    final delta = xpDeltaForToggle(completing: done, wasDone: wasDone);
     setState(() {
       _weekly = _weekly
           .map(
@@ -262,23 +279,47 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 : t,
           )
           .toList();
+      final profile = _profile;
+      if (profile != null && delta != 0) {
+        _profile = profile.copyWith(
+          xp: (profile.xp + delta).clamp(0, 100000000),
+        );
+      }
     });
+    _togglingTasks.add(id);
     try {
       await _tasks.toggleWeeklyTask(id, done);
+      if (!mounted) return;
+      // Quiet sync: refresh canonical state without a spinner.
       await _load();
     } catch (e) {
       if (mounted) {
-        setState(() => _weekly = prev);
+        setState(() {
+          _weekly = prev;
+          _profile = prevProfile;
+        });
         showError(context, e);
         try {
           await _load();
         } catch (_) {}
       }
+    } finally {
+      _togglingTasks.remove(id);
     }
   }
 
   Future<void> _toggleMonthly(String id, bool done) async {
+    if (_togglingTasks.contains(id)) return;
     final prev = _monthly;
+    final prevProfile = _profile;
+    var wasDone = false;
+    for (final t in prev) {
+      if (t.id == id) {
+        wasDone = t.done;
+        break;
+      }
+    }
+    final delta = xpDeltaForToggle(completing: done, wasDone: wasDone);
     setState(() {
       _monthly = _monthly
           .map(
@@ -293,18 +334,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 : t,
           )
           .toList();
+      final profile = _profile;
+      if (profile != null && delta != 0) {
+        _profile = profile.copyWith(
+          xp: (profile.xp + delta).clamp(0, 100000000),
+        );
+      }
     });
+    _togglingTasks.add(id);
     try {
       await _tasks.toggleMonthlyTask(id, done);
+      if (!mounted) return;
+      // Quiet sync: refresh canonical state without a spinner.
       await _load();
     } catch (e) {
       if (mounted) {
-        setState(() => _monthly = prev);
+        setState(() {
+          _monthly = prev;
+          _profile = prevProfile;
+        });
         showError(context, e);
         try {
           await _load();
         } catch (_) {}
       }
+    } finally {
+      _togglingTasks.remove(id);
     }
   }
 
@@ -604,7 +659,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           leading: Icon(Icons.info_outline),
                           title: Text('About Life Game'),
                           subtitle: Text(
-                            'Version 2.2.0+6 • Flutter • Appwrite',
+                            'Version 2.2.0+7 • Flutter • Appwrite',
                           ),
                         ),
                         const Divider(height: 1),

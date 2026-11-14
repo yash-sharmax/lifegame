@@ -73,7 +73,9 @@ void main() {
     // XP is pinned at the top (XpBar), not buried in Profile.
     expect(find.text('42 XP'), findsOneWidget);
     expect(find.text('LEVEL 1'), findsOneWidget);
-    expect(find.text('58 XP to Level 2'), findsOneWidget);
+    // "X / 100 XP to Level N": how much of this level is done, out of
+    // how much (user feedback, 14 Nov 2026).
+    expect(find.text('42 / 100 XP to Level 2'), findsOneWidget);
   });
 
   testWidgets('done habit stays visible without a strikethrough', (
@@ -337,7 +339,7 @@ void main() {
     expect(find.text('Send feedback'), findsOneWidget);
     expect(find.text('Delete account'), findsOneWidget);
     expect(find.text('Log out'), findsOneWidget);
-    expect(find.text('Version 2.2.0+6 • Flutter • Appwrite'), findsOneWidget);
+    expect(find.text('Version 2.2.0+7 • Flutter • Appwrite'), findsOneWidget);
   });
 
   testWidgets('feedback form sends a message and shows a thank-you', (

@@ -117,7 +117,6 @@ class XpBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final level = levelForXp(xp);
     final progress = progressToNextLevel(xp);
-    final toNext = xpToNextLevel(xp);
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       decoration: BoxDecoration(
@@ -183,7 +182,7 @@ class XpBar extends StatelessWidget {
             borderRadius: BorderRadius.circular(999),
             child: TweenAnimationBuilder<double>(
               tween: Tween<double>(begin: 0, end: progress),
-              duration: const Duration(milliseconds: 900),
+              duration: const Duration(milliseconds: 400),
               curve: Curves.easeOutCubic,
               builder: (context, value, _) => LinearProgressIndicator(
                 value: value,
@@ -196,8 +195,11 @@ class XpBar extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
+          // "X / 100 XP to Level N": how much of this level is done and
+          // how much is left — the user could not tell from the old
+          // "N XP to Level" caption alone (feedback, 14 Nov 2026).
           Text(
-            '$toNext XP to Level ${level + 1}',
+            '${xp % xpPerLevel} / $xpPerLevel XP to Level ${level + 1}',
             style: const TextStyle(
               color: AppTheme.inkSoft,
               fontWeight: FontWeight.w600,

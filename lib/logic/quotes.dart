@@ -2,8 +2,9 @@
 ///
 /// The list is bundled in the app (no network call). [lineForDay] picks
 /// deterministically from the date, so the line is the SAME all day and
-/// changes the next day. 36 lines: a mix of English and Hinglish, short
-/// and punchy.
+/// changes the next day. 36 lines, all in English, short and punchy.
+/// (The Hinglish lines were replaced with English ones at the user's
+/// request, 14 Nov 2026: the daily line is English only.)
 const List<String> motivationalQuotes = [
   'Small ticks. Big change.',
   'Trust the process.',
@@ -23,23 +24,23 @@ const List<String> motivationalQuotes = [
   'Done is better than perfect.',
   'Small steps every day.',
   'Consistency beats intensity.',
-  'Aaj ka kaam, aaj hi. Kal par mat chhodo.',
-  'Chhota kadam, bada badlav.',
-  'Roz thoda-thoda, phir dekho kamaal.',
-  'Mehnat aaj ki, pehchan kal ki.',
-  'Haar mat maano, bas tick karte jao.',
-  'Khud se vaada, khud hi nibhana.',
-  'Aaj jeeta, to kal bhi jeetega.',
-  'Sapne bade, shuruaat chhoti.',
-  'Rukna nahi, jhukna nahi — bas karte jana.',
-  'Kal ka tum, aaj ke tum se behtar hoga.',
-  'Ek din me nahi, har din me farak hai.',
-  'Aalas ko harao, aadat ko jitao.',
-  'Shuruaat karo, rasta khud banega.',
-  'Jeet wahi, jo roz ladta hai.',
-  'Aaj ka ek tick, kal ki jeet.',
-  'Bada socho, chhota shuru karo.',
-  'Apne liye karo, dikhawe ke liye nahi.',
+  'Small wins build big lives.',
+  'Your habits are your future.',
+  'Start small. Stay consistent.',
+  'Today is a fresh start.',
+  'Progress, not perfection.',
+  'Make today count.',
+  'Discipline builds freedom.',
+  'One day at a time.',
+  'Keep going. You are closer than you think.',
+  'The best time to start was yesterday. The next best is now.',
+  'Turn your goals into habits.',
+  'Every day is a new level.',
+  'You are stronger than your excuses.',
+  'Brick by brick, day by day.',
+  'Consistency is your superpower.',
+  'Dream big. Tick small.',
+  'Your only competition is yesterday.',
   'Focus today, shine tomorrow.',
 ];
 

@@ -9,14 +9,27 @@ void main() {
       expect(motivationalQuotes.toSet().length, motivationalQuotes.length);
     });
 
-    test('the list mixes English and Hinglish lines', () {
+    test('the list is English only', () {
+      // User feedback, 14 Nov 2026: the daily line is English only —
+      // no Hinglish lines remain.
       expect(
         motivationalQuotes,
-        contains('Aaj ka kaam, aaj hi. Kal par mat chhodo.'),
+        contains('Small wins build big lives.'),
       );
-      expect(motivationalQuotes, contains('Chhota kadam, bada badlav.'));
-      expect(motivationalQuotes, contains('Small ticks. Big change.'));
+      expect(motivationalQuotes, contains('Your only competition is yesterday.'));
       expect(motivationalQuotes, contains('Trust the process.'));
+      expect(
+        motivationalQuotes,
+        isNot(contains('Aaj ka kaam, aaj hi. Kal par mat chhodo.')),
+      );
+      expect(
+        motivationalQuotes,
+        isNot(contains('Aalas ko harao, aadat ko jitao.')),
+      );
+      // English only: every line is plain ASCII.
+      for (final q in motivationalQuotes) {
+        expect(q.codeUnits.every((c) => c < 128), isTrue, reason: q);
+      }
     });
 
     test('the same date always gives the same line', () {

@@ -590,22 +590,6 @@ class _DailyLineCard extends StatelessWidget {
                   letterSpacing: 1.4,
                 ),
               ),
-              const SizedBox(width: 12),
-              // Flexible so a wide font / larger text scale truncates the
-              // caption instead of overflowing the card (the test font's
-              // glyphs are far wider than any real device font).
-              Expanded(
-                child: Text(
-                  'a new line tomorrow',
-                  textAlign: TextAlign.right,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.75),
-                    fontWeight: FontWeight.w600,
-                    fontSize: 11,
-                  ),
-                ),
-              ),
             ],
           ),
           const SizedBox(height: 10),
