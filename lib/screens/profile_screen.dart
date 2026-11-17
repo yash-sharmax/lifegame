@@ -659,7 +659,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           leading: Icon(Icons.info_outline),
                           title: Text('About Life Game'),
                           subtitle: Text(
-                            'Version 2.2.0+7 • Flutter • Appwrite',
+                            'Version 2.3.0+8 • Flutter • Appwrite',
                           ),
                         ),
                         const Divider(height: 1),

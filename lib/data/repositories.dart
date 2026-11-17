@@ -37,6 +37,7 @@ import 'package:appwrite/src/enums.dart';
 import '../config.dart';
 import '../logic/xp.dart';
 import 'appwrite_service.dart';
+import 'local_store.dart';
 import 'models.dart';
 
 // ---------------------------------------------------------------------------
@@ -429,10 +430,20 @@ class AuthRepository {
   }
 
   Future<void> signOut() async {
+    final uid = _cachedUser?.uid;
     try {
       await _a.deleteSession(sessionId: 'current');
     } catch (_) {
       // Even if the server-side logout fails, drop the local session.
+    }
+    // v2.3.0 local data (reminders + challenges) is per-account: clear
+    // this account's rows so another account on the same device never
+    // inherits them.
+    if (uid != null) {
+      try {
+        final store = await LocalStore.getInstance();
+        await store.clearForUser(uid);
+      } catch (_) {}
     }
     _cachedUser = null;
     _sessionLoaded = false;
@@ -451,7 +462,12 @@ class AuthRepository {
   /// local session is only cleared on full success.
   Future<void> deleteAccount() async {
     if (_cachedUser == null) throw const AuthException('Not signed in.');
+    final uid = _cachedUser!.uid;
     await AccountRepository(db: _db).deleteAllMyData();
+    try {
+      final store = await LocalStore.getInstance();
+      await store.clearForUser(uid);
+    } catch (_) {}
     try {
       // The Dart SDK has no Account.delete() for DELETE /account, so
       // call the endpoint directly through the client's low-level call.

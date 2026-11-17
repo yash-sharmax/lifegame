@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 
 import 'config.dart';
 import 'data/appwrite_service.dart';
+import 'data/reminder_service.dart';
 import 'data/repositories.dart';
 import 'screens/auth_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/leaderboard_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/schedule_screen.dart';
 import 'screens/search_screen.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
@@ -17,6 +19,9 @@ import 'widgets/common.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppwriteService.init();
+  // Reminders start ticking before the first frame: the in-app banner
+  // and (on Android) the exact alarms must not wait for a screen.
+  await ReminderService.instance.init();
   runApp(const LifeGameApp());
 }
 
@@ -174,6 +179,100 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
 
+  // The latest due reminder (in-app banner). Cleared when dismissed
+  // or when the user opens the Schedule screen from it.
+  ReminderAlert? _alert;
+  StreamSubscription<ReminderAlert>? _alertSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _alertSub = ReminderService.instance.alerts.listen((alert) {
+      if (mounted) setState(() => _alert = alert);
+    });
+    // The service started in main() before any session existed; now
+    // that the user is signed in, re-check due reminders and
+    // re-schedule the Android alarms for this account.
+    unawaited(ReminderService.instance.refresh());
+  }
+
+  @override
+  void dispose() {
+    _alertSub?.cancel();
+    super.dispose();
+  }
+
+  void _openSchedule() {
+    setState(() => _alert = null);
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ScheduleScreen()),
+    );
+  }
+
+  Widget _reminderBanner() {
+    final alert = _alert;
+    if (alert == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Material(
+        color: AppTheme.violet,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: _openSchedule,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              children: [
+                const Icon(Icons.alarm, color: Colors.white, size: 22),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Reminder',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Text(
+                        'Time for ${alert.reminder.title}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(
+                  onPressed: _openSchedule,
+                  child: const Text(
+                    'View',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => setState(() => _alert = null),
+                  icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                  constraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 32,
+                  ),
+                  padding: EdgeInsets.zero,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   static const List<Widget> _screens = [
     HomeScreen(),
     DashboardScreen(),
@@ -193,7 +292,14 @@ class _MainShellState extends State<MainShell> {
         if (constraints.maxWidth < kDesktopBreakpoint) {
           return Scaffold(
             body: SafeArea(
-              child: IndexedStack(index: _index, children: _screens),
+              child: Column(
+                children: [
+                  _reminderBanner(),
+                  Expanded(
+                    child: IndexedStack(index: _index, children: _screens),
+                  ),
+                ],
+              ),
             ),
             bottomNavigationBar: NavigationBar(
               selectedIndex: _index,
@@ -286,7 +392,14 @@ class _MainShellState extends State<MainShell> {
                 ),
                 const VerticalDivider(width: 1, thickness: 1),
                 Expanded(
-                  child: IndexedStack(index: _index, children: _screens),
+                  child: Column(
+                    children: [
+                      _reminderBanner(),
+                      Expanded(
+                        child: IndexedStack(index: _index, children: _screens),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),

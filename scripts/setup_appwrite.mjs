@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 // Sets up the Appwrite Cloud backend for Life Game.
 //
-// Creates: database `lifegame` + all 9 tables with columns, indexes and
+// Creates: database `lifegame` + all 13 tables with columns, indexes and
 // row-level permissions, plus the Web platform (hostname yashx.xyz).
+//
+// The v2.3.0 tables (reminders, challenges, challenge_habits,
+// challenge_members) are defined here but the app does NOT use them yet:
+// the API key was not available when v2.3.0 was built, so the app stores
+// reminders + challenges locally (SharedPreferences) until these tables
+// are created by running this script with a key. See APPWRITE.md.
 //
 // Usage (the API key is used ONLY here — never in the app or the repo):
 //   APPWRITE_PROJECT_ID=<id> APPWRITE_API_KEY=<key> node scripts/setup_appwrite.mjs
@@ -105,6 +111,12 @@ const boolCol = (key, required = false, def = false) => ({
   kind: 'boolean',
   key,
   body: { key, required, ...(required ? {} : { default: def }) },
+});
+// String array column (e.g. memberIds on challenges).
+const arrStr = (key, size) => ({
+  kind: 'string',
+  key,
+  body: { key, size, required: false, array: true },
 });
 
 // Each table: columns + indexes. All lists start empty in the app — no
@@ -234,6 +246,88 @@ const TABLES = [
       str('createdAt', 32, true),
     ],
     indexes: [{ key: 'idx_user', type: 'key', columns: ['userId'] }],
+  },
+  {
+    // Added 17 Nov 2026 (v2.3.0): one reminder per habit/task — a time
+    // of day + on/off. The app stores reminders LOCALLY until this
+    // table is created (see the header comment); the shape matches the
+    // local Reminder model one-to-one.
+    id: 'reminders',
+    name: 'Reminders',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('ownerUid', 64, true),
+      str('kind', 16, true),
+      str('targetId', 64, true),
+      str('title', 256, false, ''),
+      intCol('hour', true),
+      intCol('minute', true),
+      boolCol('enabled', false, true),
+    ],
+    indexes: [
+      {
+        key: 'idx_owner_target',
+        type: 'key',
+        columns: ['ownerUid', 'kind', 'targetId'],
+      },
+    ],
+  },
+  {
+    // Added 17 Nov 2026 (v2.3.0): challenges. One row per challenge;
+    // habits live in `challenge_habits`, members in
+    // `challenge_members`. The app stores challenges LOCALLY until
+    // these tables are created (see the header comment).
+    id: 'challenges',
+    name: 'Challenges',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('ownerUid', 64, true),
+      str('name', 128, true),
+      str('createdDate', 10, true),
+      intCol('durationDays', true),
+      arrStr('memberIds', 64),
+    ],
+    indexes: [
+      {
+        key: 'idx_owner_created',
+        type: 'key',
+        columns: ['ownerUid', 'createdDate'],
+      },
+    ],
+  },
+  {
+    // Added 17 Nov 2026 (v2.3.0): the habits locked inside a challenge,
+    // with the title snapshotted at add time (see lib/data/models.dart).
+    id: 'challenge_habits',
+    name: 'Challenge habits',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('challengeId', 64, true),
+      str('habitId', 64, true),
+      str('title', 256, true),
+    ],
+    indexes: [{ key: 'idx_challenge', type: 'key', columns: ['challengeId'] }],
+  },
+  {
+    // Added 17 Nov 2026 (v2.3.0): challenge members + their challenge
+    // XP. For the future friends leaderboard: habit logs are owner-only
+    // rows, so one client cannot read another member's logs — the
+    // member's own client writes their challenge XP here instead.
+    id: 'challenge_members',
+    name: 'Challenge members',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('challengeId', 64, true),
+      str('userId', 64, true),
+      intCol('xpEarned', false, 0),
+    ],
+    indexes: [
+      {
+        key: 'idx_challenge_member',
+        type: 'key',
+        columns: ['challengeId', 'userId'],
+      },
+    ],
   },
 ];
 

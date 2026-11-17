@@ -5,21 +5,28 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
 import '../data/models.dart';
+import '../data/reminder_repository.dart';
+import '../data/reminder_service.dart';
 import '../data/repositories.dart';
 import '../logic/quotes.dart';
+import '../logic/reminders.dart';
 import '../logic/xp.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/habit_dialog.dart';
+import '../widgets/reminder_dialog.dart';
 import 'auth_screen.dart';
+import 'challenges_screen.dart';
+import 'schedule_screen.dart';
 
 /// Home: greeting, quote, streak + XP, today's habits.
 /// The screen the user opens every day to tick things off.
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, this.habitRepo, this.profileRepo});
+  const HomeScreen({super.key, this.habitRepo, this.profileRepo, this.reminderRepo});
 
   final HabitRepository? habitRepo;
   final ProfileRepository? profileRepo;
+  final ReminderRepository? reminderRepo;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -28,9 +35,12 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   HabitRepository get _habits => widget.habitRepo ?? HabitRepository();
   ProfileRepository get _profiles => widget.profileRepo ?? ProfileRepository();
+  ReminderRepository get _reminders =>
+      widget.reminderRepo ?? ReminderRepository();
 
   List<Habit> _habitsList = [];
   Set<String> _doneToday = {};
+  Map<String, Reminder> _remindersByKey = {};
   Profile? _profile;
   bool _loading = true;
   late final ConfettiController _confetti;
@@ -39,6 +49,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // against the same stale state (see repositories.dart).
   final Set<String> _toggling = {};
   StreamSubscription<void>? _habitChanges;
+  StreamSubscription<void>? _reminderChanges;
 
   String get _today => todayKey();
 
@@ -51,12 +62,16 @@ class _HomeScreenState extends State<HomeScreen> {
     _habitChanges = HabitRepository.onChanged.listen((_) {
       if (mounted) _load();
     });
+    _reminderChanges = ReminderRepository.onChanged.listen((_) {
+      if (mounted) _load();
+    });
     _load();
   }
 
   @override
   void dispose() {
     _habitChanges?.cancel();
+    _reminderChanges?.cancel();
     _confetti.dispose();
     super.dispose();
   }
@@ -71,11 +86,20 @@ class _HomeScreenState extends State<HomeScreen> {
       final habits = await _habits.listMyHabits();
       final logs = await _habits.listLogsForDate(_today);
       final profile = await _profiles.fetchMyProfile();
+      // Reminders are best-effort: a reminder-store failure must never
+      // hide the habits (and widget tests run without a signed-in user).
+      Map<String, Reminder> reminders = {};
+      try {
+        reminders = await _reminders.remindersByTarget();
+      } catch (_) {
+        reminders = {};
+      }
       if (!mounted) return;
       setState(() {
         _habitsList = habits;
         _doneToday = logs.map((l) => l.habitId).toSet();
         _profile = profile;
+        _remindersByKey = reminders;
         _loading = false;
       });
     } on AuthException catch (e) {
@@ -165,6 +189,39 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       } else {
         return;
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  Future<void> _editReminder(Habit habit) async {
+    final existing = _remindersByKey['habit:${habit.id}'];
+    final result = await showReminderDialog(
+      context,
+      title: habit.title,
+      existing: existing,
+    );
+    if (result == null || !mounted) return;
+    try {
+      if (result.remove) {
+        await _reminders.deleteReminder('habit', habit.id);
+        await ReminderService.instance.cancelAndroidReminder(existing!);
+      } else if (result.time != null) {
+        final parsed = parseReminderTime(result.time!);
+        if (parsed == null) return;
+        final saved = await _reminders.setReminder(
+          kind: 'habit',
+          targetId: habit.id,
+          title: habit.title,
+          hour: parsed.hour,
+          minute: parsed.minute,
+          enabled: result.enabled,
+        );
+        await ReminderService.instance.scheduleAndroidReminder(saved);
+        await ReminderService.instance.ensureWebPermission();
+        await ReminderService.instance.refresh();
       }
       await _load();
     } catch (e) {
@@ -300,6 +357,38 @@ class _HomeScreenState extends State<HomeScreen> {
                           .animate()
                           .fadeIn(delay: 80.ms)
                           .slideY(begin: 0.1),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _FeatureCard(
+                              icon: Icons.schedule_outlined,
+                              title: 'Today’s Schedule',
+                              subtitle: 'Your day, in time order',
+                              gradient: AppTheme.tealGradient,
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const ScheduleScreen(),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _FeatureCard(
+                              icon: Icons.emoji_events_outlined,
+                              title: 'Challenges',
+                              subtitle: 'Lock in and compete',
+                              gradient: AppTheme.amberGradient,
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const ChallengesScreen(),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                       const SizedBox(height: 20),
                       Row(
                         children: [
@@ -369,8 +458,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                       _HabitTile(
                                             habit: habit,
                                             done: done,
+                                            reminder:
+                                                _remindersByKey['habit:${habit.id}'],
                                             onToggle: (v) => _toggle(habit, v),
                                             onEdit: () => _editHabit(habit),
+                                            onAlarm: () =>
+                                                _editReminder(habit),
                                           )
                                           .animate()
                                           .fadeIn(delay: (60 * entry.key).ms)
@@ -390,8 +483,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                 _HabitTile(
                                       habit: habit,
                                       done: done,
+                                      reminder:
+                                          _remindersByKey['habit:${habit.id}'],
                                       onToggle: (v) => _toggle(habit, v),
                                       onEdit: () => _editHabit(habit),
+                                      onAlarm: () => _editReminder(habit),
                                     )
                                     .animate()
                                     .fadeIn(delay: (60 * entry.key).ms)
@@ -622,12 +718,16 @@ class _HabitTile extends StatelessWidget {
     required this.done,
     required this.onToggle,
     required this.onEdit,
+    required this.onAlarm,
+    this.reminder,
   });
 
   final Habit habit;
   final bool done;
   final ValueChanged<bool> onToggle;
   final VoidCallback onEdit;
+  final VoidCallback onAlarm;
+  final Reminder? reminder;
 
   @override
   Widget build(BuildContext context) {
@@ -692,8 +792,40 @@ class _HabitTile extends StatelessWidget {
                         fontSize: 13,
                       ),
                     ),
+                    if (reminder != null)
+                      Text(
+                        reminder!.enabled
+                            ? 'Alarm ${formatReminderTime12h(reminder!.hour, reminder!.minute)}'
+                            : 'Alarm off',
+                        style: TextStyle(
+                          color: reminder!.enabled
+                              ? AppTheme.teal
+                              : AppTheme.inkSoft,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                   ],
                 ),
+              ),
+              IconButton(
+                onPressed: onAlarm,
+                tooltip: reminder == null
+                    ? 'Set a reminder'
+                    : 'Change reminder',
+                icon: Icon(
+                  reminder == null
+                      ? Icons.alarm_add_outlined
+                      : reminder!.enabled
+                      ? Icons.alarm_on
+                      : Icons.alarm_off,
+                  color: reminder != null && reminder!.enabled
+                      ? AppTheme.violet
+                      : AppTheme.inkSoft,
+                  size: 20,
+                ),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                padding: EdgeInsets.zero,
               ),
               IconButton(
                 onPressed: onEdit,
@@ -722,6 +854,72 @@ class _HabitTile extends StatelessWidget {
                 child: done
                     ? const Icon(Icons.check, color: Colors.white, size: 20)
                     : null,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Entry card for a feature screen (Schedule / Challenges) on Home.
+class _FeatureCard extends StatelessWidget {
+  const _FeatureCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.gradient,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Gradient gradient;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFEDEAF5)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  gradient: gradient,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: Colors.white, size: 22),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  color: AppTheme.inkSoft,
+                  fontSize: 12,
+                ),
               ),
             ],
           ),

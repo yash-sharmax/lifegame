@@ -221,3 +221,76 @@ available without a server-side function.
 - **Still pending:** Google sign-in provider (needs a Google Cloud
   OAuth client ID + secret entered in the Appwrite console, §3) and an
   Appwrite Function owning XP updates (security hardening, §6).
+
+## 9. v2.3.0 — Alarms, Daily Schedule, Challenge Mode (2026-11-17)
+
+### What shipped
+- **Alarms / reminders:** every habit and weekly/monthly task can have
+  a daily time (HH:MM) + on/off, set from the habit tile (Home), the
+  Schedule screen, or the reminder dialog. Delivery, honestly split:
+  - *In-app (all platforms):* while the app is open, a 30-second timer
+    fires each due reminder once a day — a violet banner at the top of
+    the app (tap to open the Schedule) plus, on web, a browser
+    Notification when permission was granted.
+  - *Android exact alarms:* on Android each saved reminder also
+    schedules an exact daily alarm (`flutter_local_notifications`,
+    `exactAllowWhileIdle`, `SCHEDULE_EXACT_ALARM` + `POST_NOTIFICATIONS`
+    in the manifest) that fires even with the app closed. Permissions
+    are requested best-effort; a denial only disables this channel.
+  - *Web honesty:* web reminders do NOT fire while the app is closed.
+    The UI says so wherever reminders are set.
+- **Daily Schedule screen** (Home → "Today's Schedule"): today's
+  habits + this week's weekly tasks + this month's monthly tasks in
+  time order (untimed items last), each with its time, alarm button
+  and the same check-off as Home (+2 XP / -2 on untick). Day progress
+  (done/total) at the top.
+- **Challenge Mode** (Home → "Challenges"): create a challenge with a
+  name, a duration (7/14/21/30 days or custom 1–365) and habits picked
+  from the user's own habits. Rules (see `lib/logic/challenges.dart`):
+  - 3-day setup window from creation: habits can still change.
+  - After that, habits LOCK for the whole challenge duration; the
+    challenge runs for `durationDays` starting the day after setup.
+  - Daily habits outside a challenge stay fully flexible.
+  - Check-ins reuse the normal habit toggles; challenge XP is the sum
+    of `xpEarned` on the existing habit logs for the locked habits
+    inside the active window — there is no second XP system.
+  - Detail screen: phase (Setup / Active / Finished), days remaining,
+    progress ring, challenge XP + streak + days completed, locked
+    habits with today's check-off, leaderboard.
+  - Leaderboard is solo for now: habit logs are owner-only rows, so
+    one client cannot read another user's logs. The model already
+    carries `memberIds` so friends can join later (with a shared
+    challenge-XP row) without a schema change.
+
+### Local fallback — read this before assuming the tables exist
+- The API key was **not** available when v2.3.0 was built, so the four
+  new tables (`reminders`, `challenges`, `challenge_habits`,
+  `challenge_members`) could **not** be created. They are defined in
+  `scripts/setup_appwrite.mjs` — re-run it with the key to create them.
+- Until then, reminders + challenges persist **on-device only**
+  (SharedPreferences / browser localStorage). Consequences:
+  - They do not sync across devices or browsers; clearing site data
+    loses them.
+  - Signing out clears that account's local reminders/challenges, so
+    another account on the same device never inherits them.
+- No existing table was touched: the 9 original tables are unchanged
+  (schema and data). All new data lives in the local store (and, once
+  created, in the 4 new tables — same shape as the local models).
+
+### Tables (defined in the setup script, not yet created)
+- `reminders`: ownerUid, kind (`habit`|`weekly`|`monthly`), targetId,
+  title, hour, minute, enabled. Index `idx_owner_target`.
+- `challenges`: ownerUid, name, createdDate, durationDays, memberIds
+  (string array). Index `idx_owner_created`.
+- `challenge_habits`: challengeId, habitId, title (snapshot).
+  Index `idx_challenge`.
+- `challenge_members`: challengeId, userId, xpEarned (for the future
+  friends leaderboard — each member's own client writes their XP).
+  Index `idx_challenge_member`.
+
+### Live backend status (2026-11-17)
+- **Live app:** v2.3.0+8 at `https://yashx.xyz/lifegame`.
+- **Still pending (unchanged):** Google sign-in provider and the
+  Appwrite Function owning XP updates (§6). New: creating the four
+  v2.3.0 tables (re-run the setup script with the API key) and moving
+  reminders/challenges from local storage to them.

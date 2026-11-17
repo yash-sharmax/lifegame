@@ -1,4 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- v2.3.0 reminders: exact daily alarms + notification permission.
+         A denial only disables the Android alarm channel — in-app
+         reminders still work. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
     <application
         android:label="lifegame"
         android:name="${applicationName}"
