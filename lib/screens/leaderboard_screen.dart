@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 
 import '../data/models.dart';
 import '../data/repositories.dart';
+import '../logic/xp.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import 'auth_screen.dart';
@@ -79,7 +80,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
             child: Row(
               children: [
                 const Text(
-                  'Leaderboard',
+                  'Hall of Warriors',
                   style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
                 ),
                 const Spacer(),
@@ -95,18 +96,18 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: AppTheme.card,
                 borderRadius: BorderRadius.circular(16),
               ),
               child: TabBar(
                 controller: _tabs,
                 dividerColor: Colors.transparent,
                 indicator: BoxDecoration(
-                  gradient: AppTheme.violetGradient,
+                  gradient: AppTheme.emberGradient,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 indicatorSize: TabBarIndicatorSize.tab,
-                labelColor: Colors.white,
+                labelColor: AppTheme.ink,
                 unselectedLabelColor: AppTheme.inkSoft,
                 labelStyle: const TextStyle(fontWeight: FontWeight.w700),
                 tabs: const [
@@ -118,7 +119,18 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
           ),
           Expanded(
             child: _loading
-                ? const Center(child: CircularProgressIndicator())
+                ? ListView(
+                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 100),
+                    children: const [
+                      SkeletonBox(height: 70, borderRadius: 18),
+                      SizedBox(height: 10),
+                      SkeletonBox(height: 70, borderRadius: 18),
+                      SizedBox(height: 10),
+                      SkeletonBox(height: 70, borderRadius: 18),
+                      SizedBox(height: 10),
+                      SkeletonBox(height: 70, borderRadius: 18),
+                    ],
+                  )
                 : TabBarView(
                     controller: _tabs,
                     children: [
@@ -173,7 +185,7 @@ class _BoardList extends StatelessWidget {
             entry: entry,
             isMe: isMe,
             onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(
+              WarriorPageRoute(
                 builder: (_) => UserProfileScreen(profile: profile),
               ),
             ),
@@ -205,8 +217,10 @@ class _LeaderboardRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final profile = entry.profile;
+    final level = levelForXp(profile.xp);
+    final rank = rankNameForLevel(level);
     return Material(
-      color: isMe ? AppTheme.violet.withValues(alpha: 0.08) : Colors.white,
+      color: isMe ? AppTheme.ember.withValues(alpha: 0.08) : AppTheme.card,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         onTap: onTap,
@@ -217,8 +231,8 @@ class _LeaderboardRow extends StatelessWidget {
             borderRadius: BorderRadius.circular(18),
             border: Border.all(
               color: isMe
-                  ? AppTheme.violet.withValues(alpha: 0.4)
-                  : const Color(0xFFEDEAF5),
+                  ? AppTheme.ember.withValues(alpha: 0.4)
+                  : AppTheme.cardBorder,
             ),
           ),
           child: Row(
@@ -247,12 +261,49 @@ class _LeaderboardRow extends StatelessWidget {
                           : profile.displayName,
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    Text(
-                      '@${profile.username}',
-                      style: const TextStyle(
-                        color: AppTheme.inkSoft,
-                        fontSize: 13,
-                      ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Text(
+                          '@${profile.username}',
+                          style: const TextStyle(
+                            color: AppTheme.inkSoft,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        // Warrior rank chip: who is at what level is
+                        // visible right on the row (18 Nov 2026).
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.ember.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.shield,
+                                color: AppTheme.ember,
+                                size: 12,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'LVL $level • ${rank.toUpperCase()}',
+                                style: const TextStyle(
+                                  color: AppTheme.ember,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -269,7 +320,7 @@ class _LeaderboardRow extends StatelessWidget {
                     children: [
                       const Icon(
                         Icons.local_fire_department,
-                        color: Colors.deepOrange,
+                        color: AppTheme.flame,
                         size: 15,
                       ),
                       Text(

@@ -1,9 +1,9 @@
-// Daily Schedule (v2.3.0): today's habits plus this week's weekly
+// Daily Schedule (v2.4.0): today's habits plus this week's weekly
 // tasks and this month's monthly tasks, in time order.
 //
 // Each row shows its reminder time (when set), an alarm button to set
 // or change it, and the same check-off as Home — completing grants
-// +2 XP, unticking removes 2 (never below 0), using the existing
+// +2 XP, unticking removes 1 (never below 0), using the existing
 // repositories. Done items stay visible with a filled check and no
 // strikethrough, like everywhere else in the app.
 //
@@ -26,6 +26,7 @@ import '../logic/reminders.dart';
 import '../logic/xp.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/habit_dialog.dart';
 import '../widgets/reminder_dialog.dart';
 import 'auth_screen.dart';
 
@@ -35,7 +36,7 @@ class _ScheduleItem {
     required this.id,
     required this.title,
     required this.done,
-    this.color = 0xFF7C3AED,
+    this.color = 0xFFF59E0B,
   });
 
   /// 'habit' | 'weekly' | 'monthly'.
@@ -50,11 +51,11 @@ class _ScheduleItem {
   String get kindLabel {
     switch (kind) {
       case 'weekly':
-        return 'Weekly task';
+        return 'Weekly mission';
       case 'monthly':
-        return 'Monthly task';
+        return 'Monthly mission';
       default:
-        return 'Habit';
+        return 'Battle';
     }
   }
 }
@@ -85,12 +86,27 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   Map<String, Reminder> _remindersByKey = {};
   bool _loading = true;
   final Set<String> _toggling = {};
+  // Strike counter per item: bumped on every completion so the slash
+  // sweep (StrikeOverlay) replays for that tile.
+  final Map<String, int> _strikeKeys = {};
   StreamSubscription<void>? _reminderChanges;
+  StreamSubscription<void>? _habitChanges;
+  StreamSubscription<void>? _taskChanges;
 
   @override
   void initState() {
     super.initState();
     _reminderChanges = ReminderRepository.onChanged.listen((_) {
+      if (mounted) _load(silent: true);
+    });
+    // A habit or task added/deleted anywhere (Home, Profile, or this
+    // screen's own Add button) must show up here immediately — the
+    // old screen only listened to reminder changes, so new habits
+    // appeared only after a manual reload (fixed 18 Nov 2026).
+    _habitChanges = HabitRepository.onChanged.listen((_) {
+      if (mounted) _load(silent: true);
+    });
+    _taskChanges = TaskRepository.onChanged.listen((_) {
       if (mounted) _load(silent: true);
     });
     _load();
@@ -99,6 +115,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   @override
   void dispose() {
     _reminderChanges?.cancel();
+    _habitChanges?.cancel();
+    _taskChanges?.cancel();
     super.dispose();
   }
 
@@ -196,6 +214,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         done: value,
         color: item.color,
       );
+      if (value) {
+        _strikeKeys[item.key] = (_strikeKeys[item.key] ?? 0) + 1;
+      }
     });
     _toggling.add(item.key);
     try {
@@ -223,6 +244,21 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       }
     } finally {
       _toggling.remove(item.key);
+    }
+  }
+
+  /// Add a habit from the Schedule screen: the same creation flow as
+  /// Home (see widgets/habit_dialog.dart). The habit-change
+  /// subscription reloads the list, so the new habit appears here
+  /// immediately — no manual reload.
+  Future<void> _addHabit() async {
+    final result = await showAddHabitDialog(context);
+    if (result == null || !mounted) return;
+    try {
+      await _habits.addHabit(title: result.title, color: result.color);
+      await _load(silent: true);
+    } catch (e) {
+      if (mounted) showError(context, e);
     }
   }
 
@@ -286,15 +322,35 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Today’s Schedule',
+          'Battle Plan',
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
         backgroundColor: Colors.transparent,
+        actions: [
+          IconButton(
+            onPressed: _addHabit,
+            icon: const Icon(Icons.add),
+            tooltip: 'Add a battle',
+          ),
+        ],
       ),
       body: ResponsiveCenter(
         maxWidth: 720,
         child: _loading
-            ? const Center(child: CircularProgressIndicator())
+            ? ListView(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+                children: const [
+                  SkeletonBox(width: 140, height: 16),
+                  SizedBox(height: 12),
+                  SkeletonBox(height: 110, borderRadius: 20),
+                  SizedBox(height: 20),
+                  SkeletonBox(height: 76, borderRadius: 20),
+                  SizedBox(height: 12),
+                  SkeletonBox(height: 76, borderRadius: 20),
+                  SizedBox(height: 12),
+                  SkeletonBox(height: 76, borderRadius: 20),
+                ],
+              )
             : RefreshIndicator(
                 onRefresh: () => _load(),
                 child: ListView(
@@ -312,9 +368,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                     Container(
                       padding: const EdgeInsets.all(18),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: AppTheme.card,
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: const Color(0xFFEDEAF5)),
+                        border: Border.all(color: AppTheme.cardBorder),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -322,7 +378,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                           Row(
                             children: [
                               const Text(
-                                'Day progress',
+                                'Battle progress',
                                 style: TextStyle(
                                   fontSize: 17,
                                   fontWeight: FontWeight.w800,
@@ -335,7 +391,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                                   vertical: 5,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: AppTheme.violet.withValues(
+                                  color: AppTheme.ember.withValues(
                                     alpha: 0.1,
                                   ),
                                   borderRadius: BorderRadius.circular(999),
@@ -343,7 +399,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                                 child: Text(
                                   '$done/$total done',
                                   style: const TextStyle(
-                                    color: AppTheme.violet,
+                                    color: AppTheme.ember,
                                     fontWeight: FontWeight.w700,
                                     fontSize: 13,
                                   ),
@@ -357,9 +413,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                             child: LinearProgressIndicator(
                               value: fraction,
                               minHeight: 8,
-                              backgroundColor: const Color(0xFFEDEAF5),
+                              backgroundColor: AppTheme.ember.withValues(alpha: 0.18),
                               valueColor: const AlwaysStoppedAnimation<Color>(
-                                AppTheme.teal,
+                                AppTheme.ember,
                               ),
                             ),
                           ),
@@ -369,10 +425,12 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                     const SizedBox(height: 20),
                     if (items.isEmpty)
                       EmptyState(
-                        icon: Icons.schedule_outlined,
-                        title: 'Nothing scheduled today',
+                        icon: Icons.flag_outlined,
+                        title: 'No battles scheduled today',
                         subtitle:
-                            'Add a habit from Home and it will show up here with its time.',
+                            'Add a battle below and it will show up here with its time.',
+                        actionLabel: 'Add a battle',
+                        onAction: _addHabit,
                       )
                     else
                       ...items.map((item) {
@@ -382,16 +440,23 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                           child: _ScheduleTile(
                             item: item,
                             reminder: reminder,
+                            strikeKey: _strikeKeys[item.key] ?? 0,
                             onToggle: (v) => _toggle(item, v),
                             onAlarm: () => _editReminder(item),
                           ),
                         );
                       }),
                     const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: _addHabit,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add habit'),
+                    ),
+                    const SizedBox(height: 8),
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: AppTheme.violet.withValues(alpha: 0.06),
+                        color: AppTheme.ember.withValues(alpha: 0.06),
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Row(
@@ -399,7 +464,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                         children: [
                           const Icon(
                             Icons.info_outline,
-                            color: AppTheme.violet,
+                            color: AppTheme.ember,
                             size: 20,
                           ),
                           const SizedBox(width: 10),
@@ -436,12 +501,17 @@ class _ScheduleTile extends StatelessWidget {
     required this.reminder,
     required this.onToggle,
     required this.onAlarm,
+    this.strikeKey = 0,
   });
 
   final _ScheduleItem item;
   final Reminder? reminder;
   final ValueChanged<bool> onToggle;
   final VoidCallback onAlarm;
+
+  /// Bumped on every completion — drives the slash sweep (see
+  /// StrikeOverlay). 0 means "never completed yet".
+  final int strikeKey;
 
   @override
   Widget build(BuildContext context) {
@@ -451,131 +521,120 @@ class _ScheduleTile extends StatelessWidget {
     final gradient =
         AppTheme.habitGradients[item.color % AppTheme.habitGradients.length];
     return Material(
-      color: Colors.white,
+      color: AppTheme.card,
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
         onTap: () => onToggle(!item.done),
         borderRadius: BorderRadius.circular(20),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: item.done
-                  ? Colors.transparent
-                  : const Color(0xFFEDEAF5),
+        child: Stack(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: item.done
+                      ? Colors.transparent
+                      : AppTheme.cardBorder,
+                ),
+                color: item.done ? AppTheme.ember.withValues(alpha: 0.06) : null,
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      gradient: gradient,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(
+                      item.kind == 'habit'
+                          ? Icons.check_circle_outline
+                          : Icons.task_alt_outlined,
+                      color: AppTheme.ink,
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.title,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.ink,
+                          ),
+                        ),
+                        Text(
+                          item.done
+                              ? '${item.kindLabel} • Done • +$xpPerTask XP'
+                              : '${item.kindLabel} • Tap to complete • +$xpPerTask XP',
+                          style: const TextStyle(
+                            color: AppTheme.inkSoft,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (r != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: r.enabled
+                            ? AppTheme.ember.withValues(alpha: 0.12)
+                            : AppTheme.cardBorder,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        formatReminderTime12h(r.hour, r.minute),
+                        style: TextStyle(
+                          color: r.enabled ? AppTheme.ember : AppTheme.inkSoft,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    )
+                  else
+                    TextButton.icon(
+                      onPressed: onAlarm,
+                      icon: const Icon(Icons.alarm_add_outlined, size: 18),
+                      label: const Text('Set time'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppTheme.ember,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                    ),
+                  if (r != null)
+                    IconButton(
+                      onPressed: onAlarm,
+                      tooltip: r.enabled
+                          ? 'Change reminder'
+                          : 'Reminder off — tap to change',
+                      icon: Icon(
+                        r.enabled ? Icons.alarm_on : Icons.alarm_off,
+                        color: r.enabled ? AppTheme.ember : AppTheme.inkSoft,
+                        size: 22,
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 36,
+                        minHeight: 36,
+                      ),
+                      padding: EdgeInsets.zero,
+                    ),
+                  BattleCheck(done: item.done),
+                ],
+              ),
             ),
-            color: item.done ? AppTheme.violet.withValues(alpha: 0.06) : null,
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  gradient: gradient,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(
-                  item.kind == 'habit'
-                      ? Icons.check_circle_outline
-                      : Icons.task_alt_outlined,
-                  color: Colors.white,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      item.title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.ink,
-                      ),
-                    ),
-                    Text(
-                      item.done
-                          ? '${item.kindLabel} • Done • +$xpPerTask XP'
-                          : '${item.kindLabel} • Tap to complete • +$xpPerTask XP',
-                      style: const TextStyle(
-                        color: AppTheme.inkSoft,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (r != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 9,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: r.enabled
-                        ? AppTheme.teal.withValues(alpha: 0.12)
-                        : const Color(0xFFEDEAF5),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    formatReminderTime12h(r.hour, r.minute),
-                    style: TextStyle(
-                      color: r.enabled ? AppTheme.teal : AppTheme.inkSoft,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12,
-                    ),
-                  ),
-                )
-              else
-                TextButton.icon(
-                  onPressed: onAlarm,
-                  icon: const Icon(Icons.alarm_add_outlined, size: 18),
-                  label: const Text('Set time'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppTheme.violet,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                  ),
-                ),
-              if (r != null)
-                IconButton(
-                  onPressed: onAlarm,
-                  tooltip: r.enabled
-                      ? 'Change reminder'
-                      : 'Reminder off — tap to change',
-                  icon: Icon(
-                    r.enabled ? Icons.alarm_on : Icons.alarm_off,
-                    color: r.enabled ? AppTheme.violet : AppTheme.inkSoft,
-                    size: 22,
-                  ),
-                  constraints: const BoxConstraints(
-                    minWidth: 36,
-                    minHeight: 36,
-                  ),
-                  padding: EdgeInsets.zero,
-                ),
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                curve: Curves.easeOutBack,
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: item.done ? AppTheme.tealGradient : null,
-                  color: item.done ? null : Colors.white,
-                  border: item.done
-                      ? null
-                      : Border.all(color: const Color(0xFFD8D2EA), width: 2),
-                ),
-                child: item.done
-                    ? const Icon(Icons.check, color: Colors.white, size: 20)
-                    : null,
-              ),
-            ],
-          ),
+            StrikeOverlay(strikeKey: strikeKey),
+          ],
         ),
       ),
     );

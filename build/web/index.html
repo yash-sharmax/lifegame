@@ -18,13 +18,13 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="Life Game — habit tracker. Win your day, level up your life.">
+  <meta name="description" content="Life Game — habit tracker. Every day is a battle. Win it.">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="Life Game">
-  <meta name="theme-color" content="#7C3AED">
+  <meta name="theme-color" content="#0E0C13">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
@@ -32,8 +32,91 @@
 
   <title>Life Game — Habit Tracker</title>
   <link rel="manifest" href="manifest.json">
+  <style>
+    /* Instant splash (18 Nov 2026): the page must never show a blank
+       white screen while Flutter loads. Dark war-room background,
+       shield logo, app name and a loading bar — painted by the
+       browser before any Dart runs. Removed on flutter-first-frame. */
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #0E0C13;
+      height: 100%;
+    }
+    #splash {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #0E0C13;
+      color: #F4EFE6;
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      z-index: 9999;
+    }
+    #splash .shield {
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.06); opacity: 0.92; }
+    }
+    #splash .name {
+      margin-top: 20px;
+      font-size: 28px;
+      font-weight: 900;
+      letter-spacing: 4px;
+    }
+    #splash .tag {
+      margin-top: 8px;
+      font-size: 15px;
+      color: #A39EB8;
+    }
+    #splash .bar {
+      margin-top: 28px;
+      width: 160px;
+      height: 4px;
+      border-radius: 999px;
+      background: #2E2942;
+      overflow: hidden;
+    }
+    #splash .bar > div {
+      height: 100%;
+      width: 40%;
+      border-radius: 999px;
+      background: #F59E0B;
+      animation: slide 1.2s ease-in-out infinite;
+    }
+    @keyframes slide {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(400%); }
+    }
+  </style>
 </head>
 <body>
+  <div id="splash">
+    <svg class="shield" width="84" height="84" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <defs>
+        <linearGradient id="splash-shield" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#D97706"/>
+          <stop offset="0.5" stop-color="#DC2626"/>
+          <stop offset="1" stop-color="#7F1D1D"/>
+        </linearGradient>
+      </defs>
+      <path d="M12 2 L20 5 V11 C20 16.5 16.5 20.5 12 22 C7.5 20.5 4 16.5 4 11 V5 Z" fill="url(#splash-shield)"/>
+      <path d="M12 6.5 L15.5 8 V11 C15.5 13.6 14 15.4 12 16.4 C10 15.4 8.5 13.6 8.5 11 V8 Z" fill="#0E0C13" opacity="0.35"/>
+    </svg>
+    <div class="name">LIFE GAME</div>
+    <div class="tag">Sharpening swords&hellip;</div>
+    <div class="bar"><div></div></div>
+  </div>
+  <script>
+    window.addEventListener('flutter-first-frame', function () {
+      var s = document.getElementById('splash');
+      if (s) s.remove();
+    });
+  </script>
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader

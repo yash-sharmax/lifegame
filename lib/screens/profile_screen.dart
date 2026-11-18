@@ -376,14 +376,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
             children: [
               Text('• Add habits on the Home tab and tick them off each day.'),
               SizedBox(height: 8),
-              Text('• Every completion is +2 XP. Unticking takes 2 XP back.'),
+              Text('• Every completion is +2 XP. Unticking takes 1 XP back.'),
               SizedBox(height: 8),
               Text('• Level = XP ÷ 100 + 1. A level takes 50 completions.'),
+              SizedBox(height: 8),
+              Text(
+                '• Your level also gives you a warrior rank — Recruit, Warrior, Knight, Champion, Warlord, Legend.',
+              ),
               SizedBox(height: 8),
               Text('• Streak = days in a row with at least one habit done.'),
               SizedBox(height: 8),
               Text(
-                '• Weekly and monthly tasks live here, on Profile — they give XP too, but no streak.',
+                '• Weekly and monthly missions live here, on Profile — they give XP too, but no streak.',
               ),
               SizedBox(height: 8),
               Text(
@@ -453,7 +457,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: const Text('Cancel'),
             ),
             FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              style: FilledButton.styleFrom(backgroundColor: AppTheme.flame),
               onPressed: understood
                   ? () => Navigator.of(context).pop(true)
                   : null,
@@ -484,7 +488,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     // Weekly / monthly task sections, shared by the mobile (stacked)
     // and desktop (side-by-side) layouts below.
     final weeklySection = _TaskSection(
-      title: 'Weekly tasks',
+      title: 'Weekly missions',
       subtitle: 'This week • +2 XP each',
       items: _weekly
           .map((t) => _TaskItem(id: t.id, title: t.title, done: t.done))
@@ -497,7 +501,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       onAdd: () => _addTask(weekly: true),
     );
     final monthlySection = _TaskSection(
-      title: 'Monthly tasks',
+      title: 'Monthly missions',
       subtitle: 'This month • +2 XP each',
       items: _monthly
           .map((t) => _TaskItem(id: t.id, title: t.title, done: t.done))
@@ -537,11 +541,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ).animate().fadeIn().slideY(begin: -0.1),
                 const SizedBox(height: 8),
                 if (_loading)
-                  const Center(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 48),
-                      child: CircularProgressIndicator(),
-                    ),
+                  const Column(
+                    children: [
+                      SkeletonBox(height: 170, borderRadius: 20),
+                      SizedBox(height: 16),
+                      SkeletonBox(height: 130, borderRadius: 20),
+                      SizedBox(height: 24),
+                      SkeletonBox(height: 76, borderRadius: 20),
+                      SizedBox(height: 12),
+                      SkeletonBox(height: 76, borderRadius: 20),
+                    ],
                   )
                 else if (profile == null)
                   const EmptyState(
@@ -563,7 +572,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       .slideY(begin: 0.1),
                   const SizedBox(height: 24),
                   _SectionTitle(
-                    title: 'My habits',
+                    title: 'My Arsenal',
                     count: _habitsList.length,
                     onAdd: () => Navigator.of(context).push(
                       MaterialPageRoute(builder: (_) => const _AddHabitHint()),
@@ -575,7 +584,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: Padding(
                         padding: EdgeInsets.all(18),
                         child: Text(
-                          'No habits yet — add your first one from the Home tab.',
+                          'No battles yet — add your first one from the Home tab.',
                           style: TextStyle(color: AppTheme.inkSoft),
                         ),
                       ),
@@ -659,18 +668,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           leading: Icon(Icons.info_outline),
                           title: Text('About Life Game'),
                           subtitle: Text(
-                            'Version 2.3.0+8 • Flutter • Appwrite',
+                            'Version 2.4.0+9 • Flutter • Appwrite',
                           ),
                         ),
                         const Divider(height: 1),
                         ListTile(
                           leading: const Icon(
                             Icons.delete_forever,
-                            color: Colors.red,
+                            color: AppTheme.flame,
                           ),
                           title: const Text(
                             'Delete account',
-                            style: TextStyle(color: Colors.red),
+                            style: TextStyle(color: AppTheme.flame),
                           ),
                           subtitle: const Text(
                             'Removes your account and all your data',
@@ -679,10 +688,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ),
                         const Divider(height: 1),
                         ListTile(
-                          leading: const Icon(Icons.logout, color: Colors.red),
+                          leading: const Icon(Icons.logout, color: AppTheme.flame),
                           title: const Text(
                             'Log out',
-                            style: TextStyle(color: Colors.red),
+                            style: TextStyle(color: AppTheme.flame),
                           ),
                           onTap: _signOut,
                         ),
@@ -818,7 +827,7 @@ class _FeedbackSectionState extends State<_FeedbackSection> {
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                      color: Colors.white,
+                      color: AppTheme.ink,
                       strokeWidth: 2,
                     ),
                   )
@@ -832,18 +841,18 @@ class _FeedbackSectionState extends State<_FeedbackSection> {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
-              color: AppTheme.teal.withValues(alpha: 0.1),
+              color: AppTheme.ember.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(14),
             ),
             child: const Row(
               children: [
-                Icon(Icons.check_circle, color: AppTheme.teal, size: 20),
+                Icon(Icons.check_circle, color: AppTheme.ember, size: 20),
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Thank you — your feedback was sent.',
                     style: TextStyle(
-                      color: AppTheme.teal,
+                      color: AppTheme.ember,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -920,8 +929,36 @@ class _ProfileHeader extends StatelessWidget {
             Text(
               '@${profile.username}',
               style: const TextStyle(
-                color: AppTheme.violet,
+                color: AppTheme.ember,
                 fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 10),
+            // Warrior rank chip: the level's title, right under the name.
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 6,
+              ),
+              decoration: BoxDecoration(
+                gradient: AppTheme.heroGradient,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.shield, color: AppTheme.ink, size: 15),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Level ${levelForXp(profile.xp)} • '
+                    '${rankNameForLevel(levelForXp(profile.xp))}',
+                    style: const TextStyle(
+                      color: AppTheme.ink,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
               ),
             ),
             if (profile.bio.isNotEmpty) ...[
@@ -994,13 +1031,13 @@ class _SectionTitle extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
           decoration: BoxDecoration(
-            color: AppTheme.violet.withValues(alpha: 0.1),
+            color: AppTheme.ember.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(999),
           ),
           child: Text(
             '$count',
             style: const TextStyle(
-              color: AppTheme.violet,
+              color: AppTheme.ember,
               fontWeight: FontWeight.w700,
               fontSize: 13,
             ),
@@ -1029,7 +1066,7 @@ class _HabitRow extends StatelessWidget {
     final gradient =
         AppTheme.habitGradients[habit.color % AppTheme.habitGradients.length];
     return Material(
-      color: Colors.white,
+      color: AppTheme.card,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         onTap: onTap,
@@ -1038,7 +1075,7 @@ class _HabitRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: const Color(0xFFEDEAF5)),
+            border: Border.all(color: AppTheme.cardBorder),
           ),
           child: Row(
             children: [
@@ -1051,7 +1088,7 @@ class _HabitRow extends StatelessWidget {
                 ),
                 child: const Icon(
                   Icons.check_circle_outline,
-                  color: Colors.white,
+                  color: AppTheme.ink,
                   size: 20,
                 ),
               ),
@@ -1147,7 +1184,7 @@ class _TaskSection extends StatelessWidget {
                     // no strikethrough — the filled checkbox and the
                     // subtle tint are the done state.
                     tileColor: items[i].done
-                        ? AppTheme.violet.withValues(alpha: 0.05)
+                        ? AppTheme.ember.withValues(alpha: 0.05)
                         : null,
                     title: Text(
                       items[i].title,
@@ -1186,7 +1223,7 @@ class _AddHabitHint extends StatelessWidget {
         padding: EdgeInsets.all(24),
         child: Text(
           'Add habits from the Home tab — tap the "Add habit" button under '
-          "today's list.",
+          "today's list — or from the Battle Plan, with the + button.",
           style: TextStyle(fontSize: 16),
         ),
       ),
@@ -1229,7 +1266,7 @@ class UserProfileScreen extends StatelessWidget {
             '@${profile.username}',
             textAlign: TextAlign.center,
             style: const TextStyle(
-              color: AppTheme.violet,
+              color: AppTheme.ember,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -1248,7 +1285,7 @@ class UserProfileScreen extends StatelessWidget {
                 child: _StatBox(
                   label: 'XP',
                   value: '${profile.xp}',
-                  gradient: AppTheme.violetGradient,
+                  gradient: AppTheme.emberGradient,
                 ),
               ),
               const SizedBox(width: 12),
@@ -1256,7 +1293,7 @@ class UserProfileScreen extends StatelessWidget {
                 child: _StatBox(
                   label: 'Streak',
                   value: '${profile.currentStreak} days',
-                  gradient: AppTheme.amberGradient,
+                  gradient: AppTheme.goldGradient,
                 ),
               ),
               const SizedBox(width: 12),
@@ -1264,7 +1301,7 @@ class UserProfileScreen extends StatelessWidget {
                 child: _StatBox(
                   label: 'Best streak',
                   value: '${profile.longestStreak} days',
-                  gradient: AppTheme.pinkGradient,
+                  gradient: AppTheme.flameGradient,
                 ),
               ),
             ],
@@ -1277,7 +1314,8 @@ class UserProfileScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Level ${profile.xp ~/ 100 + 1}',
+                    'Level ${levelForXp(profile.xp)} • '
+                    '${rankNameForLevel(levelForXp(profile.xp))}',
                     style: const TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.w800,
@@ -1326,7 +1364,7 @@ class _StatBox extends StatelessWidget {
           Text(
             value,
             style: const TextStyle(
-              color: Colors.white,
+              color: AppTheme.ink,
               fontWeight: FontWeight.w800,
               fontSize: 17,
             ),

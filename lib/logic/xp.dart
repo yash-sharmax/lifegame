@@ -3,25 +3,47 @@
 // These functions are deliberately free of any backend dependency so they
 // can be unit-tested (see test/xp_test.dart).
 //
-// Rules (agreed with the user, 14 Nov 2026):
-// - +2 XP for every habit/task completion, and -2 XP when a completed
+// Rules (agreed with the user, 14 Nov 2026; untick rule changed
+// 18 Nov 2026):
+// - +2 XP for every habit/task completion, and -1 XP when a completed
 //   item is unticked again (never below 0). No daily-complete bonus.
 // - Streak = consecutive days (local calendar dates, Asia/Kolkata on the
 //   user's device) with at least 1 habit completed.
 // - Level = floor(total XP / 100) + 1. At 2 XP per task a level takes
 //   50 completions. Progress to the next level is (XP % 100) / 100.
+// - Warrior rank: a named title for each level band, shown on profiles
+//   and the leaderboard (18 Nov 2026).
 
-/// XP granted for completing one habit or task (and removed on untick).
+/// XP granted for completing one habit or task.
 const int xpPerTask = 2;
+
+/// XP removed when a completed item is unticked again (18 Nov 2026:
+/// the untick penalty is 1, not 2 — unticking is forgiven more than
+/// completing is rewarded).
+const int xpPerUntick = 1;
 const int xpPerLevel = 100;
 
+/// Warrior rank names, by level band. A warrior's title is how the
+/// app talks about levels: "Level 4 Warrior", not just a number.
+String rankNameForLevel(int level) {
+  if (level <= 2) return 'Recruit';
+  if (level <= 4) return 'Warrior';
+  if (level <= 6) return 'Knight';
+  if (level <= 8) return 'Champion';
+  if (level <= 10) return 'Warlord';
+  return 'Legend';
+}
+
+/// Rank name for a given total XP.
+String rankNameForXp(int xp) => rankNameForLevel(levelForXp(xp));
+
 /// XP delta for toggling an item: +2 on completing a pending item,
-/// -2 on unticking a done item, 0 when nothing actually changes.
+/// -1 on unticking a done item, 0 when nothing actually changes.
 /// Single source of truth for the plus/minus rule — repositories and
 /// UI both use it so the stored XP can never drift from the log.
 int xpDeltaForToggle({required bool completing, required bool wasDone}) {
   if (completing && !wasDone) return xpPerTask;
-  if (!completing && wasDone) return -xpPerTask;
+  if (!completing && wasDone) return -xpPerUntick;
   return 0;
 }
 

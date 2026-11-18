@@ -1,7 +1,7 @@
 name: lifegame
-description: "Life Game — habit tracker. Win your day, level up your life."
+description: "Life Game — habit tracker. Every day is a battle. Win it."
 publish_to: 'none'
-version: 2.3.0+8
+version: 2.4.0+9
 
 environment:
   sdk: ^3.13.7

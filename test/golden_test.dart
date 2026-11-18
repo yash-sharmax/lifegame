@@ -19,7 +19,7 @@ void main() {
   }
 
   Widget app(Widget child) => MaterialApp(
-    theme: AppTheme.light,
+    theme: AppTheme.dark,
     home: Scaffold(body: child),
   );
 

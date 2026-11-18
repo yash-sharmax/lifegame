@@ -1,8 +1,8 @@
-// Challenge detail (v2.3.0): status, progress, locked habits with
+// Challenge detail (v2.4.0): status, progress, locked habits with
 // today's check-ins, and the leaderboard.
 //
 // Check-ins reuse the normal habit toggles (+2 XP per completion,
-// -2 on untick) — challenge XP is computed from the existing habit
+// -1 on untick) — challenge XP is computed from the existing habit
 // logs inside the active window, never from a second XP system.
 library;
 
@@ -18,6 +18,7 @@ import '../logic/challenges.dart';
 import '../logic/xp.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/habit_dialog.dart';
 import 'auth_screen.dart';
 
 class ChallengeDetailScreen extends StatefulWidget {
@@ -48,12 +49,21 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
   Set<String> _doneToday = {};
   bool _loading = true;
   final Set<String> _toggling = {};
+  // Strike counter per habit: bumped on every completion so the slash
+  // sweep (StrikeOverlay) replays for that tile.
+  final Map<String, int> _strikeKeys = {};
   StreamSubscription<void>? _changes;
+  StreamSubscription<void>? _habitChanges;
 
   @override
   void initState() {
     super.initState();
     _changes = ChallengeRepository.onChanged.listen((_) {
+      if (mounted) _load(silent: true);
+    });
+    // A habit added anywhere (e.g. from the edit dialog here) must
+    // refresh this screen's habit list too.
+    _habitChanges = HabitRepository.onChanged.listen((_) {
       if (mounted) _load(silent: true);
     });
     _load();
@@ -62,6 +72,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
   @override
   void dispose() {
     _changes?.cancel();
+    _habitChanges?.cancel();
     super.dispose();
   }
 
@@ -102,6 +113,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
     setState(() {
       if (value) {
         _doneToday.add(entry.habitId);
+        _strikeKeys[entry.habitId] = (_strikeKeys[entry.habitId] ?? 0) + 1;
       } else {
         _doneToday.remove(entry.habitId);
       }
@@ -134,6 +146,8 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
     final challenge = _challenge;
     if (challenge == null) return;
     final selected = challenge.habitIds.toSet();
+    // Local copy: the dialog can grow it when the user adds a habit.
+    final dialogHabits = List<Habit>.from(_myHabits);
     final result = await showDialog<List<ChallengeHabitEntry>>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -145,22 +159,43 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              children: _myHabits
-                  .map(
-                    (habit) => CheckboxListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(habit.title),
-                      value: selected.contains(habit.id),
-                      onChanged: (v) => setDialogState(() {
-                        if (v == true) {
-                          selected.add(habit.id);
-                        } else {
-                          selected.remove(habit.id);
-                        }
-                      }),
-                    ),
-                  )
-                  .toList(),
+              children: [
+                ...dialogHabits.map(
+                  (habit) => CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(habit.title),
+                    value: selected.contains(habit.id),
+                    onChanged: (v) => setDialogState(() {
+                      if (v == true) {
+                        selected.add(habit.id);
+                      } else {
+                        selected.remove(habit.id);
+                      }
+                    }),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final added = await showAddHabitDialog(context);
+                    if (added == null) return;
+                    try {
+                      final habit = await _habits.addHabit(
+                        title: added.title,
+                        color: added.color,
+                      );
+                      setDialogState(() {
+                        dialogHabits.add(habit);
+                        selected.add(habit.id);
+                      });
+                    } catch (e) {
+                      if (context.mounted) showError(context, e);
+                    }
+                  },
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add a new habit'),
+                ),
+              ],
             ),
           ),
           actions: [
@@ -170,7 +205,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(
-                _myHabits
+                dialogHabits
                     .where((h) => selected.contains(h.id))
                     .map(
                       (h) => ChallengeHabitEntry(habitId: h.id, title: h.title),
@@ -212,7 +247,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
             onPressed: () => Navigator.of(context).pop(true),
             child: const Text(
               'Delete',
-              style: TextStyle(color: Colors.red),
+              style: TextStyle(color: AppTheme.flame),
             ),
           ),
         ],
@@ -234,7 +269,22 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
     if (_loading || challenge == null) {
       return Scaffold(
         appBar: AppBar(backgroundColor: Colors.transparent),
-        body: const Center(child: CircularProgressIndicator()),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+          children: const [
+            SkeletonBox(height: 150, borderRadius: 20),
+            SizedBox(height: 20),
+            SkeletonBox(width: 180, height: 24),
+            SizedBox(height: 12),
+            SkeletonBox(height: 76, borderRadius: 20),
+            SizedBox(height: 12),
+            SkeletonBox(height: 76, borderRadius: 20),
+            SizedBox(height: 20),
+            SkeletonBox(width: 220, height: 24),
+            SizedBox(height: 12),
+            SkeletonBox(height: 130, borderRadius: 20),
+          ],
+        ),
       );
     }
     final phase = challengePhase(
@@ -276,7 +326,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
           IconButton(
             onPressed: _delete,
             tooltip: 'Delete challenge',
-            icon: const Icon(Icons.delete_outline, color: Colors.red),
+            icon: const Icon(Icons.delete_outline, color: AppTheme.flame),
           ),
         ],
       ),
@@ -310,7 +360,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                           Text(
                             phaseLabel,
                             style: const TextStyle(
-                              color: Colors.white,
+                              color: AppTheme.ink,
                               fontWeight: FontWeight.w700,
                               fontSize: 15,
                             ),
@@ -321,7 +371,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                                 ? 'Setup ends $setupEnd • Challenge runs $start to $end'
                                 : '$start to $end • ${challenge.durationDays} days',
                             style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.85),
+                              color: AppTheme.ink.withValues(alpha: 0.85),
                               fontSize: 13,
                             ),
                           ),
@@ -329,7 +379,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                           Text(
                             '${stats?.xp ?? 0} challenge XP • ${stats?.streak ?? 0}-day streak • ${stats?.daysCompleted ?? 0} days completed',
                             style: const TextStyle(
-                              color: Colors.white,
+                              color: AppTheme.ink,
                               fontWeight: FontWeight.w700,
                               fontSize: 13,
                             ),
@@ -343,9 +393,15 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
               const SizedBox(height: 20),
               Row(
                 children: [
-                  const Text(
-                    'Locked habits',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                  // The heading names the phase: habits are only "locked"
+                  // once the setup window ends (18 Nov 2026 fix — it
+                  // used to say "Locked habits" even while editing).
+                  Text(
+                    locked ? 'Locked habits' : 'Challenge habits',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                   const Spacer(),
                   Container(
@@ -354,13 +410,13 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                       vertical: 5,
                     ),
                     decoration: BoxDecoration(
-                      color: AppTheme.violet.withValues(alpha: 0.1),
+                      color: AppTheme.ember.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: Text(
                       '$doneTodayCount/${challenge.habits.length} done today',
                       style: const TextStyle(
-                        color: AppTheme.violet,
+                        color: AppTheme.ember,
                         fontWeight: FontWeight.w700,
                         fontSize: 13,
                       ),
@@ -385,97 +441,82 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: Material(
-                    color: Colors.white,
+                    color: AppTheme.card,
                     borderRadius: BorderRadius.circular(20),
                     child: InkWell(
                       onTap: gone || phase == ChallengePhase.finished
                           ? null
                           : () => _toggle(entry, !done),
                       borderRadius: BorderRadius.circular(20),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 14,
-                        ),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: done
-                                ? Colors.transparent
-                                : const Color(0xFFEDEAF5),
-                          ),
-                          color: done
-                              ? AppTheme.violet.withValues(alpha: 0.06)
-                              : null,
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 46,
-                              height: 46,
-                              decoration: BoxDecoration(
-                                gradient: AppTheme.tealGradient,
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: const Icon(
-                                Icons.check_circle_outline,
-                                color: Colors.white,
-                                size: 24,
-                              ),
+                      child: Stack(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 14,
                             ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    entry.title,
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppTheme.ink,
-                                    ),
-                                  ),
-                                  Text(
-                                    gone
-                                        ? 'Habit removed — kept here for history'
-                                        : done
-                                        ? 'Done today • +$xpPerTask XP'
-                                        : 'Tap to complete • +$xpPerTask XP',
-                                    style: const TextStyle(
-                                      color: AppTheme.inkSoft,
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ],
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: done
+                                    ? Colors.transparent
+                                    : AppTheme.cardBorder,
                               ),
-                            ),
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 250),
-                              curve: Curves.easeOutBack,
-                              width: 34,
-                              height: 34,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: done ? AppTheme.tealGradient : null,
-                                color: done ? null : Colors.white,
-                                border: done
-                                    ? null
-                                    : Border.all(
-                                        color: const Color(0xFFD8D2EA),
-                                        width: 2,
-                                      ),
-                              ),
-                              child: done
-                                  ? const Icon(
-                                      Icons.check,
-                                      color: Colors.white,
-                                      size: 20,
-                                    )
+                              color: done
+                                  ? AppTheme.ember.withValues(alpha: 0.06)
                                   : null,
                             ),
-                          ],
-                        ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 46,
+                                  height: 46,
+                                  decoration: BoxDecoration(
+                                    gradient: AppTheme.emberGradient,
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: const Icon(
+                                    Icons.check_circle_outline,
+                                    color: AppTheme.ink,
+                                    size: 24,
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        entry.title,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppTheme.ink,
+                                        ),
+                                      ),
+                                      Text(
+                                        gone
+                                            ? 'Habit removed — kept here for history'
+                                            : done
+                                            ? 'Done today • +$xpPerTask XP'
+                                            : 'Tap to complete • +$xpPerTask XP',
+                                        style: const TextStyle(
+                                          color: AppTheme.inkSoft,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                BattleCheck(done: done),
+                              ],
+                            ),
+                          ),
+                          StrikeOverlay(
+                            strikeKey: _strikeKeys[entry.habitId] ?? 0,
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -496,7 +537,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
               ),
               const SizedBox(height: 4),
               const Text(
-                'Ranked by XP earned on the challenge habits during the challenge.',
+                'Ranked by XP earned on the challenge battles during the challenge.',
                 style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
               ),
               const SizedBox(height: 12),
@@ -506,13 +547,13 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                     for (final entry in _leaderboard)
                       ListTile(
                         leading: CircleAvatar(
-                          backgroundColor: AppTheme.violet.withValues(
+                          backgroundColor: AppTheme.ember.withValues(
                             alpha: 0.12,
                           ),
                           child: Text(
                             '#${entry.rank}',
                             style: const TextStyle(
-                              color: AppTheme.violet,
+                              color: AppTheme.ember,
                               fontWeight: FontWeight.w800,
                             ),
                           ),
@@ -531,7 +572,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                       ),
                     const Divider(height: 1),
                     const ListTile(
-                      leading: Icon(Icons.info_outline, color: AppTheme.violet),
+                      leading: Icon(Icons.info_outline, color: AppTheme.ember),
                       title: Text(
                         'Solo challenge — only your XP shows here for now.',
                         style: TextStyle(

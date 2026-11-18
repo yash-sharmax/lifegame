@@ -1,4 +1,4 @@
-// Challenges (v2.3.0): list of challenges + create flow.
+// Challenges (v2.4.0): list of challenges + create flow.
 //
 // A challenge is a named, time-boxed commitment over a fixed set of
 // habits. The first 3 days after creation are the setup window —
@@ -19,6 +19,7 @@ import '../logic/challenges.dart';
 import '../logic/xp.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/habit_dialog.dart';
 import 'auth_screen.dart';
 import 'challenge_detail_screen.dart';
 
@@ -81,11 +82,14 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
     try {
       final habits = await _habits.listMyHabits();
       if (!mounted) return;
-      if (habits.isEmpty) {
-        showInfo(context, 'Add a habit first — a challenge needs habits.');
-        return;
-      }
-      final created = await showCreateChallengeSheet(context, habits);
+      // No "add a habit first" gate: the sheet itself lets the user
+      // create a habit inline (18 Nov 2026), so a challenge can start
+      // from zero habits.
+      final created = await showCreateChallengeSheet(
+        context,
+        habits,
+        habitRepo: _habits,
+      );
       if (created == null || !mounted) return;
       await _challenges.createChallenge(
         name: created.name,
@@ -94,7 +98,7 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
       );
       await _load(silent: true);
       if (!mounted) return;
-      showInfo(context, 'Challenge created — 3 days to set it up.');
+      showInfo(context, 'Campaign started — 3 days to set it up.');
     } catch (e) {
       if (mounted) showError(context, e);
     }
@@ -105,7 +109,7 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Challenges',
+          'Campaigns',
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
         backgroundColor: Colors.transparent,
@@ -113,12 +117,21 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _create,
         icon: const Icon(Icons.add),
-        label: const Text('New challenge'),
+        label: const Text('New campaign'),
       ),
       body: ResponsiveCenter(
         maxWidth: 720,
         child: _loading
-            ? const Center(child: CircularProgressIndicator())
+            ? ListView(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+                children: const [
+                  SkeletonBox(height: 86, borderRadius: 16),
+                  SizedBox(height: 20),
+                  SkeletonBox(height: 130, borderRadius: 20),
+                  SizedBox(height: 12),
+                  SkeletonBox(height: 130, borderRadius: 20),
+                ],
+              )
             : RefreshIndicator(
                 onRefresh: () => _load(),
                 child: ListView(
@@ -127,7 +140,7 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: AppTheme.violet.withValues(alpha: 0.06),
+                        color: AppTheme.ember.withValues(alpha: 0.06),
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: const Row(
@@ -135,15 +148,15 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
                         children: [
                           Icon(
                             Icons.info_outline,
-                            color: AppTheme.violet,
+                            color: AppTheme.ember,
                             size: 20,
                           ),
                           SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'Pick your habits and a duration. You get 3 days to '
-                              'change the habits — after that they lock for the '
-                              'whole challenge. Daily habits outside a challenge '
+                              'Choose your battles and a duration. You get 3 days to '
+                              'change the battles — after that they lock for the '
+                              'whole campaign. Daily battles outside a campaign '
                               'can still change any time.',
                               style: TextStyle(
                                 color: AppTheme.inkSoft,
@@ -158,11 +171,11 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
                     const SizedBox(height: 20),
                     if (_list.isEmpty)
                       EmptyState(
-                        icon: Icons.emoji_events_outlined,
-                        title: 'No challenges yet',
+                        icon: Icons.flag_outlined,
+                        title: 'No campaigns yet',
                         subtitle:
-                            'Start your first challenge — pick habits, set the days, and lock in.',
-                        actionLabel: 'Create a challenge',
+                            'Start your first campaign — pick battles, set the days, and lock in.',
+                        actionLabel: 'Start a campaign',
                         onAction: _create,
                       )
                     else
@@ -174,7 +187,7 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
                             challenge: challenge,
                             onTap: () async {
                               await Navigator.of(context).push(
-                                MaterialPageRoute(
+                                WarriorPageRoute(
                                   builder: (_) => ChallengeDetailScreen(
                                     challengeId: challenge.id,
                                   ),
@@ -221,13 +234,13 @@ class _ChallengeCard extends StatelessWidget {
     final (badgeLabel, badgeColor) = switch (phase) {
       ChallengePhase.setup => (
         'Setup — locks in ${daysBetweenKeys(todayKey(), start)}d',
-        AppTheme.amber,
+        AppTheme.gold,
       ),
-      ChallengePhase.active => ('Active — $remaining days left', AppTheme.teal),
+      ChallengePhase.active => ('Active — $remaining days left', AppTheme.ember),
       ChallengePhase.finished => ('Finished', AppTheme.inkSoft),
     };
     return Material(
-      color: Colors.white,
+      color: AppTheme.card,
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
         onTap: onTap,
@@ -236,7 +249,7 @@ class _ChallengeCard extends StatelessWidget {
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFEDEAF5)),
+            border: Border.all(color: AppTheme.cardBorder),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -247,12 +260,12 @@ class _ChallengeCard extends StatelessWidget {
                     width: 46,
                     height: 46,
                     decoration: BoxDecoration(
-                      gradient: AppTheme.violetGradient,
+                      gradient: AppTheme.emberGradient,
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: const Icon(
-                      Icons.emoji_events,
-                      color: Colors.white,
+                      Icons.flag,
+                      color: AppTheme.ink,
                       size: 24,
                     ),
                   ),
@@ -270,7 +283,7 @@ class _ChallengeCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '${challenge.habits.length} habits • ${challenge.durationDays} days • $start to $end',
+                          '${challenge.habits.length} battles • ${challenge.durationDays} days • $start to $end',
                           style: const TextStyle(
                             color: AppTheme.inkSoft,
                             fontSize: 13,
@@ -291,7 +304,7 @@ class _ChallengeCard extends StatelessWidget {
                 child: LinearProgressIndicator(
                   value: progress,
                   minHeight: 8,
-                  backgroundColor: const Color(0xFFEDEAF5),
+                  backgroundColor: AppTheme.ember.withValues(alpha: 0.18),
                   valueColor: AlwaysStoppedAnimation<Color>(badgeColor),
                 ),
               ),
@@ -336,16 +349,22 @@ class CreateChallengeResult {
 }
 
 /// Bottom sheet to create a challenge: name, duration picker
-/// (7/14/21/30 days or custom), habit multi-select.
+/// (7/14/21/30 days or custom), habit multi-select — plus an inline
+/// "Add a new habit" row (18 Nov 2026): the user is not limited to
+/// picking existing habits. A habit created here is added to the list
+/// and auto-selected immediately.
 Future<CreateChallengeResult?> showCreateChallengeSheet(
   BuildContext context,
-  List<Habit> habits,
-) async {
+  List<Habit> habits, {
+  required HabitRepository habitRepo,
+}) async {
   final nameController = TextEditingController();
   var duration = 14;
   var customDays = '';
   final selected = <String>{};
   final customController = TextEditingController();
+  // Local copy: the sheet can grow it when the user adds a habit.
+  final sheetHabits = List<Habit>.from(habits);
 
   return showModalBottomSheet<CreateChallengeResult>(
     context: context,
@@ -367,12 +386,12 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'New challenge',
+                'New campaign',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 4),
               const Text(
-                '3 days to set up your habits — then they lock for the whole challenge.',
+                '3 days to set up your battles — then they lock for the whole campaign.',
                 style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
               ),
               const SizedBox(height: 16),
@@ -380,7 +399,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                 controller: nameController,
                 autofocus: true,
                 decoration: const InputDecoration(
-                  labelText: 'Challenge name',
+                  labelText: 'Campaign name',
                   hintText: 'e.g. 14-Day Focus',
                 ),
               ),
@@ -426,11 +445,19 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
               ],
               const SizedBox(height: 18),
               const Text(
-                'Habits in this challenge',
+                'Battles in this campaign',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 6),
-              ...habits.map(
+              if (sheetHabits.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'No battles yet — add one below to start your first campaign.',
+                    style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+                  ),
+                ),
+              ...sheetHabits.map(
                 (habit) => CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
                   title: Text(habit.title),
@@ -443,6 +470,27 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                     }
                   }),
                 ),
+              ),
+              const SizedBox(height: 4),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  final added = await showAddHabitDialog(context);
+                  if (added == null) return;
+                  try {
+                    final habit = await habitRepo.addHabit(
+                      title: added.title,
+                      color: added.color,
+                    );
+                    setSheetState(() {
+                      sheetHabits.add(habit);
+                      selected.add(habit.id);
+                    });
+                  } catch (e) {
+                    if (context.mounted) showError(context, e);
+                  }
+                },
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add a new habit'),
               ),
               const SizedBox(height: 12),
               SizedBox(
@@ -468,7 +516,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                     if (name.isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Give your challenge a name.'),
+                          content: Text('Give your campaign a name.'),
                         ),
                       );
                       return;
@@ -476,7 +524,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                     if (selected.isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Pick at least one habit.'),
+                          content: Text('Pick at least one battle.'),
                         ),
                       );
                       return;
@@ -485,7 +533,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                       CreateChallengeResult(
                         name: name,
                         durationDays: days,
-                        habits: habits
+                        habits: sheetHabits
                             .where((h) => selected.contains(h.id))
                             .map(
                               (h) => ChallengeHabitEntry(
@@ -497,7 +545,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                       ),
                     );
                   },
-                  child: const Text('Create challenge'),
+                  child: const Text('Start campaign'),
                 ),
               ),
             ],

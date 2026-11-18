@@ -48,6 +48,9 @@ class _HomeScreenState extends State<HomeScreen> {
   // first toggle is saving is ignored, so two toggles can never run
   // against the same stale state (see repositories.dart).
   final Set<String> _toggling = {};
+  // Strike counter per habit: bumped on every completion so the slash
+  // sweep (StrikeOverlay) replays for that tile.
+  final Map<String, int> _strikeKeys = {};
   StreamSubscription<void>? _habitChanges;
   StreamSubscription<void>? _reminderChanges;
 
@@ -137,6 +140,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       if (value) {
         _doneToday.add(habit.id);
+        _strikeKeys[habit.id] = (_strikeKeys[habit.id] ?? 0) + 1;
       } else {
         _doneToday.remove(habit.id);
       }
@@ -180,8 +184,8 @@ class _HomeScreenState extends State<HomeScreen> {
       if (result.action == HabitEditAction.save && result.title.isNotEmpty) {
         await _habits.updateHabit(habit, title: result.title);
       } else if (result.action == HabitEditAction.delete) {
-        // Deleting removes the habit's logs and takes back today's +2
-        // XP when the habit is done today (see HabitRepository).
+        // Deleting removes the habit's logs and takes back 1 XP for
+        // today when the habit is done today (see HabitRepository).
         await _habits.deleteHabit(habit.id);
         if (!mounted) return;
         showInfo(context, 'Habit deleted.');
@@ -230,89 +234,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _addHabit() async {
-    final titleController = TextEditingController();
-    var color = AppTheme.habitGradients.first.colors.first.toARGB32();
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-          ),
-          title: const Text('Add a habit'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleController,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Habit name',
-                  hintText: 'e.g. Read 10 pages',
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Pick a colour',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 10,
-                children: AppTheme.habitGradients.map((g) {
-                  final c = g.colors.first.toARGB32();
-                  final selected = c == color;
-                  return GestureDetector(
-                    onTap: () => setDialogState(() => color = c),
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        gradient: g,
-                        shape: BoxShape.circle,
-                        border: selected
-                            ? Border.all(color: AppTheme.ink, width: 2.5)
-                            : null,
-                      ),
-                      child: selected
-                          ? const Icon(
-                              Icons.check,
-                              color: Colors.white,
-                              size: 20,
-                            )
-                          : null,
-                    ),
-                  );
-                }).toList(),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Add'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (saved == true && titleController.text.trim().isNotEmpty) {
-      try {
-        await _habits.addHabit(
-          title: titleController.text.trim(),
-          color: color,
-        );
-        await _load();
-      } catch (e) {
-        if (mounted) showError(context, e);
-      }
+    // One shared creation flow (see widgets/habit_dialog.dart) — the
+    // same dialog Schedule uses, so habits behave identically.
+    final result = await showAddHabitDialog(context);
+    if (result == null || !mounted) return;
+    try {
+      await _habits.addHabit(title: result.title, color: result.color);
+      await _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
     }
   }
 
@@ -320,11 +250,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final profile = _profile;
     final streak = profile?.currentStreak ?? 0;
-    final xp = profile?.xp ?? 0;
     final wide = isWideScreen(context);
 
-    // The XP bar is pinned above the scrollable list, so the user's
-    // current XP (and level) is visible at the top at all times.
+    // No XP bar here (18 Nov 2026): the level lives on Profile now.
+    // Home is about today's battles — greeting, war cry, feature
+    // cards and the habit list.
     return ResponsiveCenter(
       maxWidth: 980,
       child: Stack(
@@ -339,14 +269,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ).animate().fadeIn().slideY(begin: -0.1),
               ),
               const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: XpBar(xp: xp)
-                    .animate()
-                    .fadeIn(delay: 60.ms)
-                    .slideY(begin: 0.1),
-              ),
-              const SizedBox(height: 16),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: _load,
@@ -362,12 +284,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           Expanded(
                             child: _FeatureCard(
-                              icon: Icons.schedule_outlined,
-                              title: 'Today’s Schedule',
-                              subtitle: 'Your day, in time order',
-                              gradient: AppTheme.tealGradient,
+                              icon: Icons.map_outlined,
+                              title: 'Battle Plan',
+                              subtitle: 'Your battles, in time order',
+                              gradient: AppTheme.emberGradient,
                               onTap: () => Navigator.of(context).push(
-                                MaterialPageRoute(
+                                WarriorPageRoute(
                                   builder: (_) => const ScheduleScreen(),
                                 ),
                               ),
@@ -376,12 +298,12 @@ class _HomeScreenState extends State<HomeScreen> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: _FeatureCard(
-                              icon: Icons.emoji_events_outlined,
-                              title: 'Challenges',
-                              subtitle: 'Lock in and compete',
-                              gradient: AppTheme.amberGradient,
+                              icon: Icons.flag_outlined,
+                              title: 'Campaigns',
+                              subtitle: 'Pick a campaign, fight it out',
+                              gradient: AppTheme.goldGradient,
                               onTap: () => Navigator.of(context).push(
-                                MaterialPageRoute(
+                                WarriorPageRoute(
                                   builder: (_) => const ChallengesScreen(),
                                 ),
                               ),
@@ -394,7 +316,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           const Flexible(
                             child: Text(
-                              "Today's habits",
+                              "Today's Battles",
                               style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w800,
@@ -410,13 +332,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                 vertical: 5,
                               ),
                               decoration: BoxDecoration(
-                                color: AppTheme.violet.withValues(alpha: 0.1),
+                                color: AppTheme.ember.withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
                                 '${_doneToday.length}/${_habitsList.length} done',
                                 style: const TextStyle(
-                                  color: AppTheme.violet,
+                                  color: AppTheme.ember,
                                   fontWeight: FontWeight.w700,
                                   fontSize: 13,
                                 ),
@@ -426,18 +348,25 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 12),
                       if (_loading)
-                        const Center(
-                          child: Padding(
-                            padding: EdgeInsets.symmetric(vertical: 48),
-                            child: CircularProgressIndicator(),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Column(
+                            children: [
+                              SkeletonBox(height: 76, borderRadius: 20),
+                              SizedBox(height: 12),
+                              SkeletonBox(height: 76, borderRadius: 20),
+                              SizedBox(height: 12),
+                              SkeletonBox(height: 76, borderRadius: 20),
+                            ],
                           ),
                         )
                       else if (_habitsList.isEmpty)
                         EmptyState(
                           icon: Icons.flag_outlined,
-                          title: 'Your journey starts here',
-                          subtitle: 'No habits yet. Add your first one — small steps, big change.',
-                          actionLabel: 'Add your first habit',
+                          title: 'Your first battle awaits',
+                          subtitle:
+                              'No battles yet. Add your first one — small wins, big change.',
+                          actionLabel: 'Add your first battle',
                           onAction: _addHabit,
                         )
                       else if (wide)
@@ -458,6 +387,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                       _HabitTile(
                                             habit: habit,
                                             done: done,
+                                            strikeKey:
+                                                _strikeKeys[habit.id] ?? 0,
                                             reminder:
                                                 _remindersByKey['habit:${habit.id}'],
                                             onToggle: (v) => _toggle(habit, v),
@@ -483,6 +414,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 _HabitTile(
                                       habit: habit,
                                       done: done,
+                                      strikeKey: _strikeKeys[habit.id] ?? 0,
                                       reminder:
                                           _remindersByKey['habit:${habit.id}'],
                                       onToggle: (v) => _toggle(habit, v),
@@ -505,22 +437,22 @@ class _HomeScreenState extends State<HomeScreen> {
                         Container(
                           padding: const EdgeInsets.all(18),
                           decoration: BoxDecoration(
-                            gradient: AppTheme.amberGradient,
+                            gradient: AppTheme.goldGradient,
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: const Row(
                             children: [
                               Icon(
                                 Icons.emoji_events,
-                                color: Colors.white,
+                                color: AppTheme.ink,
                                 size: 34,
                               ),
                               SizedBox(width: 12),
                               Expanded(
                                 child: Text(
-                                  'Day complete! Every habit ticked.',
+                                  'Victory! Every battle won today.',
                                   style: TextStyle(
-                                    color: Colors.white,
+                                    color: AppTheme.ink,
                                     fontWeight: FontWeight.w700,
                                     fontSize: 15,
                                   ),
@@ -547,10 +479,10 @@ class _HomeScreenState extends State<HomeScreen> {
               numberOfParticles: 60,
               gravity: 0.25,
               colors: const [
-                AppTheme.violet,
-                AppTheme.pink,
-                AppTheme.amber,
-                AppTheme.teal,
+                AppTheme.ember,
+                AppTheme.flame,
+                AppTheme.gold,
+                AppTheme.ember,
               ],
             ),
           ),
@@ -619,7 +551,7 @@ class _Header extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppTheme.card,
             borderRadius: BorderRadius.circular(999),
             boxShadow: [
               BoxShadow(
@@ -634,7 +566,7 @@ class _Header extends StatelessWidget {
             children: [
               const Icon(
                 Icons.local_fire_department,
-                color: Colors.deepOrange,
+                color: AppTheme.flame,
                 size: 22,
               ),
               const SizedBox(width: 4),
@@ -653,10 +585,10 @@ class _Header extends StatelessWidget {
   }
 }
 
-/// The line of the day: one motivational line, the same all day,
+/// The war cry of the day: one motivational line, the same all day,
 /// picked deterministically from the date (see logic/quotes.dart).
-/// Shown prominently on Home so the user sees today's line every time
-/// they open the app.
+/// Shown prominently on Home so the user sees today's war cry every
+/// time they open the app.
 class _DailyLineCard extends StatelessWidget {
   const _DailyLineCard({required this.line});
 
@@ -675,12 +607,12 @@ class _DailyLineCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.auto_awesome, color: Colors.white70, size: 16),
+              Icon(Icons.auto_awesome, color: AppTheme.ink.withValues(alpha: 0.7), size: 16),
               const SizedBox(width: 6),
               Text(
-                'LINE OF THE DAY',
+                'WAR CRY OF THE DAY',
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.9),
+                  color: AppTheme.ink.withValues(alpha: 0.9),
                   fontWeight: FontWeight.w800,
                   fontSize: 11,
                   letterSpacing: 1.4,
@@ -692,13 +624,13 @@ class _DailyLineCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.format_quote, color: Colors.white70, size: 30),
+              Icon(Icons.format_quote, color: AppTheme.ink.withValues(alpha: 0.7), size: 30),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   line,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: AppTheme.ink,
                     fontSize: 17,
                     fontWeight: FontWeight.w700,
                   ),
@@ -720,6 +652,7 @@ class _HabitTile extends StatelessWidget {
     required this.onEdit,
     required this.onAlarm,
     this.reminder,
+    this.strikeKey = 0,
   });
 
   final Habit habit;
@@ -729,12 +662,16 @@ class _HabitTile extends StatelessWidget {
   final VoidCallback onAlarm;
   final Reminder? reminder;
 
+  /// Bumped on every completion — drives the slash sweep (see
+  /// StrikeOverlay). 0 means "never completed yet".
+  final int strikeKey;
+
   @override
   Widget build(BuildContext context) {
     final gradient =
         AppTheme.habitGradients[habit.color % AppTheme.habitGradients.length];
     return Material(
-      color: Colors.white,
+      color: AppTheme.card,
       borderRadius: BorderRadius.circular(20),
       elevation: 0,
       child: InkWell(
@@ -743,120 +680,115 @@ class _HabitTile extends StatelessWidget {
         // Profile offers — a habit card must always have a delete path.
         onLongPress: onEdit,
         borderRadius: BorderRadius.circular(20),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: done ? Colors.transparent : const Color(0xFFEDEAF5),
-            ),
-            color: done ? AppTheme.violet.withValues(alpha: 0.06) : null,
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  gradient: gradient,
-                  borderRadius: BorderRadius.circular(14),
+        child: Stack(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: done ? Colors.transparent : AppTheme.cardBorder,
                 ),
-                child: const Icon(
-                  Icons.check_circle_outline,
-                  color: Colors.white,
-                  size: 24,
-                ),
+                color: done ? AppTheme.ember.withValues(alpha: 0.06) : null,
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      habit.title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        // Done items stay fully readable: no
-                        // strikethrough — the filled check circle and
-                        // the tinted tile are the done state.
-                        color: AppTheme.ink,
-                      ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      gradient: gradient,
+                      borderRadius: BorderRadius.circular(14),
                     ),
-                    Text(
-                      done
-                          ? 'Done • +$xpPerTask XP'
-                          : 'Tap to complete • +$xpPerTask XP',
-                      style: const TextStyle(
-                        color: AppTheme.inkSoft,
-                        fontSize: 13,
-                      ),
+                    child: const Icon(
+                      Icons.check_circle_outline,
+                      color: AppTheme.ink,
+                      size: 24,
                     ),
-                    if (reminder != null)
-                      Text(
-                        reminder!.enabled
-                            ? 'Alarm ${formatReminderTime12h(reminder!.hour, reminder!.minute)}'
-                            : 'Alarm off',
-                        style: TextStyle(
-                          color: reminder!.enabled
-                              ? AppTheme.teal
-                              : AppTheme.inkSoft,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          habit.title,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            // Done items stay fully readable: no
+                            // strikethrough — the filled check circle and
+                            // the tinted tile are the done state.
+                            color: AppTheme.ink,
+                          ),
                         ),
-                      ),
-                  ],
-                ),
+                        Text(
+                          done
+                              ? 'Done • +$xpPerTask XP'
+                              : 'Tap to complete • +$xpPerTask XP',
+                          style: const TextStyle(
+                            color: AppTheme.inkSoft,
+                            fontSize: 13,
+                          ),
+                        ),
+                        if (reminder != null)
+                          Text(
+                            reminder!.enabled
+                                ? 'Alarm ${formatReminderTime12h(reminder!.hour, reminder!.minute)}'
+                                : 'Alarm off',
+                            style: TextStyle(
+                              color: reminder!.enabled
+                                  ? AppTheme.ember
+                                  : AppTheme.inkSoft,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: onAlarm,
+                    tooltip: reminder == null
+                        ? 'Set a reminder'
+                        : 'Change reminder',
+                    icon: Icon(
+                      reminder == null
+                          ? Icons.alarm_add_outlined
+                          : reminder!.enabled
+                          ? Icons.alarm_on
+                          : Icons.alarm_off,
+                      color: reminder != null && reminder!.enabled
+                          ? AppTheme.ember
+                          : AppTheme.inkSoft,
+                      size: 20,
+                    ),
+                    constraints: const BoxConstraints(
+                      minWidth: 32,
+                      minHeight: 32,
+                    ),
+                    padding: EdgeInsets.zero,
+                  ),
+                  IconButton(
+                    onPressed: onEdit,
+                    tooltip: 'Edit or delete habit',
+                    icon: const Icon(
+                      Icons.more_vert,
+                      color: AppTheme.inkSoft,
+                      size: 20,
+                    ),
+                    constraints: const BoxConstraints(
+                      minWidth: 32,
+                      minHeight: 32,
+                    ),
+                    padding: EdgeInsets.zero,
+                  ),
+                  BattleCheck(done: done),
+                ],
               ),
-              IconButton(
-                onPressed: onAlarm,
-                tooltip: reminder == null
-                    ? 'Set a reminder'
-                    : 'Change reminder',
-                icon: Icon(
-                  reminder == null
-                      ? Icons.alarm_add_outlined
-                      : reminder!.enabled
-                      ? Icons.alarm_on
-                      : Icons.alarm_off,
-                  color: reminder != null && reminder!.enabled
-                      ? AppTheme.violet
-                      : AppTheme.inkSoft,
-                  size: 20,
-                ),
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                padding: EdgeInsets.zero,
-              ),
-              IconButton(
-                onPressed: onEdit,
-                tooltip: 'Edit or delete habit',
-                icon: const Icon(
-                  Icons.more_vert,
-                  color: AppTheme.inkSoft,
-                  size: 20,
-                ),
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                padding: EdgeInsets.zero,
-              ),
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                curve: Curves.easeOutBack,
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: done ? AppTheme.tealGradient : null,
-                  color: done ? null : Colors.white,
-                  border: done
-                      ? null
-                      : Border.all(color: const Color(0xFFD8D2EA), width: 2),
-                ),
-                child: done
-                    ? const Icon(Icons.check, color: Colors.white, size: 20)
-                    : null,
-              ),
-            ],
-          ),
+            ),
+            StrikeOverlay(strikeKey: strikeKey),
+          ],
         ),
       ),
     );
@@ -882,7 +814,7 @@ class _FeatureCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.white,
+      color: AppTheme.card,
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
         onTap: onTap,
@@ -891,7 +823,7 @@ class _FeatureCard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFEDEAF5)),
+            border: Border.all(color: AppTheme.cardBorder),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -903,7 +835,7 @@ class _FeatureCard extends StatelessWidget {
                   gradient: gradient,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(icon, color: Colors.white, size: 22),
+                child: Icon(icon, color: AppTheme.ink, size: 22),
               ),
               const SizedBox(height: 10),
               Text(

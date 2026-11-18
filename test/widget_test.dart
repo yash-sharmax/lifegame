@@ -16,7 +16,8 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
 
     expect(find.text('Welcome back'), findsOneWidget);
-    expect(find.text('Continue with Google'), findsOneWidget);
+    // "Continue with Google" was removed (18 Nov 2026): email only.
+    expect(find.text('Continue with Google'), findsNothing);
     expect(find.text('Log in'), findsWidgets);
   });
 
@@ -53,11 +54,13 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
-    expect(find.text('Your journey starts here'), findsOneWidget);
-    expect(find.text('Add your first habit'), findsOneWidget);
+    expect(find.text('Your first battle awaits'), findsOneWidget);
+    expect(find.text('Add your first battle'), findsOneWidget);
   });
 
-  testWidgets('home shows XP at the top', (tester) async {
+  testWidgets('home no longer shows the level bar (it lives on Profile)', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -70,9 +73,33 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // XP is pinned at the top (XpBar), not buried in Profile.
-    expect(find.text('42 XP'), findsOneWidget);
+    // The level bar moved off Home to Profile (18 Nov 2026): Home
+    // shows no XP or level at all.
+    expect(find.text('LEVEL 1'), findsNothing);
+    expect(find.text('42 XP'), findsNothing);
+    expect(find.text('42 / 100 XP to Level 2'), findsNothing);
+  });
+
+  testWidgets('profile shows the level bar with warrior rank', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ProfileScreen(
+            profileRepo: _FullProfileRepo(),
+            habitRepo: _EmptyHabitRepo(),
+            taskRepo: _EmptyTaskRepo(),
+            socialRepo: _SocialCountsRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
     expect(find.text('LEVEL 1'), findsOneWidget);
+    expect(find.text('RECRUIT'), findsOneWidget);
+    expect(find.text('42 XP'), findsOneWidget);
     // "X / 100 XP to Level N": how much of this level is done, out of
     // how much (user feedback, 14 Nov 2026).
     expect(find.text('42 / 100 XP to Level 2'), findsOneWidget);
@@ -162,7 +189,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Read 10 pages'), findsOneWidget);
-    expect(find.text('42 XP'), findsOneWidget);
   });
 
   testWidgets('a rapid second tap does not start a second toggle', (
@@ -339,7 +365,7 @@ void main() {
     expect(find.text('Send feedback'), findsOneWidget);
     expect(find.text('Delete account'), findsOneWidget);
     expect(find.text('Log out'), findsOneWidget);
-    expect(find.text('Version 2.3.0+8 • Flutter • Appwrite'), findsOneWidget);
+    expect(find.text('Version 2.4.0+9 • Flutter • Appwrite'), findsOneWidget);
   });
 
   testWidgets('feedback form sends a message and shows a thank-you', (

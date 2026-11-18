@@ -44,7 +44,7 @@ Future<ReminderDialogResult?> showReminderDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         title: Row(
           children: [
-            const Icon(Icons.alarm, color: AppTheme.violet),
+            const Icon(Icons.alarm, color: AppTheme.ember),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -80,12 +80,12 @@ Future<ReminderDialogResult?> showReminderDialog(
                   vertical: 14,
                 ),
                 decoration: BoxDecoration(
-                  color: AppTheme.violet.withValues(alpha: 0.08),
+                  color: AppTheme.ember.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.schedule, color: AppTheme.violet),
+                    const Icon(Icons.schedule, color: AppTheme.ember),
                     const SizedBox(width: 12),
                     Text(
                       formatReminderTime12h(selected.hour, selected.minute),
@@ -98,7 +98,7 @@ Future<ReminderDialogResult?> showReminderDialog(
                     const Text(
                       'Change',
                       style: TextStyle(
-                        color: AppTheme.violet,
+                        color: AppTheme.ember,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -129,7 +129,7 @@ Future<ReminderDialogResult?> showReminderDialog(
               ),
               child: const Text(
                 'Remove',
-                style: TextStyle(color: Colors.red),
+                style: TextStyle(color: AppTheme.flame),
               ),
             ),
           TextButton(

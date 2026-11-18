@@ -1,182 +1,244 @@
 import 'package:flutter/material.dart';
 
-/// Modern, vibrant, motivational theme — gradients, rounded cards,
-/// big friendly type. Nothing dull or classical.
-class AppTheme {
-  static const Color ink = Color(0xFF1E1B2E);
-  static const Color inkSoft = Color(0xFF6B6584);
-  static const Color background = Color(0xFFF6F5FB);
-  static const Color card = Colors.white;
+/// Warrior theme (18 Nov 2026): the app is a battlefield, not a pastel
+/// planner. Dark, ember-and-flame, bold type. Every colour in the app
+/// comes from here — screens must never hard-code a background, card or
+/// accent colour of their own.
+abstract final class AppTheme {
+  // -- battlefield palette ------------------------------------------------
+  static const Color background = Color(0xFF0E0C13); // near-black war room
+  static const Color card = Color(0xFF1B1826); // dark steel card
+  static const Color cardBorder = Color(0xFF2E2942); // card edge
+  static const Color ink = Color(0xFFF4EFE6); // bone-white text
+  static const Color inkSoft = Color(0xFFA39EB8); // muted steel-lavender
+  static const Color ember = Color(0xFFF59E0B); // primary: ember gold
+  static const Color gold = Color(0xFFFBBF24); // bright gold highlight
+  static const Color flame = Color(0xFFEF4444); // battle red
+  static const Color blood = Color(0xFF7F1D1D); // deep red (badges)
+  static const Color steel = Color(0xFF8B93A7); // grey-blue secondary
+  static const Color bronze = Color(0xFFB45309); // deep bronze
 
-  static const Color violet = Color(0xFF7C3AED);
-  static const Color pink = Color(0xFFEC4899);
-  static const Color amber = Color(0xFFF59E0B);
-  static const Color teal = Color(0xFF14B8A6);
-  static const Color sky = Color(0xFF0EA5E9);
-
+  // -- gradients ----------------------------------------------------------
+  // All gradients are dark enough for bone-white bold text/icons on top.
   static const LinearGradient heroGradient = LinearGradient(
-    colors: [violet, pink, amber],
+    colors: [Color(0xFFD97706), Color(0xFFDC2626), Color(0xFF7F1D1D)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+  static const LinearGradient emberGradient = LinearGradient(
+    colors: [Color(0xFFF59E0B), Color(0xFFB45309)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+  static const LinearGradient flameGradient = LinearGradient(
+    colors: [Color(0xFFEF4444), Color(0xFF991B1B)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+  static const LinearGradient goldGradient = LinearGradient(
+    colors: [Color(0xFFF59E0B), Color(0xFFD97706)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+  static const LinearGradient steelGradient = LinearGradient(
+    colors: [Color(0xFF64748B), Color(0xFF334155)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+  static const LinearGradient bloodGradient = LinearGradient(
+    colors: [Color(0xFFB91C1C), Color(0xFF7F1D1D)],
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );
 
-  static const LinearGradient violetGradient = LinearGradient(
-    colors: [Color(0xFF8B5CF6), Color(0xFF7C3AED)],
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-  );
-
-  static const LinearGradient pinkGradient = LinearGradient(
-    colors: [Color(0xFFF472B6), Color(0xFFEC4899)],
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-  );
-
-  static const LinearGradient amberGradient = LinearGradient(
-    colors: [Color(0xFFFBBF24), Color(0xFFF59E0B)],
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-  );
-
-  static const LinearGradient tealGradient = LinearGradient(
-    colors: [Color(0xFF2DD4BF), Color(0xFF14B8A6)],
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-  );
-
-  /// A rotating set of accent gradients for habit tiles.
+  /// The colour of a habit's tile, by its stored palette index.
   static const List<LinearGradient> habitGradients = [
-    violetGradient,
-    pinkGradient,
-    amberGradient,
-    tealGradient,
-    LinearGradient(
-      colors: [Color(0xFF38BDF8), Color(0xFF0EA5E9)],
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-    ),
-    LinearGradient(
-      colors: [Color(0xFFFB7185), Color(0xFFF43F5E)],
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-    ),
+    emberGradient,
+    flameGradient,
+    goldGradient,
+    steelGradient,
+    bloodGradient,
+    heroGradient,
   ];
 
-  static ThemeData get light {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: violet,
-      brightness: Brightness.light,
+  static ThemeData get dark {
+    const scheme = ColorScheme.dark(
+      primary: ember,
+      secondary: flame,
+      surface: card,
+      onSurface: ink,
+      error: flame,
     );
     return ThemeData(
       useMaterial3: true,
+      brightness: Brightness.dark,
       colorScheme: scheme,
       scaffoldBackgroundColor: background,
       textTheme: const TextTheme(
         displaySmall: TextStyle(
-          fontWeight: FontWeight.w800,
           color: ink,
+          fontWeight: FontWeight.w800,
           letterSpacing: -0.5,
         ),
         headlineMedium: TextStyle(
-          fontWeight: FontWeight.w800,
           color: ink,
+          fontWeight: FontWeight.w800,
           letterSpacing: -0.5,
         ),
-        titleLarge: TextStyle(fontWeight: FontWeight.w800, color: ink),
-        titleMedium: TextStyle(fontWeight: FontWeight.w700, color: ink),
-        bodyLarge: TextStyle(color: ink),
         bodyMedium: TextStyle(color: ink),
+        bodyLarge: TextStyle(color: ink),
         bodySmall: TextStyle(color: inkSoft),
+        titleMedium: TextStyle(color: ink, fontWeight: FontWeight.w700),
+        titleLarge: TextStyle(color: ink, fontWeight: FontWeight.w800),
       ),
       appBarTheme: const AppBarTheme(
         backgroundColor: background,
+        foregroundColor: ink,
         elevation: 0,
         scrolledUnderElevation: 0,
-        centerTitle: false,
         titleTextStyle: TextStyle(
-          fontWeight: FontWeight.w800,
-          fontSize: 22,
           color: ink,
+          fontSize: 20,
+          fontWeight: FontWeight.w800,
         ),
-        iconTheme: IconThemeData(color: ink),
       ),
-      cardTheme: CardThemeData(
+      cardTheme: const CardThemeData(
         color: card,
         elevation: 0,
+        margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: const BorderSide(color: Color(0xFFEDEAF5)),
+          borderRadius: BorderRadius.all(Radius.circular(20)),
+          side: BorderSide(color: cardBorder),
         ),
       ),
+      listTileTheme: const ListTileThemeData(iconColor: ink),
+      iconTheme: const IconThemeData(color: ink),
+      dividerColor: cardBorder,
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: violet,
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+          backgroundColor: ember,
+          foregroundColor: const Color(0xFF1A1206),
+          textStyle: const TextStyle(fontWeight: FontWeight.w800),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
           ),
-          textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           foregroundColor: ink,
-          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+          side: const BorderSide(color: cardBorder, width: 1.5),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
           ),
-          side: const BorderSide(color: Color(0xFFE2DEF0)),
-          textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
         ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: ember),
+      ),
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        backgroundColor: ember,
+        foregroundColor: Color(0xFF1A1206),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: card,
+        indicatorColor: ember.withValues(alpha: 0.22),
+        iconTheme: WidgetStateProperty.resolveWith(
+          (states) => IconThemeData(
+            color: states.contains(WidgetState.selected) ? ember : inkSoft,
+          ),
+        ),
+        labelTextStyle: WidgetStateProperty.resolveWith(
+          (states) => TextStyle(
+            color: states.contains(WidgetState.selected) ? ember : inkSoft,
+            fontWeight: states.contains(WidgetState.selected)
+                ? FontWeight.w800
+                : FontWeight.w600,
+          ),
+        ),
+      ),
+      navigationRailTheme: NavigationRailThemeData(
+        backgroundColor: card,
+        selectedIconTheme: const IconThemeData(color: ember),
+        unselectedIconTheme: const IconThemeData(color: inkSoft),
+        selectedLabelTextStyle: const TextStyle(
+          color: ember,
+          fontWeight: FontWeight.w800,
+        ),
+        unselectedLabelTextStyle: const TextStyle(color: inkSoft),
+        indicatorColor: ember.withValues(alpha: 0.22),
+      ),
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? const Color(0xFF1A1206)
+              : inkSoft,
+        ),
+        trackColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? ember
+              : cardBorder,
+        ),
+      ),
+      checkboxTheme: CheckboxThemeData(
+        fillColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? ember
+              : Colors.transparent,
+        ),
+        checkColor: const WidgetStatePropertyAll(Color(0xFF1A1206)),
+        side: const BorderSide(color: inkSoft, width: 1.5),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+      ),
+      progressIndicatorTheme: const ProgressIndicatorThemeData(
+        color: ember,
+        linearTrackColor: cardBorder,
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: card,
+        contentTextStyle: const TextStyle(color: ink),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: cardBorder),
+        ),
+      ),
+      dialogTheme: const DialogThemeData(
+        backgroundColor: card,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(24)),
+          side: BorderSide(color: cardBorder),
+        ),
+        titleTextStyle: TextStyle(
+          color: ink,
+          fontSize: 20,
+          fontWeight: FontWeight.w800,
+        ),
+        contentTextStyle: TextStyle(color: ink),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 16,
-        ),
+        fillColor: background,
+        hintStyle: const TextStyle(color: inkSoft),
+        labelStyle: const TextStyle(color: inkSoft),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: Color(0xFFE2DEF0)),
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: cardBorder),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: Color(0xFFE2DEF0)),
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: cardBorder),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: violet, width: 2),
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: ember, width: 2),
         ),
       ),
-      navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: Colors.white,
-        indicatorColor: violet.withValues(alpha: 0.15),
-        labelTextStyle: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            return const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 11,
-              color: violet,
-            );
-          }
-          return const TextStyle(
-            fontWeight: FontWeight.w600,
-            fontSize: 11,
-            color: inkSoft,
-          );
-        }),
-        iconTheme: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            return const IconThemeData(color: violet, size: 24);
-          }
-          return const IconThemeData(color: inkSoft, size: 24);
-        }),
-      ),
-      snackBarTheme: SnackBarThemeData(
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: card,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          side: BorderSide(color: cardBorder),
+        ),
       ),
     );
   }

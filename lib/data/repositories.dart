@@ -810,9 +810,9 @@ class HabitRepository {
 
   /// Deletes a habit for good: archives the habit row, removes ALL its
   /// logs, and adjusts XP/streak so the numbers stay consistent — a
-  /// habit that is done today loses its +2 XP for today (never below
-  /// 0), and the streak is recomputed from the remaining logs. The
-  /// longest streak never decreases (it is a historical best).
+  /// habit that is done today loses 1 XP for today (the untick rule,
+  /// never below 0), and the streak is recomputed from the remaining
+  /// logs. The longest streak never decreases (it is a historical best).
   Future<void> deleteHabit(String habitId) async {
     return _writeQueue.run(() async {
       final profiles = ProfileRepository(db: _db);
@@ -831,7 +831,7 @@ class HabitRepository {
         final newStreak = computeStreak(dates.toSet());
         final newLastActive = dates.isEmpty ? null : dates.first;
         await profiles.applyXpAndStreak(
-          xpDelta: doneToday ? -xpPerTask : 0,
+          xpDelta: doneToday ? -xpPerUntick : 0,
           currentStreak: newStreak,
           longestStreak: me.longestStreak,
           lastActiveDate: newLastActive,
@@ -907,7 +907,7 @@ class HabitRepository {
   }
 
   /// Tick or untick a habit for [date]. Handles XP and streak.
-  /// +2 XP on completing, -2 XP on unticking (never below 0, enforced
+  /// +2 XP on completing, -1 XP on unticking (never below 0, enforced
   /// by the clamp in [ProfileRepository.applyXpAndStreak]). No bonus.
   /// Untick deletes the log, so the day no longer counts toward the
   /// streak when its last completion is undone (streak is recomputed
@@ -1128,7 +1128,7 @@ class TaskRepository {
     }
   }
 
-  /// Toggles a weekly task: +2 XP on completing, -2 XP on unticking
+  /// Toggles a weekly task: +2 XP on completing, -1 XP on unticking
   /// (never below 0). Reads the current state first so toggling to
   /// the same state grants nothing. Serialised with the other XP
   /// writes so two quick toggles cannot read the same stale state.
@@ -1148,14 +1148,14 @@ class TaskRepository {
     });
   }
 
-  /// Deletes a weekly task. A task that was done loses its +2 XP
+  /// Deletes a weekly task. A task that was done loses 1 XP
   /// (never below 0) — deleting must not leave phantom XP behind.
   Future<void> deleteWeeklyTask(String id) async {
     return _writeQueue.run(() async {
       final wasDone = await _taskDone('weekly_tasks', id);
       await _d.deleteRow(databaseId: _dbId, tableId: 'weekly_tasks', rowId: id);
       if (wasDone == true) {
-        await _adjustXp(-xpPerTask);
+        await _adjustXp(-xpPerUntick);
       }
       _notifyChanged();
     });
@@ -1187,7 +1187,7 @@ class TaskRepository {
     _notifyChanged();
   }
 
-  /// Toggles a monthly task: same +2 / -2 XP rule as weekly tasks.
+  /// Toggles a monthly task: same +2 / -1 XP rule as weekly tasks.
   Future<void> toggleMonthlyTask(String id, bool done) async {
     return _writeQueue.run(() async {
       final wasDone = await _taskDone('monthly_tasks', id);
@@ -1204,7 +1204,7 @@ class TaskRepository {
     });
   }
 
-  /// Deletes a monthly task. A task that was done loses its +2 XP
+  /// Deletes a monthly task. A task that was done loses 1 XP
   /// (never below 0) — deleting must not leave phantom XP behind.
   Future<void> deleteMonthlyTask(String id) async {
     return _writeQueue.run(() async {
@@ -1215,7 +1215,7 @@ class TaskRepository {
         rowId: id,
       );
       if (wasDone == true) {
-        await _adjustXp(-xpPerTask);
+        await _adjustXp(-xpPerUntick);
       }
       _notifyChanged();
     });

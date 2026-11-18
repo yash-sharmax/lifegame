@@ -9,7 +9,7 @@ import '../widgets/common.dart';
 void showError(BuildContext context, Object e) {
   final message = e is AuthException ? e.message : e.toString();
   ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(message), backgroundColor: Colors.red.shade600),
+    SnackBar(content: Text(message), backgroundColor: AppTheme.flame),
   );
 }
 
@@ -50,7 +50,6 @@ class _AuthScreenState extends State<AuthScreen> {
   final _username = TextEditingController();
   final _displayName = TextEditingController();
   bool _busy = false;
-  bool _googleBusy = false;
   bool _obscure = true;
 
   AuthRepository get _auth => widget.authRepo ?? AuthRepository();
@@ -132,28 +131,17 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
-  Future<void> _google() async {
-    setState(() => _googleBusy = true);
-    try {
-      await _auth.signInWithGoogle();
-    } on AuthException catch (e) {
-      if (mounted) showError(context, e);
-    } on AppwriteNotConfigured catch (e) {
-      if (mounted) showError(context, e);
-    } catch (e) {
-      if (mounted) showError(context, e);
-    } finally {
-      if (mounted) setState(() => _googleBusy = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF1E1B2E), Color(0xFF4C1D95), Color(0xFF7C3AED)],
+            colors: [
+              Color(0xFF0E0C13),
+              Color(0xFF2A1202),
+              Color(0xFF7F1D1D),
+            ],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ),
@@ -180,8 +168,8 @@ class _AuthScreenState extends State<AuthScreen> {
                               shape: BoxShape.circle,
                             ),
                             child: const Icon(
-                              Icons.bolt,
-                              color: Colors.white,
+                              Icons.shield,
+                              color: AppTheme.ink,
                               size: 34,
                             ),
                           ),
@@ -189,7 +177,7 @@ class _AuthScreenState extends State<AuthScreen> {
                           const Text(
                             'Life Game',
                             style: TextStyle(
-                              color: Colors.white,
+                              color: AppTheme.ink,
                               fontSize: 32,
                               fontWeight: FontWeight.w800,
                               letterSpacing: -0.5,
@@ -199,10 +187,10 @@ class _AuthScreenState extends State<AuthScreen> {
                       ).animate().fadeIn().slideY(begin: -0.2),
                       const SizedBox(height: 8),
                       const Text(
-                        'Win your day. Level up your life.',
+                        'Every day is a battle. Win it.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
-                          color: Colors.white70,
+                          color: AppTheme.ink,
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
                         ),
@@ -211,8 +199,9 @@ class _AuthScreenState extends State<AuthScreen> {
                       Container(
                         padding: const EdgeInsets.all(24),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: AppTheme.card,
                           borderRadius: BorderRadius.circular(28),
+                          border: Border.all(color: AppTheme.cardBorder),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -231,7 +220,7 @@ class _AuthScreenState extends State<AuthScreen> {
                               Container(
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
-                                  color: AppTheme.amber.withValues(alpha: 0.12),
+                                  color: AppTheme.gold.withValues(alpha: 0.12),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: const Text(
@@ -249,7 +238,7 @@ class _AuthScreenState extends State<AuthScreen> {
                               Container(
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
-                                  color: Colors.red.withValues(alpha: 0.08),
+                                  color: AppTheme.flame.withValues(alpha: 0.08),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Column(
@@ -365,33 +354,6 @@ class _AuthScreenState extends State<AuthScreen> {
                               onPressed: _submit,
                               loading: _busy,
                             ),
-                            if (_mode != AuthMode.forgot) ...[
-                              const SizedBox(height: 16),
-                              Row(
-                                children: [
-                                  const Expanded(child: Divider()),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                    ),
-                                    child: Text(
-                                      'OR',
-                                      style: TextStyle(
-                                        color: Colors.grey.shade500,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ),
-                                  const Expanded(child: Divider()),
-                                ],
-                              ),
-                              const SizedBox(height: 16),
-                              GoogleButton(
-                                onPressed: _google,
-                                loading: _googleBusy,
-                              ),
-                            ],
                             const SizedBox(height: 20),
                             Row(
                               mainAxisAlignment: MainAxisAlignment.center,

@@ -177,7 +177,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 2),
           Text(
-            '${_monthLogs.length} of ${_habitCount * _daysElapsedThisMonth()} possible so far',
+            '${_monthLogs.length} of ${_habitCount * _daysElapsedThisMonth()} battles won so far',
             style: const TextStyle(color: AppTheme.inkSoft, fontSize: 13),
           ),
           const SizedBox(height: 8),
@@ -212,14 +212,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                gradient: AppTheme.violetGradient,
+                gradient: AppTheme.emberGradient,
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: _StatCard(
                 icon: Icons.local_fire_department,
-                label: 'Current streak',
+                label: 'Battle streak',
                 valueWidget: CountUp(
                   value: profile?.currentStreak ?? 0,
                   suffix: ' days',
@@ -228,7 +228,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                gradient: AppTheme.amberGradient,
+                gradient: AppTheme.goldGradient,
               ),
             ),
           ],
@@ -239,7 +239,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Expanded(
               child: _StatCard(
                 icon: Icons.emoji_events,
-                label: 'Longest streak',
+                label: 'Best battle streak',
                 valueWidget: CountUp(
                   value: profile?.longestStreak ?? 0,
                   suffix: ' days',
@@ -248,7 +248,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                gradient: AppTheme.pinkGradient,
+                gradient: AppTheme.flameGradient,
               ),
             ),
             const SizedBox(width: 12),
@@ -263,7 +263,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                gradient: AppTheme.tealGradient,
+                gradient: AppTheme.emberGradient,
               ),
             ),
           ],
@@ -311,13 +311,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               borderRadius: const BorderRadius.vertical(
                                 top: Radius.circular(10),
                               ),
-                              gradient: AppTheme.violetGradient,
+                              gradient: AppTheme.emberGradient,
                               // Light full-height track behind each bar
                               // so 0% weeks still read as a chart.
                               backDrawRodData: BackgroundBarChartRodData(
                                 show: true,
                                 toY: 1.0,
-                                color: const Color(0xFFEDEAF5),
+                                color: AppTheme.cardBorder,
                               ),
                             ),
                           ],
@@ -437,15 +437,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             FlSpot(i.toDouble(), trend[i]),
                         ],
                         isCurved: true,
-                        color: AppTheme.pink,
+                        color: AppTheme.flame,
                         barWidth: 3.5,
                         dotData: const FlDotData(show: false),
                         belowBarData: BarAreaData(
                           show: true,
                           gradient: LinearGradient(
                             colors: [
-                              AppTheme.pink.withValues(alpha: 0.35),
-                              AppTheme.pink.withValues(alpha: 0.02),
+                              AppTheme.flame.withValues(alpha: 0.35),
+                              AppTheme.flame.withValues(alpha: 0.02),
                             ],
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
@@ -498,7 +498,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       show: true,
                       drawVerticalLine: false,
                       getDrawingHorizontalLine: (_) => FlLine(
-                        color: const Color(0xFFEDEAF5),
+                        color: AppTheme.cardBorder,
                         strokeWidth: 1,
                       ),
                     ),
@@ -550,13 +550,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     children: [
                       CircleAvatar(
                         radius: 15,
-                        backgroundColor: AppTheme.violet.withValues(
+                        backgroundColor: AppTheme.ember.withValues(
                           alpha: 0.12,
                         ),
                         child: Text(
                           '${entry.key + 1}',
                           style: const TextStyle(
-                            color: AppTheme.violet,
+                            color: AppTheme.ember,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
@@ -583,10 +583,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     LinearProgressIndicator(
                                       value: value,
                                       minHeight: 6,
-                                      backgroundColor: const Color(0xFFEDEAF5),
+                                      backgroundColor: AppTheme.cardBorder,
                                       valueColor:
                                           const AlwaysStoppedAnimation<Color>(
-                                            AppTheme.teal,
+                                            AppTheme.ember,
                                           ),
                                     ),
                               ),
@@ -621,8 +621,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final last30 = _last30DaysFraction();
     final wide = isWideScreen(context);
 
-    // The XP bar is pinned above the scrollable content, so the user's
-    // current XP (and level) is visible at the top at all times.
+    // No XP bar here (18 Nov 2026): the level lives on Profile now.
     // Desktop (>=600px) lays the dashboard out in two columns inside a
     // centred, wider frame; phones keep the stacked app layout.
     return ResponsiveCenter(
@@ -633,19 +632,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
             child: const Text(
-              'Dashboard',
+              'War Record',
               style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
             ).animate().fadeIn().slideY(begin: -0.1),
           ),
           const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: XpBar(xp: profile?.xp ?? 0)
-                .animate()
-                .fadeIn(delay: 60.ms)
-                .slideY(begin: 0.1),
-          ),
-          const SizedBox(height: 16),
           Expanded(
             child: RefreshIndicator(
               onRefresh: _load,
@@ -653,11 +644,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
                 children: [
                   if (_loading)
-                    const Center(
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 48),
-                        child: CircularProgressIndicator(),
-                      ),
+                    const Column(
+                      children: [
+                        SkeletonBox(height: 190, borderRadius: 20),
+                        SizedBox(height: 16),
+                        SkeletonBox(height: 100, borderRadius: 20),
+                        SizedBox(height: 12),
+                        SkeletonBox(height: 100, borderRadius: 20),
+                      ],
                     )
                   else if (_habitCount == 0)
                     EmptyState(
@@ -725,7 +719,7 @@ class _ChartEmptyState extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.insights_outlined, color: AppTheme.violet, size: 26),
+          const Icon(Icons.insights_outlined, color: AppTheme.ember, size: 26),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
@@ -767,10 +761,10 @@ class _StatCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: Colors.white, size: 22),
+          Icon(icon, color: AppTheme.ink, size: 22),
           const SizedBox(height: 10),
           DefaultTextStyle(
-            style: const TextStyle(color: Colors.white),
+            style: const TextStyle(color: AppTheme.ink),
             child: valueWidget,
           ),
           const SizedBox(height: 2),

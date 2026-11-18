@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 
 import '../data/models.dart';
 import '../data/repositories.dart';
+import '../logic/xp.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import 'auth_screen.dart';
@@ -95,12 +96,12 @@ class _SearchScreenState extends State<SearchScreen> {
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
         children: [
           const Text(
-            'Find players',
+            'Find warriors',
             style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
           ).animate().fadeIn().slideY(begin: -0.1),
           const SizedBox(height: 6),
           const Text(
-            'Search by username or name, follow friends and compare streaks on the Friends board.',
+            'Search by username or name, follow friends and compare ranks on the Friends board.',
             style: TextStyle(color: AppTheme.inkSoft, fontSize: 14),
           ),
           const SizedBox(height: 16),
@@ -191,7 +192,7 @@ class _SearchRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.white,
+      color: AppTheme.card,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         onTap: onTap,
@@ -200,7 +201,7 @@ class _SearchRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: const Color(0xFFEDEAF5)),
+            border: Border.all(color: AppTheme.cardBorder),
           ),
           child: Row(
             children: [
@@ -215,7 +216,10 @@ class _SearchRow extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                     Text(
-                      '@${profile.username} • ${profile.xp} XP • '
+                      '@${profile.username} • '
+                      'Level ${levelForXp(profile.xp)} '
+                      '${rankNameForLevel(levelForXp(profile.xp))} • '
+                      '${profile.xp} XP • '
                       '${profile.currentStreak} day streak',
                       style: const TextStyle(
                         color: AppTheme.inkSoft,
@@ -229,9 +233,9 @@ class _SearchRow extends StatelessWidget {
                 onPressed: onToggleFollow,
                 style: FilledButton.styleFrom(
                   backgroundColor: following
-                      ? const Color(0xFFEDEAF5)
-                      : AppTheme.violet,
-                  foregroundColor: following ? AppTheme.ink : Colors.white,
+                      ? AppTheme.cardBorder
+                      : AppTheme.ember,
+                  foregroundColor: following ? AppTheme.ink : const Color(0xFF1A1206),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 10,

@@ -18,13 +18,37 @@ void main() {
       expect(xpDeltaForToggle(completing: true, wasDone: false), 2);
     });
 
-    test('unticking a done item removes 2', () {
-      expect(xpDeltaForToggle(completing: false, wasDone: true), -2);
+    test('unticking a done item removes 1 (18 Nov 2026: was 2)', () {
+      expect(xpPerUntick, 1);
+      expect(xpDeltaForToggle(completing: false, wasDone: true), -1);
     });
 
     test('no change when the state does not change', () {
       expect(xpDeltaForToggle(completing: true, wasDone: true), 0);
       expect(xpDeltaForToggle(completing: false, wasDone: false), 0);
+    });
+  });
+
+  group('warrior ranks (18 Nov 2026)', () {
+    test('rank bands by level', () {
+      expect(rankNameForLevel(1), 'Recruit');
+      expect(rankNameForLevel(2), 'Recruit');
+      expect(rankNameForLevel(3), 'Warrior');
+      expect(rankNameForLevel(4), 'Warrior');
+      expect(rankNameForLevel(5), 'Knight');
+      expect(rankNameForLevel(6), 'Knight');
+      expect(rankNameForLevel(7), 'Champion');
+      expect(rankNameForLevel(8), 'Champion');
+      expect(rankNameForLevel(9), 'Warlord');
+      expect(rankNameForLevel(10), 'Warlord');
+      expect(rankNameForLevel(11), 'Legend');
+      expect(rankNameForLevel(50), 'Legend');
+    });
+
+    test('rankNameForXp derives the rank from XP', () {
+      expect(rankNameForXp(0), 'Recruit');
+      expect(rankNameForXp(250), 'Warrior');
+      expect(rankNameForXp(1050), 'Legend');
     });
   });
 

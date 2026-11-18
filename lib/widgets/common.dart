@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -46,7 +48,7 @@ class AvatarCircle extends StatelessWidget {
     super.key,
     required this.initials,
     this.size = 56,
-    this.gradient = AppTheme.violetGradient,
+    this.gradient = AppTheme.emberGradient,
     this.fontSize,
   });
 
@@ -65,7 +67,7 @@ class AvatarCircle extends StatelessWidget {
       child: Text(
         initials,
         style: TextStyle(
-          color: Colors.white,
+          color: AppTheme.ink,
           fontWeight: FontWeight.w800,
           fontSize: fontSize ?? size * 0.36,
         ),
@@ -100,14 +102,13 @@ class CountUp extends StatelessWidget {
   }
 }
 
-/// Level + XP header strip: the level badge, current XP and progress to
-/// the next level, shown at the top of Home, Dashboard and Profile.
+/// Level + XP rank card: the level badge, warrior rank name, current XP
+/// and progress to the next level.
 ///
-/// Deliberately a light, quiet strip — not a big gradient banner. The
-/// old full-width violet card read like a popup stuck to the top of the
-/// screen (user feedback, 14 Nov 2026), so the level now lives in the
-/// header itself: a gradient level badge, the XP count and a slim
-/// progress bar, on a white card that blends with the rest of the UI.
+/// Shown on the Profile screen (own profile) and on other users'
+/// profiles, and as a line on leaderboard rows — NOT on Home or
+/// Dashboard (18 Nov 2026: the level bar was moved off the top of Home
+/// so the home screen is about today's battles, not the score).
 class XpBar extends StatelessWidget {
   const XpBar({super.key, required this.xp});
 
@@ -116,13 +117,14 @@ class XpBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final level = levelForXp(xp);
+    final rank = rankNameForLevel(level);
     final progress = progressToNextLevel(xp);
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.card,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFEDEAF5)),
+        border: Border.all(color: AppTheme.cardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -140,7 +142,7 @@ class XpBar extends StatelessWidget {
                   borderRadius: BorderRadius.circular(999),
                   boxShadow: [
                     BoxShadow(
-                      color: AppTheme.violet.withValues(alpha: 0.3),
+                      color: AppTheme.ember.withValues(alpha: 0.3),
                       blurRadius: 10,
                       offset: const Offset(0, 4),
                     ),
@@ -149,12 +151,12 @@ class XpBar extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.star, color: Colors.white, size: 18),
+                    const Icon(Icons.shield, color: AppTheme.ink, size: 18),
                     const SizedBox(width: 6),
                     Text(
                       'LEVEL $level',
                       style: const TextStyle(
-                        color: Colors.white,
+                        color: AppTheme.ink,
                         fontWeight: FontWeight.w800,
                         fontSize: 15,
                         letterSpacing: 0.5,
@@ -163,8 +165,19 @@ class XpBar extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(width: 10),
+              // Warrior rank — the title for this level band.
+              Text(
+                rank.toUpperCase(),
+                style: const TextStyle(
+                  color: AppTheme.ember,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 15,
+                  letterSpacing: 1.2,
+                ),
+              ),
               const Spacer(),
-              const Icon(Icons.bolt, color: AppTheme.violet, size: 20),
+              const Icon(Icons.bolt, color: AppTheme.ember, size: 20),
               const SizedBox(width: 4),
               CountUp(
                 value: xp,
@@ -187,9 +200,9 @@ class XpBar extends StatelessWidget {
               builder: (context, value, _) => LinearProgressIndicator(
                 value: value,
                 minHeight: 8,
-                backgroundColor: const Color(0xFFEDEAF5),
+                backgroundColor: AppTheme.cardBorder,
                 valueColor: const AlwaysStoppedAnimation<Color>(
-                  AppTheme.violet,
+                  AppTheme.ember,
                 ),
               ),
             ),
@@ -246,13 +259,13 @@ class ProgressRing extends StatelessWidget {
                 sections: [
                   PieChartSectionData(
                     value: (value * 100).clamp(0.0, 100.0),
-                    color: AppTheme.violet,
+                    color: AppTheme.ember,
                     showTitle: false,
                     radius: size * 0.11,
                   ),
                   PieChartSectionData(
                     value: (100 - value * 100).clamp(0.0, 100.0),
-                    color: const Color(0xFFE8E4F5),
+                    color: AppTheme.cardBorder,
                     showTitle: false,
                     radius: size * 0.11,
                   ),
@@ -323,7 +336,7 @@ class EmptyState extends StatelessWidget {
                 gradient: AppTheme.heroGradient,
                 shape: BoxShape.circle,
               ),
-              child: Icon(icon, color: Colors.white, size: 44),
+              child: Icon(icon, color: AppTheme.ink, size: 44),
             ),
             const SizedBox(height: 20),
             Text(
@@ -395,7 +408,7 @@ class GradientButton extends StatelessWidget {
                       width: 22,
                       height: 22,
                       child: CircularProgressIndicator(
-                        color: Colors.white,
+                        color: AppTheme.ink,
                         strokeWidth: 2.5,
                       ),
                     )
@@ -403,13 +416,13 @@ class GradientButton extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         if (icon != null) ...[
-                          Icon(icon, color: Colors.white, size: 20),
+                          Icon(icon, color: AppTheme.ink, size: 20),
                           const SizedBox(width: 8),
                         ],
                         Text(
                           label,
                           style: const TextStyle(
-                            color: Colors.white,
+                            color: AppTheme.ink,
                             fontWeight: FontWeight.w700,
                             fontSize: 16,
                           ),
@@ -424,33 +437,288 @@ class GradientButton extends StatelessWidget {
   }
 }
 
-/// "Continue with Google" button.
-class GoogleButton extends StatelessWidget {
-  const GoogleButton({
-    super.key,
-    required this.onPressed,
-    this.loading = false,
-  });
+/// Branded loading screen: shield logo, app name and a progress bar on
+/// the dark battlefield background. Used while the session/profile is
+/// being checked so the user never sees a blank page or a bare spinner
+/// (fast-load work, 18 Nov 2026). The web page (web/index.html) shows
+/// the same screen instantly, before Flutter even starts.
+class WarriorSplash extends StatelessWidget {
+  const WarriorSplash({super.key, this.message});
 
-  final VoidCallback? onPressed;
-  final bool loading;
+  final String? message;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: OutlinedButton.icon(
-        onPressed: loading ? null : onPressed,
-        icon: const Text(
-          'G',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFF4285F4),
-          ),
+    return Scaffold(
+      backgroundColor: AppTheme.background,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 84,
+              height: 84,
+              decoration: BoxDecoration(
+                gradient: AppTheme.heroGradient,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppTheme.ember.withValues(alpha: 0.35),
+                    blurRadius: 24,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: const Icon(Icons.shield, color: AppTheme.ink, size: 46),
+            )
+                .animate(onPlay: (c) => c.repeat(reverse: true))
+                .scale(
+                  begin: const Offset(1, 1),
+                  end: const Offset(1.06, 1.06),
+                  duration: 900.ms,
+                ),
+            const SizedBox(height: 20),
+            const Text(
+              'LIFE GAME',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 4,
+                color: AppTheme.ink,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message ?? 'Sharpening swords…',
+              style: const TextStyle(color: AppTheme.inkSoft, fontSize: 15),
+            ),
+            const SizedBox(height: 28),
+            const SizedBox(
+              width: 160,
+              child: LinearProgressIndicator(
+                minHeight: 4,
+                backgroundColor: AppTheme.cardBorder,
+                valueColor: AlwaysStoppedAnimation<Color>(AppTheme.ember),
+              ),
+            ),
+          ],
         ),
-        label: const Text('Continue with Google'),
       ),
     );
   }
+}
+
+/// Shimmer placeholder shown while a screen's data loads, so the
+/// screen shell renders immediately instead of a blocking spinner
+/// (fast-load work, 18 Nov 2026).
+class SkeletonBox extends StatelessWidget {
+  const SkeletonBox({
+    super.key,
+    this.width,
+    this.height = 16,
+    this.borderRadius = 10,
+  });
+
+  final double? width;
+  final double height;
+  final double borderRadius;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(borderRadius),
+        border: Border.all(color: AppTheme.cardBorder),
+      ),
+    )
+        .animate(onPlay: (c) => c.repeat())
+        .shimmer(
+          duration: 1400.ms,
+          color: AppTheme.ink.withValues(alpha: 0.06),
+        );
+  }
+}
+
+/// The battle check: the circular tick button on a habit/task tile.
+///
+/// - Tapping it toggles the item; when it turns done, the circle pops
+///   with a gold glow (the "strike") and a floating "+2 XP" rises and
+///   fades; when it turns undone, a red "-1 XP" floats up instead.
+/// - The floating delta is driven by [done] flips, so it works with
+///   optimistic updates too.
+class BattleCheck extends StatefulWidget {
+  const BattleCheck({super.key, required this.done, this.size = 34});
+
+  final bool done;
+  final double size;
+
+  @override
+  State<BattleCheck> createState() => _BattleCheckState();
+}
+
+class _BattleCheckState extends State<BattleCheck> {
+  int? _delta;
+  Timer? _timer;
+
+  @override
+  void didUpdateWidget(BattleCheck oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.done != widget.done) {
+      _timer?.cancel();
+      setState(() {
+        _delta = widget.done ? xpPerTask : -xpPerUntick;
+      });
+      _timer = Timer(const Duration(milliseconds: 1100), () {
+        if (mounted) setState(() => _delta = null);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOutBack,
+          width: widget.size,
+          height: widget.size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: widget.done ? AppTheme.emberGradient : null,
+            color: widget.done ? null : AppTheme.card,
+            border: widget.done
+                ? null
+                : Border.all(color: AppTheme.cardBorder, width: 2),
+            boxShadow: widget.done
+                ? [
+                    BoxShadow(
+                      color: AppTheme.ember.withValues(alpha: 0.55),
+                      blurRadius: 12,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
+          ),
+          child: widget.done
+              ? Icon(Icons.check, color: AppTheme.ink, size: widget.size * 0.6)
+                  .animate(key: ValueKey('check-${widget.done}'))
+                  .scale(
+                    begin: const Offset(0.4, 0.4),
+                    end: const Offset(1, 1),
+                    duration: 250.ms,
+                    curve: Curves.easeOutBack,
+                  )
+              : null,
+        ),
+        if (_delta != null)
+          Positioned(
+            top: -22,
+            right: -6,
+            child: Text(
+              _delta! > 0 ? '+${_delta!} XP' : '$_delta XP',
+              style: TextStyle(
+                color: _delta! > 0 ? AppTheme.gold : AppTheme.flame,
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+              ),
+            )
+                .animate()
+                .slideY(begin: 0.5, end: -0.4, duration: 900.ms)
+                .fadeOut(delay: 500.ms, duration: 400.ms),
+          ),
+      ],
+    );
+  }
+}
+
+/// A gold slash that sweeps across a habit/task tile when the item is
+/// completed — the "strike" of the battle. The tile wraps its content
+/// in a Stack and puts this last; the parent bumps [strikeKey] on every
+/// completion so the sweep replays (flutter_animate restarts when the
+/// key changes). [strikeKey] 0 means "never completed yet" — no slash.
+class StrikeOverlay extends StatelessWidget {
+  const StrikeOverlay({super.key, required this.strikeKey});
+
+  final int strikeKey;
+
+  @override
+  Widget build(BuildContext context) {
+    if (strikeKey <= 0) return const SizedBox.shrink();
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return Container(
+                alignment: Alignment.centerLeft,
+                child: Transform.rotate(
+                  angle: -0.4,
+                  child: Container(
+                    width: 6,
+                    height: constraints.maxHeight * 3,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          AppTheme.gold.withValues(alpha: 0),
+                          AppTheme.gold,
+                          AppTheme.gold.withValues(alpha: 0),
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                    ),
+                  ),
+                ),
+              )
+                  .animate(key: ValueKey(strikeKey))
+                  .slideX(
+                    begin: -0.15,
+                    end: 1.15,
+                    duration: 480.ms,
+                    curve: Curves.easeOutCubic,
+                  );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Screen transition for pushed screens: a quick fade + small slide,
+/// so navigation feels like moving through the battlefield rather than
+/// a hard cut (UI polish, 18 Nov 2026).
+class WarriorPageRoute<T> extends PageRouteBuilder<T> {
+  WarriorPageRoute({required WidgetBuilder builder})
+    : super(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            builder(context),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          final slide =
+              Tween<Offset>(
+                begin: const Offset(0.04, 0),
+                end: Offset.zero,
+              ).animate(
+                CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+              );
+          return FadeTransition(
+            opacity: animation,
+            child: SlideTransition(position: slide, child: child),
+          );
+        },
+        transitionDuration: const Duration(milliseconds: 220),
+      );
 }

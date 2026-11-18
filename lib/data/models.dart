@@ -111,7 +111,7 @@ class Habit {
     required this.id,
     required this.userId,
     required this.title,
-    this.color = 0xFF7C3AED,
+    this.color = 0xFFF59E0B,
     this.archived = false,
     this.createdAt,
   });
@@ -120,7 +120,7 @@ class Habit {
     id: json['id'] as String,
     userId: json['ownerUid'] as String,
     title: json['title'] as String,
-    color: (json['color'] as num?)?.toInt() ?? 0xFF7C3AED,
+    color: (json['color'] as num?)?.toInt() ?? 0xFFF59E0B,
     archived: json['archived'] as bool? ?? false,
     createdAt: _createdAt(json),
   );

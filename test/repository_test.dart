@@ -273,7 +273,9 @@ void main() {
 
         expect(await habits.listLogsForDate(today), isEmpty);
         final after = await myProfile();
-        expect(after.xp, 50);
+        // Tick +2 then untick -1: the untick forgives 1 XP, not 2
+        // (18 Nov 2026 rule), so 1 XP of the tick survives.
+        expect(after.xp, 51);
         expect(after.currentStreak, 0);
       },
     );
@@ -290,12 +292,13 @@ void main() {
 
       expect((await habits.listLogsForDate(today)).length, 1);
       final after = await myProfile();
-      expect(after.xp, 52);
+      // Untick -1 then tick +2 on top of the seeded 52: net +1.
+      expect(after.xp, 53);
       expect(after.currentStreak, 1);
     });
 
     test(
-      'sequential tick then untick restores base XP and removes the log',
+      'sequential tick then untick leaves 1 XP and removes the log',
       () async {
         final habit = await habits.addHabit(title: 'XP Test', color: 0);
         await habits.toggleHabit(habit: habit, date: today, completed: true);
@@ -304,14 +307,15 @@ void main() {
 
         expect(await habits.listLogsForDate(today), isEmpty);
         final after = await myProfile();
-        expect(after.xp, 50);
+        // Untick takes back 1 XP, not the full +2 (18 Nov 2026 rule).
+        expect(after.xp, 51);
         expect(after.currentStreak, 0);
       },
     );
   });
 
   group('deleteHabit keeps XP and streak consistent', () {
-    test('deleting a habit done today takes back its +2 XP', () async {
+    test('deleting a habit done today takes back 1 XP', () async {
       final habit = await habits.addHabit(title: 'XP Test', color: 0);
       await habits.toggleHabit(habit: habit, date: today, completed: true);
       expect((await myProfile()).xp, 52);
@@ -321,7 +325,7 @@ void main() {
       expect(await habits.listMyHabits(), isEmpty);
       expect(await habits.listLogsForDate(today), isEmpty);
       final after = await myProfile();
-      expect(after.xp, 50);
+      expect(after.xp, 51);
       expect(after.currentStreak, 0);
       expect(after.longestStreak, 1);
     });
@@ -356,7 +360,7 @@ void main() {
   });
 
   group('task deletes keep XP consistent', () {
-    test('deleting a done weekly task takes back its +2 XP', () async {
+    test('deleting a done weekly task takes back 1 XP', () async {
       final week = weekStartKey();
       await tasks.addWeeklyTask('Buy groceries', week);
       final task = (await tasks.listWeeklyTasks(week)).first;
@@ -366,7 +370,7 @@ void main() {
       await tasks.deleteWeeklyTask(task.id);
 
       expect(await tasks.listWeeklyTasks(week), isEmpty);
-      expect((await myProfile()).xp, 50);
+      expect((await myProfile()).xp, 51);
     });
 
     test('deleting a pending weekly task leaves XP untouched', () async {

@@ -33,7 +33,7 @@ class LifeGameApp extends StatelessWidget {
     return MaterialApp(
       title: 'Life Game — Habit Tracker',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
+      theme: AppTheme.dark,
       home: const AuthGate(),
     );
   }
@@ -128,8 +128,8 @@ class _AuthGateState extends State<AuthGate> {
     final change = _authChange;
     if (change == null) {
       // Stored session is still being checked — wait, don't flash the
-      // login screen.
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      // login screen. A branded splash, not a bare spinner.
+      return const WarriorSplash(message: 'Checking your session…');
     }
     if (change.event == AuthEvent.signedOut) {
       // A real auth failure while checking the session (e.g. network)
@@ -152,9 +152,7 @@ class _AuthGateState extends State<AuthGate> {
       future: profileRepo.fetchMyProfile(),
       builder: (context, profileSnapshot) {
         if (profileSnapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const WarriorSplash(message: 'Loading your war room…');
         }
         if (profileSnapshot.data == null) {
           return ProfileSetupScreen(
@@ -205,7 +203,7 @@ class _MainShellState extends State<MainShell> {
   void _openSchedule() {
     setState(() => _alert = null);
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const ScheduleScreen()),
+      WarriorPageRoute(builder: (_) => const ScheduleScreen()),
     );
   }
 
@@ -215,25 +213,30 @@ class _MainShellState extends State<MainShell> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Material(
-        color: AppTheme.violet,
+        color: Colors.transparent,
         borderRadius: BorderRadius.circular(16),
+        clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: _openSchedule,
           borderRadius: BorderRadius.circular(16),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: const BoxDecoration(
+              gradient: AppTheme.heroGradient,
+              borderRadius: BorderRadius.all(Radius.circular(16)),
+            ),
             child: Row(
               children: [
-                const Icon(Icons.alarm, color: Colors.white, size: 22),
+                const Icon(Icons.alarm, color: AppTheme.ink, size: 22),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
+                      Text(
                         'Reminder',
                         style: TextStyle(
-                          color: Colors.white70,
+                          color: AppTheme.ink.withValues(alpha: 0.7),
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
                         ),
@@ -241,7 +244,7 @@ class _MainShellState extends State<MainShell> {
                       Text(
                         'Time for ${alert.reminder.title}',
                         style: const TextStyle(
-                          color: Colors.white,
+                          color: AppTheme.ink,
                           fontWeight: FontWeight.w800,
                           fontSize: 15,
                         ),
@@ -253,12 +256,12 @@ class _MainShellState extends State<MainShell> {
                   onPressed: _openSchedule,
                   child: const Text(
                     'View',
-                    style: TextStyle(color: Colors.white),
+                    style: TextStyle(color: AppTheme.ink),
                   ),
                 ),
                 IconButton(
                   onPressed: () => setState(() => _alert = null),
-                  icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                  icon: const Icon(Icons.close, color: AppTheme.ink, size: 20),
                   constraints: const BoxConstraints(
                     minWidth: 32,
                     minHeight: 32,
@@ -347,8 +350,8 @@ class _MainShellState extends State<MainShell> {
                     child: Column(
                       children: [
                         Icon(
-                          Icons.sports_esports,
-                          color: AppTheme.violet,
+                          Icons.shield,
+                          color: AppTheme.ember,
                           size: 30,
                         ),
                         SizedBox(height: 6),
