@@ -2,6 +2,7 @@ import 'package:appwrite/appwrite.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifegame/config.dart';
 import 'package:lifegame/data/models.dart';
 import 'package:lifegame/data/repositories.dart';
 import 'package:lifegame/logic/xp.dart';
@@ -386,7 +387,10 @@ void main() {
     expect(find.text('Send feedback'), findsOneWidget);
     expect(find.text('Delete account'), findsOneWidget);
     expect(find.text('Log out'), findsOneWidget);
-    expect(find.text('Version 2.6.0+12 • Flutter • Appwrite'), findsOneWidget);
+    expect(
+      find.text('Version ${AppConfig.appVersion} • Flutter • Appwrite'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('feedback form sends a message and shows a thank-you', (
@@ -485,6 +489,14 @@ void main() {
   testWidgets('dashboard shows the Excel table, charts and XP ledger', (
     tester,
   ) async {
+    // Tall viewport so the whole scrollable Dashboard (score card +
+    // table + charts + ledger) is built: ListView only builds what
+    // is on screen, and the ledger sits far below the fold.
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -513,6 +525,139 @@ void main() {
     expect(find.text('Total 2 XP'), findsOneWidget);
     expect(find.text('1 entries × 2 XP = 2 XP'), findsOneWidget);
     expect(find.textContaining('will match after the next sync'), findsNothing);
+  });
+
+  test('chartDayLabel spaces monthly labels every 5 days', () {
+    // Monthly axes: 1, 5, 10, 15, 20, 25, 30 + the last day — never
+    // all 30 crammed together (18 Nov 2026: the old `interval: 5`
+    // did nothing on bar charts).
+    expect(chartDayLabel(1, 30), '1');
+    expect(chartDayLabel(2, 30), isNull);
+    expect(chartDayLabel(5, 30), '5');
+    expect(chartDayLabel(7, 30), isNull);
+    expect(chartDayLabel(30, 30), '30');
+    expect(chartDayLabel(31, 31), '31');
+    expect(chartDayLabel(29, 31), isNull);
+    // Short axes (weekly / 7-day trend) label every day.
+    expect(chartDayLabel(3, 7, sparse: false), '3');
+    expect(chartDayLabel(17, 7, sparse: false), '17');
+  });
+
+  testWidgets('dashboard period switcher changes the table and charts', (
+    tester,
+  ) async {
+    // Tall viewport so the whole scrollable Dashboard is built.
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: DashboardScreen(
+            habitRepo: _LedgerHabitRepo(),
+            taskRepo: _LedgerTaskRepo(),
+            profileRepo: _TwoXpProfileRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Monthly is the default (the v2.6.0 view).
+    expect(find.text('Daily'), findsOneWidget);
+    expect(find.text('Weekly'), findsOneWidget);
+    expect(find.text('Monthly'), findsOneWidget);
+    expect(find.text('Daily completions — this month'), findsOneWidget);
+
+    await tester.tap(find.text('Weekly'));
+    await tester.pumpAndSettle();
+    // 'Week of …' appears twice: the period label and the stats line.
+    expect(find.textContaining('Week of'), findsWidgets);
+    expect(find.text('Completions per day'), findsOneWidget);
+    expect(find.text('Daily completions — this week'), findsOneWidget);
+
+    await tester.tap(find.text('Daily'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Today,'), findsOneWidget);
+    expect(find.text("Today's habits"), findsOneWidget);
+    expect(find.text('Daily completions — last 7 days'), findsOneWidget);
+
+    await tester.tap(find.text('Monthly'));
+    await tester.pumpAndSettle();
+    expect(find.text('Daily completions — this month'), findsOneWidget);
+  });
+
+  testWidgets('dashboard shows today\'s score with done and pending', (
+    tester,
+  ) async {
+    // Tall viewport so the whole scrollable Dashboard is built.
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: DashboardScreen(
+            habitRepo: _ScoreHabitRepo(),
+            taskRepo: _LedgerTaskRepo(),
+            profileRepo: _TwoXpProfileRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 1 of 2 habits done today: the score is 50%, and both lists
+    // are shown so the percent can be checked by hand.
+    expect(find.text("Today's score"), findsOneWidget);
+    expect(find.text('50%'), findsOneWidget);
+    expect(find.textContaining('Today: 1 of 2 done'), findsOneWidget);
+    expect(find.text('Done (1)'), findsOneWidget);
+    expect(find.text('Still to do (1)'), findsOneWidget);
+    expect(find.text('Read 10 pages'), findsWidgets);
+    expect(find.text('Morning workout'), findsWidgets);
+    expect(find.textContaining('This week:'), findsOneWidget);
+    // All three charts render with data.
+    expect(find.byType(PieChart), findsOneWidget);
+    expect(find.byType(BarChart), findsOneWidget);
+    expect(find.byType(LineChart), findsOneWidget);
+  });
+
+  testWidgets('dashboard charts show empty states when nothing is done', (
+    tester,
+  ) async {
+    // Tall viewport so the whole scrollable Dashboard is built.
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: DashboardScreen(
+            habitRepo: _NoLogsHabitRepo(),
+            taskRepo: _LedgerTaskRepo(),
+            profileRepo: _EmptyProfileRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // No completions at all: intentional empty states, not a giant
+    // blank card. The pie still renders (grey 0% ring).
+    expect(find.text('No completions in this period yet'), findsOneWidget);
+    expect(find.text('No trend yet'), findsOneWidget);
+    expect(find.byType(BarChart), findsNothing);
+    expect(find.byType(LineChart), findsNothing);
+    expect(find.byType(PieChart), findsOneWidget);
+    expect(find.text('0%'), findsWidgets);
+    expect(find.textContaining('Not started yet'), findsOneWidget);
   });
 
   testWidgets('followers list opens with profiles, empty state otherwise', (
@@ -880,6 +1025,65 @@ class _LedgerHabitRepo extends HabitRepository {
       logDate: dateKey(DateTime.now()),
     ),
   ];
+}
+
+/// Two habits, one done today: feeds the daily-score test.
+class _ScoreHabitRepo extends HabitRepository {
+  @override
+  Future<List<Habit>> listMyHabits() async => [
+    const Habit(id: 'h1', userId: 'test-user', title: 'Read 10 pages'),
+    const Habit(id: 'h2', userId: 'test-user', title: 'Morning workout'),
+  ];
+
+  @override
+  Future<List<HabitLog>> listLogsForDate(String date) async => [];
+
+  @override
+  Future<List<HabitLog>> listLogsInRange(String start, String end) async {
+    final today = dateKey(DateTime.now());
+    if (today.compareTo(start) >= 0 && today.compareTo(end) <= 0) {
+      return [
+        HabitLog(
+          id: 'h1_$today',
+          habitId: 'h1',
+          userId: 'test-user',
+          logDate: today,
+        ),
+      ];
+    }
+    return [];
+  }
+
+  @override
+  Future<List<HabitLog>> listAllCompletedLogs() async {
+    final today = dateKey(DateTime.now());
+    return [
+      HabitLog(
+        id: 'h1_$today',
+        habitId: 'h1',
+        userId: 'test-user',
+        logDate: today,
+      ),
+    ];
+  }
+}
+
+/// Habits but no completions at all: charts show empty states.
+class _NoLogsHabitRepo extends HabitRepository {
+  @override
+  Future<List<Habit>> listMyHabits() async => [
+    const Habit(id: 'h1', userId: 'test-user', title: 'Read 10 pages'),
+  ];
+
+  @override
+  Future<List<HabitLog>> listLogsForDate(String date) async => [];
+
+  @override
+  Future<List<HabitLog>> listLogsInRange(String start, String end) async =>
+      [];
+
+  @override
+  Future<List<HabitLog>> listAllCompletedLogs() async => [];
 }
 
 /// No done tasks: the Dashboard ledger counts only the habit log.

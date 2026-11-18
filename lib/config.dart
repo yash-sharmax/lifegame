@@ -19,6 +19,13 @@
 library;
 
 class AppConfig {
+  /// App version (e.g. '2.7.0+13'). Single source of truth for the
+  /// in-app About label — bump this together with pubspec.yaml on
+  /// every release. (18 Nov 2026: the v2.5.1 About label was a
+  /// hard-coded string and was never bumped, so it kept showing the
+  /// old version even though the new build was live.)
+  static const String appVersion = '2.7.0+13';
+
   /// Appwrite Cloud endpoint (region-specific for this project).
   static const String endpoint = String.fromEnvironment(
     'APPWRITE_ENDPOINT',

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
+import '../config.dart';
 import '../data/models.dart';
 import '../data/repositories.dart';
 import '../logic/xp.dart';
@@ -710,11 +711,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     Card(
                       child: Column(
                         children: [
-                          const ListTile(
-                            leading: Icon(Icons.info_outline),
-                            title: Text('About Life Game'),
+                          ListTile(
+                            leading: const Icon(Icons.info_outline),
+                            title: const Text('About Life Game'),
                             subtitle: Text(
-                              'Version 2.6.0+12 • Flutter • Appwrite',
+                              'Version ${AppConfig.appVersion} • Flutter • Appwrite',
                             ),
                           ),
                           const Divider(height: 1),
