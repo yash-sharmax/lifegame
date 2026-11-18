@@ -868,7 +868,56 @@ class HabitRepository {
         Query.orderAsc(r'$createdAt'),
       ],
     );
-    return list.rows.map((doc) => Habit.fromJson(_docJson(doc))).toList();
+    final habits = list.rows
+        .map((doc) => Habit.fromJson(_docJson(doc)))
+        .toList();
+    // Overlay on-device notes (the fallback while the live `habits`
+    // table has no `notes` attribute — see updateHabit): a locally
+    // stored note wins, including an empty one (the user cleared it).
+    final localNotes = await _localNotesMap(userId);
+    if (localNotes.isEmpty) return habits;
+    return habits
+        .map(
+          (h) => localNotes.containsKey(h.id)
+              ? h.copyWith(notes: localNotes[h.id]!)
+              : h,
+        )
+        .toList();
+  }
+
+  /// On-device notes for [userId], keyed by habit id. Best-effort:
+  /// in an environment without working SharedPreferences (e.g. a
+  /// widget test) this returns an empty map instead of throwing.
+  Future<Map<String, String>> _localNotesMap(String userId) async {
+    try {
+      final store = await LocalStore.getInstance();
+      final all = store.loadHabitNotes();
+      return {
+        for (final entry in all.entries)
+          if (entry.key.startsWith('$userId|'))
+            entry.key.substring(userId.length + 1): entry.value,
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _saveLocalNote(String habitId, String notes) async {
+    try {
+      final store = await LocalStore.getInstance();
+      await store.saveHabitNote(_requireUserId(), habitId, notes);
+    } catch (_) {
+      // Best-effort only (see _localNotesMap).
+    }
+  }
+
+  Future<void> _deleteLocalNote(String habitId) async {
+    try {
+      final store = await LocalStore.getInstance();
+      await store.deleteHabitNote(_requireUserId(), habitId);
+    } catch (_) {
+      // Best-effort only (see _localNotesMap).
+    }
   }
 
   Future<Habit> addHabit({required String title, required int color}) async {
@@ -889,11 +938,50 @@ class HabitRepository {
     return Habit(id: doc.$id, userId: userId, title: title, color: color);
   }
 
-  Future<void> updateHabit(Habit habit, {String? title, int? color}) async {
+  /// Whether the live `habits` table has the `notes` attribute. It does
+  /// not (18 Nov 2026) — the attribute is defined in
+  /// scripts/setup_appwrite.mjs for a future re-run. Until then notes
+  /// fall back to on-device storage (LocalStore). Once a 400 is seen,
+  /// this session stops trying Appwrite for notes.
+  static bool _notesColumnAvailable = true;
+
+  Future<void> updateHabit(
+    Habit habit, {
+    String? title,
+    int? color,
+    String? notes,
+  }) async {
     final updates = <String, Object>{};
     if (title != null) updates['title'] = title;
     if (color != null) updates['color'] = color;
-    if (updates.isEmpty) return;
+    if (notes != null) {
+      if (_notesColumnAvailable) {
+        try {
+          await _d.updateRow(
+            databaseId: _dbId,
+            tableId: 'habits',
+            rowId: habit.id,
+            data: {'notes': notes},
+          );
+          // The server now holds the note — drop any local fallback.
+          await _deleteLocalNote(habit.id);
+        } on AppwriteException catch (e) {
+          if (e.code == 400) {
+            // No `notes` attribute on the live table yet.
+            _notesColumnAvailable = false;
+            await _saveLocalNote(habit.id, notes);
+          } else {
+            rethrow;
+          }
+        }
+      } else {
+        await _saveLocalNote(habit.id, notes);
+      }
+    }
+    if (updates.isEmpty) {
+      _notifyChanged();
+      return;
+    }
     await _d.updateRow(
       databaseId: _dbId,
       tableId: 'habits',
@@ -967,6 +1055,7 @@ class HabitRepository {
           lastActiveDate: newLastActive,
         );
       }
+      await _deleteLocalNote(habitId);
       await archiveHabit(habitId);
     });
   }
@@ -1013,6 +1102,33 @@ class HabitRepository {
       ],
     );
     return list.rows.map((doc) => HabitLog.fromJson(_docJson(doc))).toList();
+  }
+
+  /// Every completed habit log, newest first — the XP ledger on the
+  /// Dashboard is derived from this (each log = +2 XP). Paginated: a
+  /// long-term user has more than one page of logs.
+  Future<List<HabitLog>> listAllCompletedLogs() async {
+    final userId = _requireUserId();
+    final all = <HabitLog>[];
+    const page = 100;
+    var offset = 0;
+    while (true) {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'habit_logs',
+        queries: [
+          Query.equal('ownerUid', userId),
+          Query.equal('completed', true),
+          Query.orderDesc('date'),
+          Query.limit(page),
+          Query.offset(offset),
+        ],
+      );
+      all.addAll(list.rows.map((doc) => HabitLog.fromJson(_docJson(doc))));
+      if (list.rows.length < page) break;
+      offset += page;
+    }
+    return all;
   }
 
   /// Distinct dates (newest first) with at least one completed habit.
@@ -1315,6 +1431,35 @@ class TaskRepository {
     _notifyChanged();
   }
 
+  /// Every done weekly task, newest week first — the XP ledger on the
+  /// Dashboard is derived from this (each done task = +2 XP).
+  /// (listWeeklyTasks only covers one week; the ledger needs all.)
+  Future<List<WeeklyTask>> listAllDoneWeeklyTasks() async {
+    final userId = _requireUserId();
+    final all = <WeeklyTask>[];
+    const page = 100;
+    var offset = 0;
+    while (true) {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'weekly_tasks',
+        queries: [
+          Query.equal('ownerUid', userId),
+          Query.equal('done', true),
+          Query.orderDesc('weekStart'),
+          Query.limit(page),
+          Query.offset(offset),
+        ],
+      );
+      all.addAll(
+        list.rows.map((doc) => WeeklyTask.fromJson(_docJson(doc))),
+      );
+      if (list.rows.length < page) break;
+      offset += page;
+    }
+    return all;
+  }
+
   /// Applies an XP delta to my profile, clamped at 0, leaving streak
   /// fields untouched. Weekly/monthly tasks grant XP only — the streak
   /// stays habit-driven (it is computed from habit logs).
@@ -1405,6 +1550,34 @@ class TaskRepository {
       permissions: _ownerPerms(userId),
     );
     _notifyChanged();
+  }
+
+  /// Every done monthly task, newest month first — the XP ledger on the
+  /// Dashboard is derived from this (each done task = +2 XP).
+  Future<List<MonthlyTask>> listAllDoneMonthlyTasks() async {
+    final userId = _requireUserId();
+    final all = <MonthlyTask>[];
+    const page = 100;
+    var offset = 0;
+    while (true) {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'monthly_tasks',
+        queries: [
+          Query.equal('ownerUid', userId),
+          Query.equal('done', true),
+          Query.orderDesc('month'),
+          Query.limit(page),
+          Query.offset(offset),
+        ],
+      );
+      all.addAll(
+        list.rows.map((doc) => MonthlyTask.fromJson(_docJson(doc))),
+      );
+      if (list.rows.length < page) break;
+      offset += page;
+    }
+    return all;
   }
 
   /// Toggles a monthly task: same +2 / -2 XP rule as weekly tasks.
@@ -1502,13 +1675,70 @@ class SocialRepository {
   }
 
   Future<List<String>> followingIds() async {
+    // Paginated (was: first page only — a user with >25 follows lost
+    // the rest from the Friends leaderboard and the Following list).
     final userId = _requireUserId();
-    final list = await _d.listRows(
-      databaseId: _dbId,
-      tableId: 'follows',
-      queries: [Query.equal('followerUid', userId)],
+    final ids = <String>[];
+    const page = 100;
+    var offset = 0;
+    while (true) {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'follows',
+        queries: [
+          Query.equal('followerUid', userId),
+          Query.limit(page),
+          Query.offset(offset),
+        ],
+      );
+      ids.addAll(
+        list.rows.map((doc) => doc.data['followingUid'] as String),
+      );
+      if (list.rows.length < page) break;
+      offset += page;
+    }
+    return ids;
+  }
+
+  /// Ids of the users following me.
+  Future<List<String>> followersIds() async {
+    final userId = _requireUserId();
+    final ids = <String>[];
+    const page = 100;
+    var offset = 0;
+    while (true) {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'follows',
+        queries: [
+          Query.equal('followingUid', userId),
+          Query.limit(page),
+          Query.offset(offset),
+        ],
+      );
+      ids.addAll(list.rows.map((doc) => doc.data['followerUid'] as String));
+      if (list.rows.length < page) break;
+      offset += page;
+    }
+    return ids;
+  }
+
+  /// Public profiles of my followers (or the people I follow), sorted
+  /// by display name. Used by the Followers / Following lists on
+  /// Profile (18 Nov 2026).
+  Future<List<Profile>> followProfiles({required bool followers}) async {
+    final ids = followers ? await followersIds() : await followingIds();
+    final profiles = <Profile>[];
+    final profilesRepo = ProfileRepository(db: _db);
+    for (final id in ids) {
+      final profile = await profilesRepo.fetchProfile(id);
+      if (profile != null) profiles.add(profile);
+    }
+    profiles.sort(
+      (a, b) =>
+          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
     );
-    return list.rows.map((doc) => doc.data['followingUid'] as String).toList();
+    return profiles;
   }
 
   Future<int> followingCount(String userId) async {

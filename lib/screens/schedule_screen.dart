@@ -525,16 +525,16 @@ class _ScheduleTile extends StatelessWidget {
         AppTheme.habitGradients[item.color % AppTheme.habitGradients.length];
     return Material(
       color: AppTheme.card,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(16),
       child: InkWell(
         onTap: () => onToggle(!item.done),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         child: Stack(
           children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: item.done
                       ? Colors.transparent
@@ -545,21 +545,21 @@ class _ScheduleTile extends StatelessWidget {
               child: Row(
                 children: [
                   Container(
-                    width: 46,
-                    height: 46,
+                    width: 38,
+                    height: 38,
                     decoration: BoxDecoration(
                       gradient: gradient,
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(11),
                     ),
                     child: Icon(
                       item.kind == 'habit'
                           ? Icons.check_circle_outline
                           : Icons.task_alt_outlined,
                       color: AppTheme.ink,
-                      size: 24,
+                      size: 20,
                     ),
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -567,7 +567,7 @@ class _ScheduleTile extends StatelessWidget {
                         Text(
                           item.title,
                           style: const TextStyle(
-                            fontSize: 16,
+                            fontSize: 15,
                             fontWeight: FontWeight.w700,
                             color: AppTheme.ink,
                           ),

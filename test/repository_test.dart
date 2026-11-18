@@ -641,4 +641,124 @@ void main() {
       expect(() => auth.deleteAccount(), throwsA(isA<AuthException>()));
     });
   });
+
+  group('v2.6.0 (18 Nov 2026): habit notes, XP ledger sources, follow lists', () {
+    test('habit notes round-trip through updateHabit and listMyHabits', () async {
+      final habit = await habits.addHabit(title: 'Read', color: 0);
+      await habits.updateHabit(habit, notes: '10 pages before bed');
+      final listed = await habits.listMyHabits();
+      expect(listed.single.notes, '10 pages before bed');
+
+      // Clearing the note (empty string) removes it.
+      await habits.updateHabit(listed.single, notes: '');
+      expect((await habits.listMyHabits()).single.notes, isEmpty);
+    });
+
+    test('listAllCompletedLogs returns completed logs, newest first', () async {
+      final habit = await habits.addHabit(title: 'Read', color: 0);
+      final other = await habits.addHabit(title: 'Run', color: 1);
+      await habits.toggleHabit(habit: habit, date: '2026-11-16', completed: true);
+      await habits.toggleHabit(habit: other, date: '2026-11-18', completed: true);
+      await habits.toggleHabit(habit: habit, date: '2026-11-17', completed: true);
+      // One log is unticked again: it must not appear in the ledger.
+      await habits.toggleHabit(habit: habit, date: '2026-11-16', completed: false);
+
+      final logs = await habits.listAllCompletedLogs();
+      expect(logs.length, 2);
+      expect(logs.map((l) => l.logDate), ['2026-11-18', '2026-11-17']);
+      expect(logs.every((l) => l.completed), isTrue);
+    });
+
+    test('listAllDoneWeeklyTasks / listAllDoneMonthlyTasks return done tasks only', () async {
+      await tasks.addWeeklyTask('Weekly review', '2026-11-16');
+      await tasks.addWeeklyTask('Not done yet', '2026-11-16');
+      await tasks.addMonthlyTask('Pay rent', '2026-11');
+      await tasks.addMonthlyTask('Skip this', '2026-11');
+      final weekly = await tasks.listWeeklyTasks('2026-11-16');
+      final monthly = await tasks.listMonthlyTasks('2026-11');
+      await tasks.toggleWeeklyTask(
+        weekly.firstWhere((t) => t.title == 'Weekly review').id,
+        true,
+      );
+      await tasks.toggleMonthlyTask(
+        monthly.firstWhere((t) => t.title == 'Pay rent').id,
+        true,
+      );
+
+      final doneWeekly = await tasks.listAllDoneWeeklyTasks();
+      expect(doneWeekly.length, 1);
+      expect(doneWeekly.single.title, 'Weekly review');
+      final doneMonthly = await tasks.listAllDoneMonthlyTasks();
+      expect(doneMonthly.length, 1);
+      expect(doneMonthly.single.title, 'Pay rent');
+    });
+
+    test('followProfiles returns followers and following, sorted by name', () async {
+      Future<void> seedUser(String id, String name) async {
+        await db.createRow(
+          databaseId: 'lifegame',
+          tableId: 'users',
+          rowId: id,
+          data: {
+            'username': name.toLowerCase(),
+            'displayName': name,
+            'bio': '',
+            'xp': 0,
+            'currentStreak': 0,
+            'longestStreak': 0,
+            'lastActiveDate': null,
+          },
+        );
+      }
+
+      await seedUser('user-2', 'Zara');
+      await seedUser('user-3', 'Amit');
+      await seedUser('user-4', 'Meera');
+      final social = SocialRepository(db: db);
+      // user-2 and user-3 follow me; I follow user-3 and user-4.
+      await db.createRow(
+        databaseId: 'lifegame',
+        tableId: 'follows',
+        rowId: 'user-2_user-1',
+        data: {'followerUid': 'user-2', 'followingUid': 'user-1'},
+      );
+      await db.createRow(
+        databaseId: 'lifegame',
+        tableId: 'follows',
+        rowId: 'user-3_user-1',
+        data: {'followerUid': 'user-3', 'followingUid': 'user-1'},
+      );
+      await db.createRow(
+        databaseId: 'lifegame',
+        tableId: 'follows',
+        rowId: 'user-1_user-3',
+        data: {'followerUid': 'user-1', 'followingUid': 'user-3'},
+      );
+      await db.createRow(
+        databaseId: 'lifegame',
+        tableId: 'follows',
+        rowId: 'user-1_user-4',
+        data: {'followerUid': 'user-1', 'followingUid': 'user-4'},
+      );
+
+      expect(await social.followersIds(), ['user-2', 'user-3']);
+      expect(await social.followingIds(), ['user-3', 'user-4']);
+
+      final followers = await social.followProfiles(followers: true);
+      expect(followers.map((p) => p.displayName), ['Amit', 'Zara']);
+      final following = await social.followProfiles(followers: false);
+      expect(following.map((p) => p.displayName), ['Amit', 'Meera']);
+    });
+
+    test('followProfiles skips ids with no profile row', () async {
+      final social = SocialRepository(db: db);
+      await db.createRow(
+        databaseId: 'lifegame',
+        tableId: 'follows',
+        rowId: 'ghost_user-1',
+        data: {'followerUid': 'ghost', 'followingUid': 'user-1'},
+      );
+      expect(await social.followProfiles(followers: true), isEmpty);
+    });
+  });
 }

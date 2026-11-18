@@ -307,26 +307,9 @@ class _MainShellState extends State<MainShell> {
                 ],
               ),
             ),
-            bottomNavigationBar: NavigationBar(
-              selectedIndex: _index,
-              onDestinationSelected: (i) => setState(() => _index = i),
-              destinations: const [
-                NavigationDestination(
-                  icon: Icon(Icons.home_outlined),
-                  selectedIcon: Icon(Icons.home),
-                  label: 'Home',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.dashboard_outlined),
-                  selectedIcon: Icon(Icons.dashboard),
-                  label: 'Dashboard',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.person_outlined),
-                  selectedIcon: Icon(Icons.person),
-                  label: 'Profile',
-                ),
-              ],
+            bottomNavigationBar: _CompactBottomNav(
+              index: _index,
+              onTap: (i) => setState(() => _index = i),
             ),
           );
         }
@@ -339,13 +322,13 @@ class _MainShellState extends State<MainShell> {
                   onDestinationSelected: (i) => setState(() => _index = i),
                   labelType: NavigationRailLabelType.all,
                   leading: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
+                    padding: EdgeInsets.symmetric(vertical: 12),
                     child: Column(
                       children: [
                         Icon(
                           Icons.shield,
                           color: AppTheme.ember,
-                          size: 30,
+                          size: 26,
                         ),
                         SizedBox(height: 6),
                         Text(
@@ -392,6 +375,129 @@ class _MainShellState extends State<MainShell> {
           ),
         );
       },
+    );
+  }
+}
+
+/// Compact bottom nav (v2.6.0, 18 Nov 2026): ~58px tall instead of
+/// the stock NavigationBar, with a CLEAR animated active state — the
+/// selected tab gets a violet pill that fades/slides in (200ms) and
+/// its icon scales up, so it is obvious which tab you are on.
+/// The unselected tabs show an icon only; the selected tab shows its
+/// label too, inside the pill.
+class _CompactBottomNav extends StatelessWidget {
+  const _CompactBottomNav({required this.index, required this.onTap});
+
+  final int index;
+  final ValueChanged<int> onTap;
+
+  static const List<({IconData icon, IconData selectedIcon, String label})>
+  _items = [
+    (icon: Icons.home_outlined, selectedIcon: Icons.home, label: 'Home'),
+    (
+      icon: Icons.dashboard_outlined,
+      selectedIcon: Icons.dashboard,
+      label: 'Dashboard',
+    ),
+    (
+      icon: Icons.person_outlined,
+      selectedIcon: Icons.person,
+      label: 'Profile',
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        height: 58,
+        decoration: const BoxDecoration(
+          color: AppTheme.card,
+          border: Border(top: BorderSide(color: AppTheme.cardBorder)),
+        ),
+        child: Row(
+          children: [
+            for (var i = 0; i < _items.length; i++)
+              Expanded(
+                child: _NavItem(
+                  icon: _items[i].icon,
+                  selectedIcon: _items[i].selectedIcon,
+                  label: _items[i].label,
+                  selected: index == i,
+                  onTap: () => onTap(i),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NavItem extends StatelessWidget {
+  const _NavItem({
+    required this.icon,
+    required this.selectedIcon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final IconData selectedIcon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? AppTheme.ember : AppTheme.inkSoft;
+    // Icon over label (stacked): the horizontal icon+label pill
+    // overflowed its third of the bar on a 390px phone — "Dashboard"
+    // is too wide side-by-side with the icon. Stacked, the pill is
+    // only as wide as the label, and the bar stays compact.
+    return InkWell(
+      onTap: onTap,
+      child: Center(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppTheme.ember.withValues(alpha: 0.16)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedScale(
+                scale: selected ? 1.1 : 1.0,
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOutCubic,
+                child: Icon(
+                  selected ? selectedIcon : icon,
+                  color: color,
+                  size: 21,
+                ),
+              ),
+              if (selected) ...[
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

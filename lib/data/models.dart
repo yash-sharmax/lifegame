@@ -113,6 +113,7 @@ class Habit {
     required this.title,
     this.color = 0xFFF59E0B,
     this.archived = false,
+    this.notes = '',
     this.createdAt,
   });
 
@@ -122,10 +123,16 @@ class Habit {
     title: json['title'] as String,
     color: (json['color'] as num?)?.toInt() ?? 0xFFF59E0B,
     archived: json['archived'] as bool? ?? false,
+    notes: json['notes'] as String? ?? '',
     createdAt: _createdAt(json),
   );
 
   /// `createdAt` is Appwrite's system `$createdAt` — never sent by us.
+  /// `notes` is NOT in toMap: the live `habits` table has no `notes`
+  /// attribute yet (it is defined in scripts/setup_appwrite.mjs for a
+  /// future re-run), so sending it on create would fail. Notes are
+  /// written through HabitRepository.updateHabit, which falls back to
+  /// on-device storage when the attribute is missing (see there).
   Map<String, dynamic> toMap(String userId) => {
     'ownerUid': userId,
     'title': title,
@@ -138,7 +145,22 @@ class Habit {
   final String title;
   final int color;
   final bool archived;
+
+  /// Free-text notes about this habit (18 Nov 2026). Shown as a small
+  /// indicator on habit rows; edited in the habit edit dialog.
+  final String notes;
   final DateTime? createdAt;
+
+  Habit copyWith({String? title, int? color, bool? archived, String? notes}) =>
+      Habit(
+        id: id,
+        userId: userId,
+        title: title ?? this.title,
+        color: color ?? this.color,
+        archived: archived ?? this.archived,
+        notes: notes ?? this.notes,
+        createdAt: createdAt,
+      );
 }
 
 class HabitLog {

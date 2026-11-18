@@ -28,6 +28,45 @@ class LocalStore {
   static const _challengesKey = 'lifegame_challenges_v1';
   static const _firedKey = 'lifegame_reminder_fired_v1';
 
+  /// Habit notes fallback (18 Nov 2026): the live `habits` table has no
+  /// `notes` attribute yet, so notes live on-device until the attribute
+  /// exists (see HabitRepository.updateHabit). Keyed by owner id, a
+  /// pipe, then habit id.
+  static const _habitNotesKey = 'lifegame_habit_notes_v1';
+
+  Map<String, String> loadHabitNotes() {
+    final raw = _prefs.getString(_habitNotesKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return map.map((k, v) => MapEntry(k, v.toString()));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> saveHabitNote(
+    String ownerId,
+    String habitId,
+    String notes,
+  ) async {
+    final map = loadHabitNotes();
+    final key = '$ownerId|$habitId';
+    if (notes.trim().isEmpty) {
+      map.remove(key);
+    } else {
+      map[key] = notes;
+    }
+    await _prefs.setString(_habitNotesKey, jsonEncode(map));
+  }
+
+  Future<void> deleteHabitNote(String ownerId, String habitId) async {
+    final map = loadHabitNotes();
+    if (map.remove('$ownerId|$habitId') != null) {
+      await _prefs.setString(_habitNotesKey, jsonEncode(map));
+    }
+  }
+
   static Future<LocalStore> getInstance() async {
     final prefs = await SharedPreferences.getInstance();
     return LocalStore(prefs);
@@ -109,5 +148,9 @@ class LocalStore {
         .where((c) => c.ownerId != ownerId)
         .toList();
     await saveChallenges(challenges);
+    // Habit notes are per-owner too (key "<ownerId>|<habitId>").
+    final notes = loadHabitNotes();
+    notes.removeWhere((key, _) => key.startsWith('$ownerId|'));
+    await _prefs.setString(_habitNotesKey, jsonEncode(notes));
   }
 }

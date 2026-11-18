@@ -109,7 +109,7 @@ abstract final class AppTheme {
         elevation: 0,
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(20)),
+          borderRadius: BorderRadius.all(Radius.circular(16)),
           side: BorderSide(color: cardBorder),
         ),
       ),
@@ -168,7 +168,7 @@ abstract final class AppTheme {
           fontWeight: FontWeight.w800,
         ),
         unselectedLabelTextStyle: const TextStyle(color: inkSoft),
-        indicatorColor: ember.withValues(alpha: 0.22),
+        indicatorColor: ember.withValues(alpha: 0.28),
       ),
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith(

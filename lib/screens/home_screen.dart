@@ -264,7 +264,11 @@ class _HomeScreenState extends State<HomeScreen> {
     if (result == null || !mounted) return;
     try {
       if (result.action == HabitEditAction.save && result.title.isNotEmpty) {
-        await _habits.updateHabit(habit, title: result.title);
+        await _habits.updateHabit(
+          habit,
+          title: result.title,
+          notes: result.notes,
+        );
       } else if (result.action == HabitEditAction.delete) {
         // Deleting removes the habit's logs and takes back the XP its
         // completions contributed (see HabitRepository).
@@ -371,7 +375,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
-                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 84),
                     children: [
                       _TodayProgressCard(
                         done: doneCount,
@@ -648,14 +652,14 @@ class _Header extends StatelessWidget {
                 '${greetingForHour()},',
                 style: const TextStyle(
                   color: AppTheme.inkSoft,
-                  fontSize: 15,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
               ),
               Text(
                 displayName,
                 style: const TextStyle(
-                  fontSize: 26,
+                  fontSize: 23,
                   fontWeight: FontWeight.w800,
                   letterSpacing: -0.5,
                 ),
@@ -684,8 +688,8 @@ class _Header extends StatelessWidget {
                     borderRadius: BorderRadius.circular(999),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
+                        horizontal: 11,
+                        vertical: 7,
                       ),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(999),
@@ -697,14 +701,14 @@ class _Header extends StatelessWidget {
                           const Icon(
                             Icons.bolt,
                             color: AppTheme.gold,
-                            size: 20,
+                            size: 18,
                           ),
                           const SizedBox(width: 4),
                           Text(
                             '$xp XP',
                             style: const TextStyle(
                               fontWeight: FontWeight.w800,
-                              fontSize: 15,
+                              fontSize: 14,
                             ),
                           ),
                         ],
@@ -715,8 +719,8 @@ class _Header extends StatelessWidget {
                 const SizedBox(width: 8),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
+                    horizontal: 11,
+                    vertical: 7,
                   ),
                   decoration: BoxDecoration(
                     color: AppTheme.card,
@@ -729,14 +733,14 @@ class _Header extends StatelessWidget {
                       const Icon(
                         Icons.local_fire_department,
                         color: AppTheme.flame,
-                        size: 20,
+                        size: 18,
                       ),
                       const SizedBox(width: 4),
                       Text(
                         '$streak',
                         style: const TextStyle(
                           fontWeight: FontWeight.w800,
-                          fontSize: 15,
+                          fontSize: 14,
                         ),
                       ),
                     ],
@@ -776,10 +780,10 @@ class _TodayProgressCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
       decoration: BoxDecoration(
         color: AppTheme.card,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppTheme.cardBorder),
       ),
       child: Column(
@@ -792,7 +796,7 @@ class _TodayProgressCard extends StatelessWidget {
               const Expanded(
                 child: Text(
                   "Today's progress",
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                 ),
               ),
               const SizedBox(width: 8),
@@ -852,10 +856,10 @@ class _DailyLineCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
       decoration: BoxDecoration(
         gradient: AppTheme.heroGradient,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -886,7 +890,7 @@ class _DailyLineCard extends StatelessWidget {
               Icon(
                 Icons.format_quote,
                 color: AppTheme.ink.withValues(alpha: 0.7),
-                size: 30,
+                size: 26,
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -894,7 +898,7 @@ class _DailyLineCard extends StatelessWidget {
                   line,
                   style: const TextStyle(
                     color: AppTheme.ink,
-                    fontSize: 17,
+                    fontSize: 15,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -938,19 +942,19 @@ class _HabitRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: AppTheme.card,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(16),
       child: InkWell(
         onTap: () => onToggle(!done),
         // Long-press opens the same edit dialog (rename / delete) that
         // Profile offers — a habit row must always have a delete path.
         onLongPress: onEdit,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         child: Stack(
           children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: done ? Colors.transparent : AppTheme.cardBorder,
                 ),
@@ -958,8 +962,8 @@ class _HabitRow extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  BattleCheck(done: done, size: 44),
-                  const SizedBox(width: 14),
+                  BattleCheck(done: done, size: 36),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -967,7 +971,7 @@ class _HabitRow extends StatelessWidget {
                         Text(
                           habit.title,
                           style: const TextStyle(
-                            fontSize: 16,
+                            fontSize: 15,
                             fontWeight: FontWeight.w700,
                             color: AppTheme.ink,
                           ),
@@ -978,9 +982,36 @@ class _HabitRow extends StatelessWidget {
                               : 'Tap to complete • +$xpPerTask XP',
                           style: const TextStyle(
                             color: AppTheme.inkSoft,
-                            fontSize: 13,
+                            fontSize: 12,
                           ),
                         ),
+                        // Notes preview: the first line, with a note
+                        // icon — the full note lives in the edit dialog.
+                        if (habit.notes.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.sticky_note_2_outlined,
+                                  color: AppTheme.inkSoft,
+                                  size: 13,
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    habit.notes.split('\n').first,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: AppTheme.inkSoft,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         if (reminder != null)
                           Text(
                             reminder!.enabled
@@ -1064,28 +1095,28 @@ class _QuickLinkCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: AppTheme.card,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(16),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(color: AppTheme.cardBorder),
           ),
           child: Row(
             children: [
               Container(
-                width: 42,
-                height: 42,
+                width: 34,
+                height: 34,
                 decoration: BoxDecoration(
                   gradient: AppTheme.emberGradient,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(icon, color: AppTheme.ink, size: 22),
+                child: Icon(icon, color: AppTheme.ink, size: 19),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1093,7 +1124,7 @@ class _QuickLinkCard extends StatelessWidget {
                     Text(
                       title,
                       style: const TextStyle(
-                        fontSize: 15,
+                        fontSize: 14,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
@@ -1108,11 +1139,9 @@ class _QuickLinkCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(
-                Icons.chevron_right,
-                color: AppTheme.inkSoft,
-                size: 20,
-              ),
+              // No chevron: on a narrow phone the chevron squeezed
+              // the text column and broke "Schedule"/"Challenges"
+              // mid-word ("Sched ule"). The whole card is tappable.
             ],
           ),
         ),

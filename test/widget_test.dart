@@ -1,9 +1,12 @@
 import 'package:appwrite/appwrite.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifegame/data/models.dart';
 import 'package:lifegame/data/repositories.dart';
+import 'package:lifegame/logic/xp.dart';
 import 'package:lifegame/main.dart';
+import 'package:lifegame/screens/dashboard_screen.dart';
 import 'package:lifegame/screens/home_screen.dart';
 import 'package:lifegame/screens/profile_screen.dart';
 
@@ -383,7 +386,7 @@ void main() {
     expect(find.text('Send feedback'), findsOneWidget);
     expect(find.text('Delete account'), findsOneWidget);
     expect(find.text('Log out'), findsOneWidget);
-    expect(find.text('Version 2.5.0+10 • Flutter • Appwrite'), findsOneWidget);
+    expect(find.text('Version 2.6.0+12 • Flutter • Appwrite'), findsOneWidget);
   });
 
   testWidgets('feedback form sends a message and shows a thank-you', (
@@ -478,9 +481,142 @@ void main() {
 
     expect(auth.deleteCalled, isTrue);
   });
-}
 
-/// Fake repositories that return empty data without touching Appwrite.
+  testWidgets('dashboard shows the Excel table, charts and XP ledger', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: DashboardScreen(
+            habitRepo: _LedgerHabitRepo(),
+            taskRepo: _LedgerTaskRepo(),
+            profileRepo: _TwoXpProfileRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The Excel-style table: habits in one column, dates as columns,
+    // view-only (ticking happens on Home).
+    expect(find.text('Habit table'), findsOneWidget);
+    // The habit appears twice: once in the table row, once in the ledger.
+    expect(find.text('Read 10 pages'), findsWidgets);
+    expect(find.text('View only — tick from Home'), findsOneWidget);
+    // Pie chart (done vs missed) and bar graph (per-day completions).
+    expect(find.byType(PieChart), findsOneWidget);
+    expect(find.byType(BarChart), findsOneWidget);
+    // The ledger: 1 completed habit log = 1 entry × 2 XP = 2 XP,
+    // matching the profile's 2 XP exactly.
+    expect(find.text('XP breakdown'), findsOneWidget);
+    expect(find.text('Total 2 XP'), findsOneWidget);
+    expect(find.text('1 entries × 2 XP = 2 XP'), findsOneWidget);
+    expect(find.textContaining('will match after the next sync'), findsNothing);
+  });
+
+  testWidgets('followers list opens with profiles, empty state otherwise', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FollowListScreen(
+          followers: true,
+          socialRepo: _FollowListRepo(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Followers'), findsOneWidget);
+    expect(find.text('Amit'), findsOneWidget);
+    expect(find.text('@amit'), findsOneWidget);
+    expect(find.text('Zara'), findsOneWidget);
+    expect(find.text('LVL 1 • RECRUIT'), findsWidgets);
+
+    // Tapping a row opens that person's profile.
+    await tester.tap(find.text('Amit'));
+    await tester.pumpAndSettle();
+    expect(find.text('@amit'), findsWidgets);
+    expect(find.text('Level 1 • Recruit'), findsWidgets);
+  });
+
+  testWidgets('following list shows the empty state when nobody is followed', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FollowListScreen(
+          followers: false,
+          socialRepo: _EmptyFollowRepo(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Following'), findsOneWidget);
+    expect(find.text('Not following anyone yet'), findsOneWidget);
+  });
+
+  testWidgets('habit notes can be added in the edit dialog and persist', (
+    tester,
+  ) async {
+    final repo = _MutableHabitRepo();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: HomeScreen(habitRepo: repo, profileRepo: _XpProfileRepo()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert).first);
+    await tester.pumpAndSettle();
+    expect(find.text('Edit habit'), findsOneWidget);
+
+    final notesField = find.byWidgetPredicate(
+      (w) =>
+          w is TextField && w.decoration?.labelText == 'Notes (optional)',
+    );
+    expect(notesField, findsOneWidget);
+    await tester.enterText(notesField, '10 pages before bed');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(repo.habits.single.notes, '10 pages before bed');
+    // The habit row shows the note preview with its icon.
+    expect(find.text('10 pages before bed'), findsOneWidget);
+    expect(find.byIcon(Icons.sticky_note_2_outlined), findsOneWidget);
+  });
+
+  testWidgets('phone bottom nav is compact with a clear active tab', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(780, 1688);
+    tester.view.devicePixelRatio = 2.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const MaterialApp(home: MainShell()));
+    await tester.pumpAndSettle();
+
+    // The stock NavigationBar is gone: the custom compact bar shows
+    // the selected tab's label inside its violet pill, the others as
+    // icons only.
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(find.byType(NavigationRail), findsNothing);
+    expect(find.text('Home'), findsOneWidget);
+    expect(find.text('Dashboard'), findsNothing);
+
+    await tester.tap(find.byIcon(Icons.dashboard_outlined));
+    await tester.pumpAndSettle();
+    // 'Dashboard' now appears twice: the Dashboard screen's AppBar
+    // title and the nav pill label. 'Home' is gone from the nav.
+    expect(find.text('Dashboard'), findsWidgets);
+    expect(find.text('Home'), findsNothing);
+  });
+}
 
 /// Fake repositories that return empty data without touching Appwrite.
 class _EmptyHabitRepo extends HabitRepository {
@@ -682,14 +818,20 @@ class _MutableHabitRepo extends HabitRepository {
   Future<List<HabitLog>> listLogsForDate(String date) async => [];
 
   @override
-  Future<void> updateHabit(Habit habit, {String? title, int? color}) async {
+  Future<void> updateHabit(
+    Habit habit, {
+    String? title,
+    int? color,
+    String? notes,
+  }) async {
     final index = habits.indexWhere((h) => h.id == habit.id);
-    if (index >= 0 && title != null) {
+    if (index >= 0) {
       habits[index] = Habit(
         id: habit.id,
         userId: habit.userId,
-        title: title,
-        color: habit.color,
+        title: title ?? habit.title,
+        color: color ?? habit.color,
+        notes: notes ?? habit.notes,
       );
     }
   }
@@ -707,4 +849,81 @@ class _EmptyTaskRepo extends TaskRepository {
 
   @override
   Future<List<MonthlyTask>> listMonthlyTasks(String month) async => [];
+}
+
+/// One habit, done today: feeds the Dashboard table + ledger test.
+class _LedgerHabitRepo extends HabitRepository {
+  @override
+  Future<List<Habit>> listMyHabits() async => [
+    const Habit(id: 'h1', userId: 'test-user', title: 'Read 10 pages'),
+  ];
+
+  @override
+  Future<List<HabitLog>> listLogsForDate(String date) async => [];
+
+  @override
+  Future<List<HabitLog>> listLogsInRange(String start, String end) async => [
+    HabitLog(
+      id: 'h1_${dateKey(DateTime.now())}',
+      habitId: 'h1',
+      userId: 'test-user',
+      logDate: dateKey(DateTime.now()),
+    ),
+  ];
+
+  @override
+  Future<List<HabitLog>> listAllCompletedLogs() async => [
+    HabitLog(
+      id: 'h1_${dateKey(DateTime.now())}',
+      habitId: 'h1',
+      userId: 'test-user',
+      logDate: dateKey(DateTime.now()),
+    ),
+  ];
+}
+
+/// No done tasks: the Dashboard ledger counts only the habit log.
+class _LedgerTaskRepo extends TaskRepository {
+  @override
+  Future<List<WeeklyTask>> listAllDoneWeeklyTasks() async => [];
+
+  @override
+  Future<List<MonthlyTask>> listAllDoneMonthlyTasks() async => [];
+}
+
+/// Profile with exactly 2 XP, so the ledger (1 entry × 2 XP) matches.
+class _TwoXpProfileRepo extends ProfileRepository {
+  @override
+  Future<Profile?> fetchMyProfile() async => const Profile(
+    id: 'test-user',
+    username: 'tester',
+    displayName: 'Tester',
+    xp: 2,
+    currentStreak: 1,
+    longestStreak: 1,
+  );
+}
+
+/// Two followers, for the Followers list test.
+class _FollowListRepo extends SocialRepository {
+  @override
+  Future<List<Profile>> followProfiles({required bool followers}) async => [
+    const Profile(id: 'u2', username: 'amit', displayName: 'Amit'),
+    const Profile(id: 'u3', username: 'zara', displayName: 'Zara'),
+  ];
+
+  @override
+  Future<bool> isFollowing(String followingId) async => false;
+
+  @override
+  Future<int> followersCount(String userId) async => 2;
+
+  @override
+  Future<int> followingCount(String userId) async => 0;
+}
+
+/// Nobody followed: the Following list shows its empty state.
+class _EmptyFollowRepo extends SocialRepository {
+  @override
+  Future<List<Profile>> followProfiles({required bool followers}) async => [];
 }

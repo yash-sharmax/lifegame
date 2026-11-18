@@ -6,12 +6,16 @@ import '../theme.dart';
 /// What the user chose in the habit edit dialog.
 enum HabitEditAction { save, delete }
 
-/// The dialog result: the chosen action plus the (possibly edited) title.
+/// The dialog result: the chosen action plus the (possibly edited)
+/// title and notes.
 class HabitEditResult {
-  const HabitEditResult(this.action, this.title);
+  const HabitEditResult(this.action, this.title, {this.notes = ''});
 
   final HabitEditAction action;
   final String title;
+
+  /// The (possibly edited) notes text. Empty means "no notes".
+  final String notes;
 }
 
 /// The result of the add-habit dialog: the title and the chosen banner
@@ -107,23 +111,42 @@ Future<HabitAddResult?> showAddHabitDialog(BuildContext context) async {
   return null;
 }
 
-/// The habit edit dialog, shared by Home and Profile: rename a habit or
-/// delete it. Returns null when the user cancels. The caller performs
-/// the save/delete itself and reloads afterwards.
+/// The habit edit dialog, shared by Home and Profile: rename a habit,
+/// add or edit its notes, or delete it. Returns null when the user
+/// cancels. The caller performs the save/delete itself and reloads
+/// afterwards.
 Future<HabitEditResult?> showHabitEditDialog(
   BuildContext context,
   Habit habit,
 ) async {
-  final controller = TextEditingController(text: habit.title);
+  final titleController = TextEditingController(text: habit.title);
+  final notesController = TextEditingController(text: habit.notes);
   final result = await showDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       title: const Text('Edit habit'),
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        decoration: const InputDecoration(labelText: 'Habit name'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleController,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Habit name'),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: notesController,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                labelText: 'Notes (optional)',
+                hintText: 'Anything to remember about this habit…',
+                alignLabelWithHint: true,
+              ),
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -142,10 +165,18 @@ Future<HabitEditResult?> showHabitEditDialog(
     ),
   );
   if (result == 'save') {
-    return HabitEditResult(HabitEditAction.save, controller.text.trim());
+    return HabitEditResult(
+      HabitEditAction.save,
+      titleController.text.trim(),
+      notes: notesController.text.trim(),
+    );
   }
   if (result == 'delete') {
-    return HabitEditResult(HabitEditAction.delete, controller.text.trim());
+    return HabitEditResult(
+      HabitEditAction.delete,
+      titleController.text.trim(),
+      notes: notesController.text.trim(),
+    );
   }
   return null;
 }

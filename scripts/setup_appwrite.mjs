@@ -154,6 +154,12 @@ const TABLES = [
       str('title', 256, true),
       intCol('color', true),
       boolCol('archived', false, false),
+      // Habit notes (18 Nov 2026, v2.6.0). The live table predates this
+      // column: re-running this script skips existing tables, so add it
+      // in the console (Database → Habits → + Attribute, string 2000,
+      // not required) or the app keeps notes on-device (see
+      // HabitRepository.updateHabit).
+      str('notes', 2000, false),
     ],
     indexes: [
       { key: 'idx_owner_archived', type: 'key', columns: ['ownerUid', 'archived'] },

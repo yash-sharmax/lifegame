@@ -255,7 +255,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (result == null || !mounted) return;
     try {
       if (result.action == HabitEditAction.save && result.title.isNotEmpty) {
-        await _habits.updateHabit(habit, title: result.title);
+        await _habits.updateHabit(
+          habit,
+          title: result.title,
+          notes: result.notes,
+        );
         await _load();
       } else if (result.action == HabitEditAction.delete) {
         // Deleting removes the habit's logs and takes back the XP its
@@ -514,6 +518,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  /// Opens the Followers or Following list (18 Nov 2026): the numbers
+  /// on the stats strip are tappable and show who is actually there.
+  void _openFollowList({required bool followers}) {
+    Navigator.of(context).push(
+      WarriorPageRoute(
+        builder: (_) => FollowListScreen(
+          followers: followers,
+          socialRepo: _social,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = _profile;
@@ -578,6 +595,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       followers: _followers,
                       following: _following,
                       bestStreak: profile.longestStreak,
+                      onFollowersTap: () => _openFollowList(followers: true),
+                      onFollowingTap: () => _openFollowList(followers: false),
                     ).animate().fadeIn(delay: 80.ms).slideY(begin: 0.1),
                     const SizedBox(height: 20),
                     // Tabs: Habits | Weekly | Monthly.
@@ -695,7 +714,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             leading: Icon(Icons.info_outline),
                             title: Text('About Life Game'),
                             subtitle: Text(
-                              'Version 2.5.0+10 • Flutter • Appwrite',
+                              'Version 2.6.0+12 • Flutter • Appwrite',
                             ),
                           ),
                           const Divider(height: 1),
@@ -944,12 +963,12 @@ class _IdentityCard extends StatelessWidget {
     final level = levelForXp(profile.xp);
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(14),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AvatarCircle(initials: profile.initials, size: 72),
-            const SizedBox(width: 16),
+            AvatarCircle(initials: profile.initials, size: 64),
+            const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -957,7 +976,7 @@ class _IdentityCard extends StatelessWidget {
                   Text(
                     profile.displayName,
                     style: const TextStyle(
-                      fontSize: 21,
+                      fontSize: 19,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
@@ -1017,19 +1036,24 @@ class _IdentityCard extends StatelessWidget {
 }
 
 /// Stats strip: Rank, Followers, Following, Best streak as compact
-/// pills in one horizontal row (not a 2×2 grid).
+/// pills in one horizontal row (not a 2×2 grid). Followers and
+/// Following are tappable — they open the list of people (18 Nov 2026).
 class _StatsStrip extends StatelessWidget {
   const _StatsStrip({
     required this.rank,
     required this.followers,
     required this.following,
     required this.bestStreak,
+    this.onFollowersTap,
+    this.onFollowingTap,
   });
 
   final int rank;
   final int followers;
   final int following;
   final int bestStreak;
+  final VoidCallback? onFollowersTap;
+  final VoidCallback? onFollowingTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1040,11 +1064,19 @@ class _StatsStrip extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: _StatPill(value: '$followers', label: 'Followers'),
+          child: _StatPill(
+            value: '$followers',
+            label: 'Followers',
+            onTap: onFollowersTap,
+          ),
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: _StatPill(value: '$following', label: 'Following'),
+          child: _StatPill(
+            value: '$following',
+            label: 'Following',
+            onTap: onFollowingTap,
+          ),
         ),
         const SizedBox(width: 8),
         Expanded(
@@ -1056,25 +1088,26 @@ class _StatsStrip extends StatelessWidget {
 }
 
 class _StatPill extends StatelessWidget {
-  const _StatPill({required this.value, required this.label});
+  const _StatPill({required this.value, required this.label, this.onTap});
 
   final String value;
   final String label;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+    final pill = Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
       decoration: BoxDecoration(
         color: AppTheme.card,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppTheme.cardBorder),
       ),
       child: Column(
         children: [
           Text(
             value,
-            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 2),
           Text(
@@ -1083,6 +1116,17 @@ class _StatPill extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
         ],
+      ),
+    );
+    final onTap = this.onTap;
+    if (onTap == null) return pill;
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: pill,
       ),
     );
   }
@@ -1217,38 +1261,51 @@ class _HabitRow extends StatelessWidget {
         AppTheme.habitGradients[habit.color % AppTheme.habitGradients.length];
     return Material(
       color: AppTheme.card,
-      borderRadius: BorderRadius.circular(18),
+      borderRadius: BorderRadius.circular(16),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(color: AppTheme.cardBorder),
           ),
           child: Row(
             children: [
               Container(
-                width: 40,
-                height: 40,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
                   gradient: gradient,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(
                   Icons.check_circle_outline,
                   color: AppTheme.ink,
-                  size: 20,
+                  size: 18,
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   habit.title,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                  ),
                 ),
               ),
+              // Notes indicator: a habit with notes shows a note icon.
+              if (habit.notes.isNotEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(right: 4),
+                  child: Icon(
+                    Icons.sticky_note_2_outlined,
+                    color: AppTheme.inkSoft,
+                    size: 18,
+                  ),
+                ),
               const Icon(Icons.chevron_right, color: AppTheme.inkSoft),
             ],
           ),
@@ -1543,6 +1600,194 @@ class _FollowButtonState extends State<_FollowButton> {
       gradient: following
           ? const LinearGradient(colors: [Color(0xFF9CA3AF), Color(0xFF6B7280)])
           : AppTheme.heroGradient,
+    );
+  }
+}
+
+/// Followers / Following list (18 Nov 2026): the numbers on the
+/// Profile stats strip are tappable and open the actual people.
+/// Each row shows avatar, name, username and level/rank; tapping a
+/// row opens that person's profile.
+class FollowListScreen extends StatefulWidget {
+  const FollowListScreen({
+    super.key,
+    required this.followers,
+    this.socialRepo,
+  });
+
+  /// True = people following me; false = people I follow.
+  final bool followers;
+  final SocialRepository? socialRepo;
+
+  @override
+  State<FollowListScreen> createState() => _FollowListScreenState();
+}
+
+class _FollowListScreenState extends State<FollowListScreen> {
+  SocialRepository get _social => widget.socialRepo ?? SocialRepository();
+
+  List<Profile> _people = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final people = await _social.followProfiles(
+        followers: widget.followers,
+      );
+      if (mounted) setState(() => _people = people);
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.followers ? 'Followers' : 'Following'),
+      ),
+      body: ResponsiveCenter(
+        maxWidth: 720,
+        child: _loading
+            ? ListView(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+                children: const [
+                  SkeletonBox(height: 64, borderRadius: 16),
+                  SizedBox(height: 10),
+                  SkeletonBox(height: 64, borderRadius: 16),
+                  SizedBox(height: 10),
+                  SkeletonBox(height: 64, borderRadius: 16),
+                ],
+              )
+            : _error != null
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    'Could not load the list. ${_error!}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: AppTheme.inkSoft),
+                  ),
+                ),
+              )
+            : _people.isEmpty
+            ? EmptyState(
+                icon: widget.followers
+                    ? Icons.group_outlined
+                    : Icons.person_add_outlined,
+                title: widget.followers
+                    ? 'No followers yet'
+                    : 'Not following anyone yet',
+                subtitle: widget.followers
+                    ? 'When someone follows you, they will show up here.'
+                    : 'Follow people from Search or the leaderboard and they will show up here.',
+              )
+            : RefreshIndicator(
+                onRefresh: _load,
+                child: ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+                  itemCount: _people.length,
+                  itemBuilder: (context, index) {
+                    final person = _people[index];
+                    final level = levelForXp(person.xp);
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Material(
+                        color: AppTheme.card,
+                        borderRadius: BorderRadius.circular(16),
+                        child: InkWell(
+                          onTap: () => Navigator.of(context).push(
+                            WarriorPageRoute(
+                              builder: (_) => UserProfileScreen(
+                                profile: person,
+                                socialRepo: _social,
+                              ),
+                            ),
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: AppTheme.cardBorder),
+                            ),
+                            child: Row(
+                              children: [
+                                AvatarCircle(
+                                  initials: person.initials,
+                                  size: 40,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        person.displayName,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                      Text(
+                                        '@${person.username}',
+                                        style: const TextStyle(
+                                          color: AppTheme.inkSoft,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 9,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.ember.withValues(
+                                      alpha: 0.12,
+                                    ),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Text(
+                                    'LVL $level • ${rankNameForLevel(level).toUpperCase()}',
+                                    style: const TextStyle(
+                                      color: AppTheme.ember,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                const Icon(
+                                  Icons.chevron_right,
+                                  color: AppTheme.inkSoft,
+                                  size: 20,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+      ),
     );
   }
 }

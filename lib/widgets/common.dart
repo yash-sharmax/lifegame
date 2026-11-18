@@ -120,10 +120,10 @@ class XpBar extends StatelessWidget {
     final rank = rankNameForLevel(level);
     final progress = progressToNextLevel(xp);
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
         color: AppTheme.card,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppTheme.cardBorder),
       ),
       child: Column(
