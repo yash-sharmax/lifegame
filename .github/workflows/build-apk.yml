@@ -1,5 +1,5 @@
-# Builds a debug APK for Life Game (Flutter) and uploads it as an artifact.
-name: Build Life Game APK (debug)
+# Builds the release APK and publishes it to the apk-latest GitHub release.
+name: Build Life Game APK
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,12 +55,23 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
-      - name: Build debug APK
-        run: flutter build apk --debug
+      - name: Build release APK (up to 3 attempts)
+        run: |
+          for attempt in 1 2 3; do
+            echo "Build attempt $attempt"
+            if flutter build apk --release --dart-define APPWRITE_PROJECT_ID=6af869f7001a2600151f --dart-define APPWRITE_ENDPOINT=https://tor.cloud.appwrite.io/v1; then
+              exit 0
+            fi
+            echo "Attempt $attempt failed; retrying in 20s"
+            sleep 20
+          done
+          echo "All build attempts failed"
+          exit 1
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      - name: Publish APK to the apk-latest release
+        uses: softprops/action-gh-release@v2
         with:
-          name: lifegame-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
-          if-no-files-found: error
+          tag_name: apk-latest
+          name: Life Game APK (latest)
+          body: Latest Life Game Android APK, built automatically from the main branch. Download app-release.apk and install it on your phone (you may need to allow installs from your browser once).
+          files: build/app/outputs/flutter-apk/app-release.apk
