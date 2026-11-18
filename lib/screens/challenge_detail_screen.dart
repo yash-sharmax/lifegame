@@ -118,10 +118,10 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
       }
     });
     try {
-      await _habits.toggleHabit(
+      await _habits.setHabitDone(
         habit: habit,
         date: todayKey(),
-        completed: value,
+        done: value,
       );
       await _load(silent: true);
     } catch (e) {

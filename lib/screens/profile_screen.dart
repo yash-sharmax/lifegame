@@ -252,7 +252,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _editHabit(Habit habit) async {
-    final result = await showHabitEditDialog(context, habit);
+    final result = await showHabitEditDialog(
+      context,
+      habit,
+      habitRepo: _habits,
+    );
     if (result == null || !mounted) return;
     try {
       if (result.action == HabitEditAction.save && result.title.isNotEmpty) {

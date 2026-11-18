@@ -335,6 +335,47 @@ const TABLES = [
       },
     ],
   },
+  {
+    // Added 18 Nov 2026 (v2.8.0): sub-tasks inside a habit. A habit
+    // can be broken into smaller steps; some are DAILY (recurring,
+    // due every day from their creation date) and some are TODAY
+    // (only for the date in `date`). The habit's done state (+2 XP)
+    // is derived from its due sub-tasks (see lib/logic/subtasks.dart)
+    // — there is no XP per sub-task. No ownerUid: rows are owner-only
+    // through row permissions, like habit_logs.
+    id: 'habit_subtasks',
+    name: 'Habit subtasks',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('habitId', 64, true),
+      str('title', 256, true),
+      str('kind', 16, true),
+      str('date', 10, true),
+      boolCol('archived', false, false),
+    ],
+    indexes: [{ key: 'idx_habit', type: 'key', columns: ['habitId'] }],
+  },
+  {
+    // Added 18 Nov 2026 (v2.8.0): one sub-task's completion for one
+    // day. The document id is `{subtaskId}_{date}`, so a retried tick
+    // can never duplicate it — the same idempotency trick as
+    // habit_logs.
+    id: 'subtask_logs',
+    name: 'Subtask logs',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('subtaskId', 64, true),
+      str('date', 10, true),
+      boolCol('completed', false, true),
+    ],
+    indexes: [
+      {
+        key: 'idx_subtask_date',
+        type: 'key',
+        columns: ['subtaskId', 'date'],
+      },
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

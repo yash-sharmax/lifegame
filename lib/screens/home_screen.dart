@@ -10,6 +10,7 @@ import '../data/reminder_service.dart';
 import '../data/repositories.dart';
 import '../logic/quotes.dart';
 import '../logic/reminders.dart';
+import '../logic/subtasks.dart';
 import '../logic/xp.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
@@ -48,6 +49,11 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Habit> _habitsList = [];
   Set<String> _doneToday = {};
   Map<String, Reminder> _remindersByKey = {};
+  // Sub-tasks due today, grouped by habit id, plus the sub-task ids
+  // completed today (v2.8.0): the habit row shows "2/4 done" and the
+  // main check ticks/unticks all of them at once.
+  Map<String, List<HabitSubtask>> _subtasksByHabit = {};
+  Set<String> _doneSubtasksToday = {};
   Profile? _profile;
   bool _loading = true;
   late final ConfettiController _confetti;
@@ -111,6 +117,20 @@ class _HomeScreenState extends State<HomeScreen> {
       final habits = await _habits.listMyHabits();
       final logs = await _habits.listLogsForDate(_today);
       final profile = await _profiles.fetchMyProfile();
+      // Sub-tasks are best-effort (a failure must never hide the
+      // habits): the repository itself degrades to an empty list when
+      // the tables are missing or the backend is unconfigured.
+      Map<String, List<HabitSubtask>> subtasksByHabit = {};
+      Set<String> doneSubtasks = {};
+      try {
+        subtasksByHabit = await _habits.listSubtasksByHabit(
+          habits.map((h) => h.id),
+        );
+        doneSubtasks = await _habits.completedSubtaskIdsForDate(_today);
+      } catch (_) {
+        subtasksByHabit = {};
+        doneSubtasks = {};
+      }
       // Reminders are best-effort: a reminder-store failure must never
       // hide the habits (and widget tests run without a signed-in user).
       Map<String, Reminder> reminders = {};
@@ -135,6 +155,8 @@ class _HomeScreenState extends State<HomeScreen> {
           _profile = profile;
         }
         _remindersByKey = reminders;
+        _subtasksByHabit = subtasksByHabit;
+        _doneSubtasksToday = doneSubtasks;
         _loading = false;
       });
     } on AuthException catch (e) {
@@ -152,6 +174,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool get _allDone =>
       _habitsList.isNotEmpty && _doneToday.length >= _habitsList.length;
+
+  /// "2/4 done" for a habit with sub-tasks due today, else null.
+  /// The row shows the work, not just the habit tick (v2.8.0).
+  String? _subtaskProgress(Habit habit) {
+    final due = dueSubtasks(
+      _subtasksByHabit[habit.id] ?? const <HabitSubtask>[],
+      _today,
+    );
+    if (due.isEmpty) return null;
+    final done = due.where((s) => _doneSubtasksToday.contains(s.id)).length;
+    return '$done/${due.length} sub-tasks done';
+  }
 
   /// Refreshes only the streak fields from the server after a toggle.
   /// XP and the done set are already correct locally (optimistic
@@ -194,13 +228,26 @@ class _HomeScreenState extends State<HomeScreen> {
     final wasAllDone = _allDone;
     final delta = xpDeltaForToggle(completing: value, wasDone: wasDone);
     final prevDone = Set<String>.from(_doneToday);
+    final prevDoneSubtasks = Set<String>.from(_doneSubtasksToday);
     final prevProfile = _profile;
+    // A habit with sub-tasks due today flips ALL of them with its
+    // main check (the habit is done exactly when all of them are).
+    final dueSubs = dueSubtasks(
+      _subtasksByHabit[habit.id] ?? const <HabitSubtask>[],
+      _today,
+    );
     setState(() {
       if (value) {
         _doneToday.add(habit.id);
+        for (final sub in dueSubs) {
+          _doneSubtasksToday.add(sub.id);
+        }
         _strikeKeys[habit.id] = (_strikeKeys[habit.id] ?? 0) + 1;
       } else {
         _doneToday.remove(habit.id);
+        for (final sub in dueSubs) {
+          _doneSubtasksToday.remove(sub.id);
+        }
       }
       final profile = _profile;
       if (profile != null) {
@@ -237,7 +284,9 @@ class _HomeScreenState extends State<HomeScreen> {
     if (value && _allDone && !wasAllDone) _confetti.play();
     _pendingToggles++;
     try {
-      await _habits.toggleHabit(habit: habit, date: _today, completed: value);
+      // setHabitDone branches: a habit with sub-tasks ticks/unticks
+      // all of them; a habit without sub-tasks flips its own log.
+      await _habits.setHabitDone(habit: habit, date: _today, done: value);
       if (!mounted) return;
       // Quiet sync: refresh the streak from the server without
       // touching the locally-correct XP or done set.
@@ -247,6 +296,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         setState(() {
           _doneToday = prevDone;
+          _doneSubtasksToday = prevDoneSubtasks;
           _profile = prevProfile;
         });
         showError(context, e);
@@ -260,7 +310,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _editHabit(Habit habit) async {
-    final result = await showHabitEditDialog(context, habit);
+    final result = await showHabitEditDialog(
+      context,
+      habit,
+      habitRepo: _habits,
+    );
     if (result == null || !mounted) return;
     try {
       if (result.action == HabitEditAction.save && result.title.isNotEmpty) {
@@ -499,6 +553,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 _strikeKeys[habit.id] ?? 0,
                                             reminder:
                                                 _remindersByKey['habit:${habit.id}'],
+                                            subtaskProgress:
+                                                _subtaskProgress(habit),
                                             onToggle: (v) => _toggle(habit, v),
                                             onEdit: () => _editHabit(habit),
                                             onAlarm: () =>
@@ -525,6 +581,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                       strikeKey: _strikeKeys[habit.id] ?? 0,
                                       reminder:
                                           _remindersByKey['habit:${habit.id}'],
+                                      subtaskProgress:
+                                          _subtaskProgress(habit),
                                       onToggle: (v) => _toggle(habit, v),
                                       onEdit: () => _editHabit(habit),
                                       onAlarm: () => _editReminder(habit),
@@ -924,6 +982,7 @@ class _HabitRow extends StatelessWidget {
     required this.onEdit,
     required this.onAlarm,
     this.reminder,
+    this.subtaskProgress,
     this.strikeKey = 0,
   });
 
@@ -933,6 +992,10 @@ class _HabitRow extends StatelessWidget {
   final VoidCallback onEdit;
   final VoidCallback onAlarm;
   final Reminder? reminder;
+
+  /// "2/4 sub-tasks done" when the habit has sub-tasks due today
+  /// (v2.8.0); null when it has none.
+  final String? subtaskProgress;
 
   /// Bumped on every completion — drives the slash sweep (see
   /// StrikeOverlay). 0 means "never completed yet".
@@ -985,6 +1048,34 @@ class _HabitRow extends StatelessWidget {
                             fontSize: 12,
                           ),
                         ),
+                        // Sub-task progress (v2.8.0): the work inside
+                        // the habit, e.g. "2/4 sub-tasks done".
+                        if (subtaskProgress != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.checklist,
+                                  color: AppTheme.inkSoft,
+                                  size: 13,
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    subtaskProgress!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: AppTheme.inkSoft,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         // Notes preview: the first line, with a note
                         // icon — the full note lives in the edit dialog.
                         if (habit.notes.isNotEmpty)

@@ -34,6 +34,62 @@ class LocalStore {
   /// pipe, then habit id.
   static const _habitNotesKey = 'lifegame_habit_notes_v1';
 
+  /// Habit sub-tasks fallback (v2.8.0, 18 Nov 2026): the
+  /// `habit_subtasks` / `subtask_logs` tables may not exist yet, so
+  /// sub-tasks live on-device until they do (see HabitRepository).
+  /// Sub-tasks are stored as their local JSON (which carries the
+  /// owner id); logs as plain SubtaskLog JSON.
+  static const _subtasksKey = 'lifegame_subtasks_v1';
+  static const _subtaskLogsKey = 'lifegame_subtask_logs_v1';
+
+  /// Raw locally stored sub-task rows (any owner). Each map carries
+  /// its owner id under 'ownerId'.
+  List<Map<String, dynamic>> loadSubtaskMaps() {
+    final raw = _prefs.getString(_subtasksKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveSubtaskMaps(List<Map<String, dynamic>> maps) async {
+    await _prefs.setString(_subtasksKey, jsonEncode(maps));
+  }
+
+  /// All locally stored sub-tasks (any owner), parsed.
+  List<HabitSubtask> loadSubtasks() =>
+      loadSubtaskMaps().map(HabitSubtask.fromJson).toList();
+
+  /// The owner id a locally stored sub-task row belongs to (the JSON
+  /// carries it; Appwrite rows do not have it).
+  static String subtaskOwnerId(Map<String, dynamic> json) =>
+      json['ownerId'] as String? ?? '';
+
+  List<SubtaskLog> loadSubtaskLogs() {
+    final raw = _prefs.getString(_subtaskLogsKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .map(
+            (e) => SubtaskLog.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveSubtaskLogs(List<SubtaskLog> logs) async {
+    final raw = jsonEncode(logs.map((l) => l.toJson()).toList());
+    await _prefs.setString(_subtaskLogsKey, raw);
+  }
+
   Map<String, String> loadHabitNotes() {
     final raw = _prefs.getString(_habitNotesKey);
     if (raw == null || raw.isEmpty) return {};
@@ -152,5 +208,22 @@ class LocalStore {
     final notes = loadHabitNotes();
     notes.removeWhere((key, _) => key.startsWith('$ownerId|'));
     await _prefs.setString(_habitNotesKey, jsonEncode(notes));
+    // Sub-tasks + their logs: keep only other owners' rows (the raw
+    // maps carry the owner id, which fromJson drops — so filter the
+    // raw JSON, not the parsed models).
+    final mySubtaskIds = <String>{};
+    final keptSubtaskMaps = <Map<String, dynamic>>[];
+    for (final map in loadSubtaskMaps()) {
+      if (subtaskOwnerId(map) == ownerId) {
+        mySubtaskIds.add(map['id'] as String? ?? '');
+      } else {
+        keptSubtaskMaps.add(map);
+      }
+    }
+    await saveSubtaskMaps(keptSubtaskMaps);
+    final logs = loadSubtaskLogs()
+        .where((l) => !mySubtaskIds.contains(l.subtaskId))
+        .toList();
+    await saveSubtaskLogs(logs);
   }
 }

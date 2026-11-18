@@ -10,8 +10,14 @@ import 'package:lifegame/main.dart';
 import 'package:lifegame/screens/dashboard_screen.dart';
 import 'package:lifegame/screens/home_screen.dart';
 import 'package:lifegame/screens/profile_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  // v2.8.0: Home/Dashboard load sub-tasks through the repository, whose
+  // on-device fallback reads SharedPreferences. Without this mock the
+  // platform channel never answers in tests and _load hangs forever
+  // (the screen stays on its skeletons).
+  SharedPreferences.setMockInitialValues({});
   testWidgets('unconfigured app shows the login screen', (tester) async {
     // No APPWRITE_* dart-define is passed in tests, so the app runs
     // unconfigured and the auth gate must show the login screen.
@@ -627,6 +633,65 @@ void main() {
     expect(find.byType(LineChart), findsOneWidget);
   });
 
+  testWidgets('dashboard score counts sub-tasks, not just habit ticks', (
+    tester,
+  ) async {
+    // Tall viewport so the whole scrollable Dashboard is built.
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: DashboardScreen(
+            habitRepo: _ScoreSubtaskHabitRepo(),
+            taskRepo: _LedgerTaskRepo(),
+            profileRepo: _TwoXpProfileRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Exercise has 2 daily sub-tasks (1 done) and Read is a plain
+    // habit, done today: 3 items, 2 done — the score is 67%, and the
+    // lists name the sub-tasks so the percent can be checked by hand.
+    // XP is per HABIT (1 done × 2 XP), never per sub-task.
+    expect(find.text("Today's score"), findsOneWidget);
+    expect(find.text('67%'), findsOneWidget);
+    expect(find.textContaining('Today: 2 of 3 done'), findsOneWidget);
+    expect(find.textContaining("Today's XP: 2 XP"), findsOneWidget);
+    expect(find.text('Done (2)'), findsOneWidget);
+    expect(find.text('Still to do (1)'), findsOneWidget);
+    expect(find.text('Exercise — Warm up'), findsOneWidget);
+    expect(find.text('Exercise — Run 2 km'), findsOneWidget);
+    expect(find.text('Read'), findsWidgets);
+  });
+
+  testWidgets('home shows sub-task progress on the habit row', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: HomeScreen(
+            habitRepo: _SubtaskProgressHabitRepo(),
+            profileRepo: _XpProfileRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // One of two sub-tasks done: the row shows the progress, and the
+    // habit itself is NOT done yet (its sub-tasks are not all done).
+    expect(find.text('Exercise'), findsOneWidget);
+    expect(find.text('1/2 sub-tasks done'), findsOneWidget);
+    expect(find.text('Tap to complete • +2 XP'), findsOneWidget);
+  });
+
   testWidgets('dashboard charts show empty states when nothing is done', (
     tester,
   ) async {
@@ -1065,6 +1130,146 @@ class _ScoreHabitRepo extends HabitRepository {
         logDate: today,
       ),
     ];
+  }
+}
+
+/// Two habits for the sub-task score test (v2.8.0): Exercise has two
+/// daily sub-tasks, one done today; Read is a plain habit, done
+/// today. Score items: 3, done: 2 (67%); XP: 1 habit × 2 XP.
+class _ScoreSubtaskHabitRepo extends HabitRepository {
+  List<HabitSubtask> get _subs {
+    final today = dateKey(DateTime.now());
+    return [
+      HabitSubtask(
+        id: 's1',
+        habitId: 'h1',
+        title: 'Warm up',
+        kind: HabitSubtask.kindDaily,
+        date: today,
+      ),
+      HabitSubtask(
+        id: 's2',
+        habitId: 'h1',
+        title: 'Run 2 km',
+        kind: HabitSubtask.kindDaily,
+        date: today,
+      ),
+    ];
+  }
+
+  @override
+  Future<List<Habit>> listMyHabits() async => [
+    const Habit(id: 'h1', userId: 'test-user', title: 'Exercise'),
+    const Habit(id: 'h2', userId: 'test-user', title: 'Read'),
+  ];
+
+  @override
+  Future<List<HabitLog>> listLogsForDate(String date) async {
+    final today = dateKey(DateTime.now());
+    if (date != today) return [];
+    return [
+      HabitLog(
+        id: 'h2_$today',
+        habitId: 'h2',
+        userId: 'test-user',
+        logDate: today,
+      ),
+    ];
+  }
+
+  @override
+  Future<List<HabitLog>> listLogsInRange(String start, String end) async {
+    final today = dateKey(DateTime.now());
+    if (today.compareTo(start) >= 0 && today.compareTo(end) <= 0) {
+      return [
+        HabitLog(
+          id: 'h2_$today',
+          habitId: 'h2',
+          userId: 'test-user',
+          logDate: today,
+        ),
+      ];
+    }
+    return [];
+  }
+
+  @override
+  Future<List<HabitLog>> listAllCompletedLogs() async {
+    final today = dateKey(DateTime.now());
+    return [
+      HabitLog(
+        id: 'h2_$today',
+        habitId: 'h2',
+        userId: 'test-user',
+        logDate: today,
+      ),
+    ];
+  }
+
+  @override
+  Future<Map<String, List<HabitSubtask>>> listSubtasksByHabit(
+    Iterable<String> habitIds,
+  ) async => {'h1': _subs};
+
+  @override
+  Future<Set<String>> completedSubtaskIdsForDate(String date) async {
+    if (date != dateKey(DateTime.now())) return {};
+    return {'s1'};
+  }
+
+  @override
+  Future<Map<String, Set<String>>> completedSubtaskIdsInRange(
+    String start,
+    String end,
+  ) async {
+    final today = dateKey(DateTime.now());
+    if (today.compareTo(start) >= 0 && today.compareTo(end) <= 0) {
+      return {today: {'s1'}};
+    }
+    return {};
+  }
+}
+
+/// One habit with two daily sub-tasks, one done today: the Home row
+/// shows "1/2 sub-tasks done" and the habit is not done yet.
+class _SubtaskProgressHabitRepo extends HabitRepository {
+  @override
+  Future<List<Habit>> listMyHabits() async => [
+    const Habit(id: 'h1', userId: 'test-user', title: 'Exercise'),
+  ];
+
+  @override
+  Future<List<HabitLog>> listLogsForDate(String date) async => [];
+
+  @override
+  Future<Map<String, List<HabitSubtask>>> listSubtasksByHabit(
+    Iterable<String> habitIds,
+  ) async {
+    final today = dateKey(DateTime.now());
+    return {
+      'h1': [
+        HabitSubtask(
+          id: 's1',
+          habitId: 'h1',
+          title: 'Warm up',
+          kind: HabitSubtask.kindDaily,
+          date: today,
+        ),
+        HabitSubtask(
+          id: 's2',
+          habitId: 'h1',
+          title: 'Run 2 km',
+          kind: HabitSubtask.kindDaily,
+          date: today,
+        ),
+      ],
+    };
+  }
+
+  @override
+  Future<Set<String>> completedSubtaskIdsForDate(String date) async {
+    if (date != dateKey(DateTime.now())) return {};
+    return {'s1'};
   }
 }
 

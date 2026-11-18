@@ -6,11 +6,17 @@ import 'package:lifegame/logic/xp.dart';
 import 'package:lifegame/screens/dashboard_screen.dart';
 import 'package:lifegame/screens/home_screen.dart';
 import 'package:lifegame/theme.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Golden screenshots of Home + Dashboard at phone and desktop sizes,
 /// using in-memory fake repositories (no Appwrite, no login).
 /// Regenerate with: flutter test --update-goldens test/golden_test.dart
 void main() {
+  // v2.8.0: Home/Dashboard load sub-tasks through the repository, whose
+  // on-device fallback reads SharedPreferences. Without this mock the
+  // platform channel never answers in tests and _load hangs forever
+  // (the screen stays on its skeletons).
+  SharedPreferences.setMockInitialValues({});
   Future<void> setViewport(WidgetTester tester, Size size) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;

@@ -190,6 +190,115 @@ class HabitLog {
   final int xpEarned;
 }
 
+/// One sub-task inside a habit (v2.8.0, 18 Nov 2026): a habit can be
+/// broken into smaller steps. Stored in the `habit_subtasks` table
+/// (see scripts/setup_appwrite.mjs); completion per day lives in
+/// `subtask_logs` (one row per sub-task per day, like habit_logs).
+class HabitSubtask {
+  const HabitSubtask({
+    required this.id,
+    required this.habitId,
+    required this.title,
+    required this.kind,
+    required this.date,
+    this.archived = false,
+  });
+
+  /// Recurs every day, due from its creation date onward.
+  static const String kindDaily = 'daily';
+
+  /// Only for one day: due on [date] and gone after that.
+  static const String kindToday = 'today';
+
+  factory HabitSubtask.fromJson(Map<String, dynamic> json) => HabitSubtask(
+    id: json['id'] as String,
+    habitId: json['habitId'] as String? ?? '',
+    title: json['title'] as String? ?? '',
+    kind: json['kind'] as String? ?? kindDaily,
+    date: json['date'] as String? ?? '',
+    archived: json['archived'] as bool? ?? false,
+  );
+
+  /// The Appwrite document fields. The table has no ownerUid — rows
+  /// are owner-only through row permissions, like habit_logs.
+  Map<String, dynamic> toMap() => {
+    'habitId': habitId,
+    'title': title,
+    'kind': kind,
+    'date': date,
+    'archived': archived,
+  };
+
+  /// Local-store JSON: the same fields plus the owner id, so sign-out
+  /// can clear one account's sub-tasks (Appwrite never sees it).
+  Map<String, dynamic> toJson(String ownerId) => {
+    'id': id,
+    'ownerId': ownerId,
+    ...toMap(),
+  };
+
+  /// Due on [dateKey] ('YYYY-MM-DD'): a daily sub-task is due every
+  /// day from its creation date onward; a today sub-task only on its
+  /// own date. An empty date (legacy) counts as due.
+  bool isDueOn(String dateKey) {
+    if (kind == kindToday) return date == dateKey;
+    if (date.isEmpty) return true;
+    return date.compareTo(dateKey) <= 0;
+  }
+
+  HabitSubtask copyWith({String? title, bool? archived}) => HabitSubtask(
+    id: id,
+    habitId: habitId,
+    title: title ?? this.title,
+    kind: kind,
+    date: date,
+    archived: archived ?? this.archived,
+  );
+
+  final String id;
+  final String habitId;
+  final String title;
+
+  /// 'daily' or 'today' (see [kindDaily] / [kindToday]).
+  final String kind;
+
+  /// For 'today': the date it applies to. For 'daily': the creation
+  /// date. Always 'YYYY-MM-DD'.
+  final String date;
+  final bool archived;
+}
+
+/// One sub-task's completion for one day (v2.8.0). The document id is
+/// `{subtaskId}_{date}`, so a retried tick can never duplicate it —
+/// the same idempotency trick as habit_logs.
+class SubtaskLog {
+  const SubtaskLog({
+    required this.id,
+    required this.subtaskId,
+    required this.date,
+    this.completed = true,
+  });
+
+  factory SubtaskLog.fromJson(Map<String, dynamic> json) => SubtaskLog(
+    id: json['id'] as String,
+    subtaskId: json['subtaskId'] as String? ?? '',
+    date: json['date'] as String? ?? '',
+    completed: json['completed'] as bool? ?? true,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'subtaskId': subtaskId,
+    'date': date,
+    'completed': completed,
+  };
+
+  final String id;
+  final String subtaskId;
+  final String date;
+  final bool completed;
+}
+
 class WeeklyTask {
   const WeeklyTask({
     required this.id,
@@ -198,7 +307,6 @@ class WeeklyTask {
     required this.weekStart,
     this.done = false,
   });
-
   factory WeeklyTask.fromJson(Map<String, dynamic> json) => WeeklyTask(
     id: json['id'] as String,
     userId: json['ownerUid'] as String,

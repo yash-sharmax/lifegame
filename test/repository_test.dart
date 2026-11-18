@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lifegame/data/models.dart';
 import 'package:lifegame/data/repositories.dart';
 import 'package:lifegame/logic/xp.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// A [Client] that never talks to anything: constructing a real Client
 /// in a unit test fails — its async init hits platform channels
@@ -278,6 +279,73 @@ class _FakeRow {
   final Map<String, dynamic> data;
 }
 
+/// A [FakeTablesDB] where the two sub-task tables do not exist yet
+/// (the state the live Appwrite console was in while the tables were
+/// being created): every call touching them throws 404, so the
+/// repository must fall back to on-device storage.
+class _MissingTablesDB extends FakeTablesDB {
+  static const _missing = {'habit_subtasks', 'subtask_logs'};
+
+  AppwriteException get _notFound =>
+      AppwriteException('Table not found', 404, 'collection_not_found');
+
+  @override
+  Future<models.Row> createRow({
+    required String databaseId,
+    required String tableId,
+    required String rowId,
+    Map? data,
+    List<String>? permissions,
+    String? transactionId,
+  }) async {
+    if (_missing.contains(tableId)) throw _notFound;
+    return super.createRow(
+      databaseId: databaseId,
+      tableId: tableId,
+      rowId: rowId,
+      data: data ?? {},
+      permissions: permissions,
+      transactionId: transactionId,
+    );
+  }
+
+  @override
+  Future<models.RowList> listRows({
+    required String databaseId,
+    required String tableId,
+    List<String>? queries,
+    String? transactionId,
+    bool? total,
+    int? ttl,
+  }) async {
+    if (_missing.contains(tableId)) throw _notFound;
+    return super.listRows(
+      databaseId: databaseId,
+      tableId: tableId,
+      queries: queries,
+      transactionId: transactionId,
+      total: total,
+      ttl: ttl,
+    );
+  }
+
+  @override
+  Future<dynamic> deleteRow({
+    required String databaseId,
+    required String tableId,
+    required String rowId,
+    String? transactionId,
+  }) async {
+    if (_missing.contains(tableId)) throw _notFound;
+    return super.deleteRow(
+      databaseId: databaseId,
+      tableId: tableId,
+      rowId: rowId,
+      transactionId: transactionId,
+    );
+  }
+}
+
 void main() {
   late FakeTablesDB db;
   late HabitRepository habits;
@@ -287,6 +355,7 @@ void main() {
 
   setUp(() async {
     db = FakeTablesDB();
+    HabitRepository.resetSubtaskTablesForTest();
     AuthRepository.debugSetCachedUserForTest(
       const AppAuthUser(uid: 'user-1', email: 'test@example.com'),
     );
@@ -759,6 +828,195 @@ void main() {
         data: {'followerUid': 'ghost', 'followingUid': 'user-1'},
       );
       expect(await social.followProfiles(followers: true), isEmpty);
+    });
+  });
+
+  group('v2.8.0 (18 Nov 2026): sub-tasks inside habits', () {
+    test('adds and lists daily and today sub-tasks', () async {
+      final habit = await habits.addHabit(title: 'Exercise', color: 0);
+      await habits.addSubtask(
+        habit: habit,
+        title: 'Warm up',
+        kind: HabitSubtask.kindDaily,
+      );
+      await habits.addSubtask(
+        habit: habit,
+        title: 'Buy a mat',
+        kind: HabitSubtask.kindToday,
+      );
+
+      final subs = await habits.listSubtasksForHabit(habit.id);
+      expect(subs.length, 2);
+      expect(
+        subs.map((s) => s.kind),
+        containsAll([HabitSubtask.kindDaily, HabitSubtask.kindToday]),
+      );
+      final byHabit = await habits.listSubtasksByHabit([habit.id]);
+      expect(byHabit[habit.id]!.length, 2);
+    });
+
+    test(
+      'a habit is done only when ALL its due sub-tasks are done, '
+      'and unticking reverses it',
+      () async {
+        final habit = await habits.addHabit(title: 'Exercise', color: 0);
+        final a = await habits.addSubtask(
+          habit: habit,
+          title: 'Warm up',
+          kind: HabitSubtask.kindDaily,
+        );
+        final b = await habits.addSubtask(
+          habit: habit,
+          title: 'Run 2 km',
+          kind: HabitSubtask.kindDaily,
+        );
+
+        // One of two done: the habit is NOT done — no log, no XP.
+        await habits.toggleSubtask(subtask: a, date: today, completed: true);
+        expect(await habits.listLogsForDate(today), isEmpty);
+        expect((await myProfile()).xp, 0);
+
+        // All done: the habit counts as done — log + 2 XP.
+        await habits.toggleSubtask(subtask: b, date: today, completed: true);
+        expect((await habits.listLogsForDate(today)).length, 1);
+        expect((await myProfile()).xp, 2);
+        expect(
+          await habits.completedSubtaskIdsForDate(today),
+          {a.id, b.id},
+        );
+
+        // Unticking one reverses the habit fully: log gone, XP back 0.
+        await habits.toggleSubtask(subtask: a, date: today, completed: false);
+        expect(await habits.listLogsForDate(today), isEmpty);
+        expect((await myProfile()).xp, 0);
+      },
+    );
+
+    test('setHabitDone ticks/unticks all due sub-tasks at once', () async {
+      final habit = await habits.addHabit(title: 'Exercise', color: 0);
+      await habits.addSubtask(
+        habit: habit,
+        title: 'Warm up',
+        kind: HabitSubtask.kindDaily,
+      );
+      await habits.addSubtask(
+        habit: habit,
+        title: 'Buy a mat',
+        kind: HabitSubtask.kindToday,
+      );
+
+      final on = await habits.setHabitDone(habit: habit, date: today, done: true);
+      expect(on.xpDelta, 2);
+      expect(on.allDone, isTrue);
+      expect((await habits.completedSubtaskIdsForDate(today)).length, 2);
+      expect((await myProfile()).xp, 2);
+
+      final off = await habits.setHabitDone(
+        habit: habit,
+        date: today,
+        done: false,
+      );
+      expect(off.xpDelta, -2);
+      expect(off.allDone, isFalse);
+      expect(await habits.completedSubtaskIdsForDate(today), isEmpty);
+      expect((await myProfile()).xp, 0);
+    });
+
+    test('setHabitDone on a habit without sub-tasks behaves like a tick',
+        () async {
+      final habit = await habits.addHabit(title: 'Read', color: 0);
+      await habits.setHabitDone(habit: habit, date: today, done: true);
+      expect((await myProfile()).xp, 2);
+      await habits.setHabitDone(habit: habit, date: today, done: false);
+      expect((await myProfile()).xp, 0);
+    });
+
+    test('adding a sub-task to a done habit makes it undone', () async {
+      final habit = await habits.addHabit(title: 'Read', color: 0);
+      await habits.toggleHabit(habit: habit, date: today, completed: true);
+      expect((await myProfile()).xp, 2);
+
+      await habits.addSubtask(
+        habit: habit,
+        title: 'Read 10 pages',
+        kind: HabitSubtask.kindDaily,
+      );
+      // The new sub-task is undone, so the habit is no longer done.
+      expect(await habits.listLogsForDate(today), isEmpty);
+      expect((await myProfile()).xp, 0);
+    });
+
+    test('deleting the only undone sub-task completes the habit',
+        () async {
+      final habit = await habits.addHabit(title: 'Exercise', color: 0);
+      final done = await habits.addSubtask(
+        habit: habit,
+        title: 'Warm up',
+        kind: HabitSubtask.kindDaily,
+      );
+      final pending = await habits.addSubtask(
+        habit: habit,
+        title: 'Run 2 km',
+        kind: HabitSubtask.kindDaily,
+      );
+      await habits.toggleSubtask(
+        subtask: done,
+        date: today,
+        completed: true,
+      );
+      expect((await myProfile()).xp, 0);
+
+      await habits.deleteSubtask(pending);
+      expect((await habits.listSubtasksForHabit(habit.id)).length, 1);
+      // Only the done sub-task is left, so the habit is done.
+      expect((await myProfile()).xp, 2);
+      expect((await habits.listLogsForDate(today)).length, 1);
+    });
+
+    test('falls back to on-device storage when the tables are missing',
+        () async {
+      SharedPreferences.setMockInitialValues({});
+      final missingDb = _MissingTablesDB();
+      await missingDb.createRow(
+        databaseId: 'lifegame',
+        tableId: 'users',
+        rowId: 'user-1',
+        data: {
+          'username': 'tester',
+          'displayName': 'Tester',
+          'bio': '',
+          'xp': 0,
+          'currentStreak': 0,
+          'longestStreak': 0,
+          'lastActiveDate': null,
+        },
+      );
+      final localHabits = HabitRepository(db: missingDb);
+
+      final habit = await localHabits.addHabit(title: 'Exercise', color: 0);
+      final sub = await localHabits.addSubtask(
+        habit: habit,
+        title: 'Warm up',
+        kind: HabitSubtask.kindDaily,
+      );
+      expect((await localHabits.listSubtasksForHabit(habit.id)).length, 1);
+
+      // Ticking the only sub-task still derives the habit log + XP
+      // from the Appwrite habit_logs/users tables (which exist).
+      await localHabits.toggleSubtask(
+        subtask: sub,
+        date: today,
+        completed: true,
+      );
+      expect(
+        await localHabits.completedSubtaskIdsForDate(today),
+        {sub.id},
+      );
+      expect((await localHabits.listLogsForDate(today)).length, 1);
+      expect((await ProfileRepository(db: missingDb).fetchMyProfile())!.xp, 2);
+
+      await localHabits.deleteSubtask(sub);
+      expect(await localHabits.listSubtasksForHabit(habit.id), isEmpty);
     });
   });
 }

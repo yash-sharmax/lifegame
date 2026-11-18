@@ -35,6 +35,7 @@ import 'package:appwrite/models.dart' as models;
 import 'package:appwrite/src/enums.dart';
 
 import '../config.dart';
+import '../logic/subtasks.dart';
 import '../logic/xp.dart';
 import 'appwrite_service.dart';
 import 'local_store.dart';
@@ -1055,6 +1056,8 @@ class HabitRepository {
           lastActiveDate: newLastActive,
         );
       }
+      // The habit's sub-tasks and their logs go with it.
+      await deleteSubtasksForHabit(habitId);
       await _deleteLocalNote(habitId);
       await archiveHabit(habitId);
     });
@@ -1369,6 +1372,630 @@ class HabitRepository {
       }
     }
     throw StateError('Habit toggle did not save properly. Please try again.');
+  }
+
+  // -------------------------------------------------------------------------
+  // Sub-tasks (v2.8.0, 18 Nov 2026)
+  //
+  // A habit can be broken into sub-tasks: DAILY ones recur every day,
+  // TODAY ones apply to a single day. The habit's done state (+2 XP)
+  // is DERIVED from them: a habit with sub-tasks due is done exactly
+  // when ALL of them are done; a habit with no sub-tasks due is done
+  // when its own tick is on (see logic/subtasks.dart). There is no XP
+  // per sub-task — XP stays +2 per habit.
+  //
+  // Storage mirrors the notes pattern: the `habit_subtasks` and
+  // `subtask_logs` tables are being created in the console; until a
+  // 404/400 proves one missing, every sub-task op tries Appwrite
+  // first and falls back to on-device storage (LocalStore). List
+  // methods never throw — a missing table or an unconfigured backend
+  // just yields an empty list, so screens degrade to "no sub-tasks"
+  // instead of failing. Write methods rethrow real failures (so the
+  // UI rolls back) but fall back to local storage on 404/400.
+  // -------------------------------------------------------------------------
+
+  /// Whether the live database has the sub-task tables. Once a
+  /// missing table is seen, this session stops trying Appwrite for
+  /// sub-tasks.
+  static bool _subtasksTablesAvailable = true;
+
+  /// Test-only: lets a test re-enable the Appwrite path after a
+  /// fallback was triggered.
+  static void resetSubtaskTablesForTest() {
+    _subtasksTablesAvailable = true;
+  }
+
+  String _subtaskLogDocId(String subtaskId, String date) =>
+      '${subtaskId}_$date';
+
+  /// All sub-tasks of one habit (any kind, including archived).
+  /// Never throws (see the section header).
+  Future<List<HabitSubtask>> listSubtasksForHabit(String habitId) async {
+    if (_subtasksTablesAvailable) {
+      try {
+        final list = await _d.listRows(
+          databaseId: _dbId,
+          tableId: 'habit_subtasks',
+          queries: [
+            Query.equal('habitId', habitId),
+            Query.orderAsc(r'$createdAt'),
+          ],
+        );
+        return list.rows
+            .map((doc) => HabitSubtask.fromJson(_docJson(doc)))
+            .toList();
+      } on AppwriteException catch (e) {
+        if (e.code == 404 || e.code == 400) {
+          _subtasksTablesAvailable = false;
+        }
+        // Any failure degrades to the local list below.
+      } on AppwriteNotConfigured {
+        // No backend (e.g. widget test) — local fallback below.
+      } catch (_) {
+        // Best-effort list (see the section header).
+      }
+    }
+    return _localSubtasksForHabit(habitId);
+  }
+
+  /// Sub-tasks of several habits, grouped by habit id. Habits with
+  /// none get an empty list. Never throws (see the section header).
+  Future<Map<String, List<HabitSubtask>>> listSubtasksByHabit(
+    Iterable<String> habitIds,
+  ) async {
+    final ids = habitIds.toSet();
+    final result = {for (final id in ids) id: <HabitSubtask>[]};
+    if (ids.isEmpty) return result;
+    if (_subtasksTablesAvailable) {
+      try {
+        // One query per habit: the table has no ownerUid, so the
+        // indexed habitId query is the only selective one. Habit
+        // counts are small (a handful per user).
+        for (final id in ids) {
+          final list = await _d.listRows(
+            databaseId: _dbId,
+            tableId: 'habit_subtasks',
+            queries: [
+              Query.equal('habitId', id),
+              Query.orderAsc(r'$createdAt'),
+            ],
+          );
+          result[id] = list.rows
+              .map((doc) => HabitSubtask.fromJson(_docJson(doc)))
+              .toList();
+        }
+        return result;
+      } on AppwriteException catch (e) {
+        if (e.code == 404 || e.code == 400) {
+          _subtasksTablesAvailable = false;
+        }
+      } on AppwriteNotConfigured {
+        // Local fallback below.
+      } catch (_) {
+        // Best-effort list (see the section header).
+      }
+    }
+    return _localSubtasksByHabit(ids);
+  }
+
+  /// On-device sub-tasks of one habit for the current user.
+  /// Best-effort: returns an empty list when SharedPreferences is
+  /// unavailable (e.g. a widget test).
+  Future<List<HabitSubtask>> _localSubtasksForHabit(String habitId) async {
+    try {
+      final userId = _requireUserId();
+      final store = await LocalStore.getInstance();
+      return store
+          .loadSubtaskMaps()
+          .where(
+            (m) =>
+                LocalStore.subtaskOwnerId(m) == userId &&
+                (m['habitId'] as String? ?? '') == habitId,
+          )
+          .map(HabitSubtask.fromJson)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<Map<String, List<HabitSubtask>>> _localSubtasksByHabit(
+    Set<String> habitIds,
+  ) async {
+    final result = {for (final id in habitIds) id: <HabitSubtask>[]};
+    try {
+      final userId = _requireUserId();
+      final store = await LocalStore.getInstance();
+      for (final map in store.loadSubtaskMaps()) {
+        if (LocalStore.subtaskOwnerId(map) != userId) continue;
+        final habitId = map['habitId'] as String? ?? '';
+        if (!habitIds.contains(habitId)) continue;
+        result[habitId]!.add(HabitSubtask.fromJson(map));
+      }
+    } catch (_) {
+      // Best-effort (see _localSubtasksForHabit).
+    }
+    return result;
+  }
+
+  /// Sub-task ids completed on [date] (any habit). Never throws.
+  Future<Set<String>> completedSubtaskIdsForDate(String date) async {
+    final byDate = await completedSubtaskIdsInRange(date, date);
+    return byDate[date] ?? <String>{};
+  }
+
+  /// Sub-task ids completed per date in [start]..[end] (inclusive).
+  /// Never throws.
+  Future<Map<String, Set<String>>> completedSubtaskIdsInRange(
+    String start,
+    String end,
+  ) async {
+    final result = <String, Set<String>>{};
+    if (_subtasksTablesAvailable) {
+      try {
+        final list = await _d.listRows(
+          databaseId: _dbId,
+          tableId: 'subtask_logs',
+          queries: [
+            Query.equal('completed', true),
+            Query.greaterThanEqual('date', start),
+            Query.lessThanEqual('date', end),
+            Query.limit(100),
+          ],
+        );
+        for (final doc in list.rows) {
+          final data = doc.data;
+          final d = data['date'] as String?;
+          final subId = data['subtaskId'] as String?;
+          if (d != null && subId != null) {
+            (result[d] ??= <String>{}).add(subId);
+          }
+        }
+        return result;
+      } on AppwriteException catch (e) {
+        if (e.code == 404 || e.code == 400) {
+          _subtasksTablesAvailable = false;
+        }
+      } on AppwriteNotConfigured {
+        // Local fallback below.
+      } catch (_) {
+        // Best-effort list (see the section header).
+      }
+    }
+    try {
+      final store = await LocalStore.getInstance();
+      for (final log in store.loadSubtaskLogs()) {
+        if (!log.completed) continue;
+        if (log.date.compareTo(start) < 0 || log.date.compareTo(end) > 0) {
+          continue;
+        }
+        (result[log.date] ??= <String>{}).add(log.subtaskId);
+      }
+    } catch (_) {
+      // Best-effort (see _localSubtasksForHabit).
+    }
+    return result;
+  }
+
+  /// Adds a sub-task to a habit. [kind] is 'daily' or 'today'
+  /// ([HabitSubtask.kindDaily] / [HabitSubtask.kindToday]); the date
+  /// is today (creation date for daily, the one day for today).
+  /// Adding an undone sub-task can un-complete a habit that was fully
+  /// done, so the habit's done state for today is recomputed after
+  /// the add.
+  Future<HabitSubtask> addSubtask({
+    required Habit habit,
+    required String title,
+    required String kind,
+  }) async {
+    final userId = _requireUserId();
+    final date = todayKey();
+    final id = ID.unique();
+    if (_subtasksTablesAvailable) {
+      try {
+        final doc = await _d.createRow(
+          databaseId: _dbId,
+          tableId: 'habit_subtasks',
+          rowId: id,
+          data: {
+            'habitId': habit.id,
+            'title': title,
+            'kind': kind,
+            'date': date,
+            'archived': false,
+          },
+          permissions: _ownerPerms(userId),
+        );
+        final subtask = HabitSubtask.fromJson(_docJson(doc));
+        // Serialised with the other XP writes (see the section
+        // header): the recompute must not race a concurrent toggle.
+        await _writeQueue.run(
+          () => _recomputeHabitDone(habit: habit, date: date),
+        );
+        _notifyChanged();
+        return subtask;
+      } on AppwriteException catch (e) {
+        if (e.code == 404 || e.code == 400) {
+          _subtasksTablesAvailable = false;
+        } else {
+          rethrow;
+        }
+      } on AppwriteNotConfigured {
+        // Local fallback below.
+      }
+    }
+    final subtask = HabitSubtask(
+      id: id,
+      habitId: habit.id,
+      title: title,
+      kind: kind,
+      date: date,
+    );
+    await _saveLocalSubtask(subtask);
+    await _writeQueue.run(
+      () => _recomputeHabitDone(habit: habit, date: date),
+    );
+    _notifyChanged();
+    return subtask;
+  }
+
+  Future<void> _saveLocalSubtask(HabitSubtask subtask) async {
+    try {
+      final userId = _requireUserId();
+      final store = await LocalStore.getInstance();
+      final maps = store.loadSubtaskMaps();
+      final index = maps.indexWhere((m) => m['id'] == subtask.id);
+      final map = subtask.toJson(userId);
+      if (index >= 0) {
+        maps[index] = map;
+      } else {
+        maps.add(map);
+      }
+      await store.saveSubtaskMaps(maps);
+    } catch (_) {
+      // Best-effort only: a failed local save must not break the
+      // habit flow (the Appwrite path is the real one).
+    }
+  }
+
+  Future<void> _deleteLocalSubtask(String subtaskId) async {
+    try {
+      final store = await LocalStore.getInstance();
+      final maps = store.loadSubtaskMaps();
+      maps.removeWhere((m) => m['id'] == subtaskId);
+      await store.saveSubtaskMaps(maps);
+      final logs = store.loadSubtaskLogs()
+          .where((l) => l.subtaskId != subtaskId)
+          .toList();
+      await store.saveSubtaskLogs(logs);
+    } catch (_) {
+      // Best-effort only (see _saveLocalSubtask).
+    }
+  }
+
+  /// Deletes a sub-task and all its logs. Removing the only undone
+  /// sub-task can complete the habit, so the habit's done state for
+  /// today is recomputed after the delete.
+  Future<void> deleteSubtask(HabitSubtask subtask) async {
+    final habit = Habit(
+      id: subtask.habitId,
+      userId: '',
+      title: '',
+    );
+    if (_subtasksTablesAvailable) {
+      try {
+        await _deleteSubtaskRows(subtask.id);
+        await _writeQueue.run(
+          () => _recomputeHabitDone(habit: habit, date: todayKey()),
+        );
+        _notifyChanged();
+        return;
+      } on AppwriteException catch (e) {
+        if (e.code == 404 || e.code == 400) {
+          _subtasksTablesAvailable = false;
+        } else {
+          rethrow;
+        }
+      } on AppwriteNotConfigured {
+        // Local fallback below.
+      }
+    }
+    await _deleteLocalSubtask(subtask.id);
+    await _writeQueue.run(
+      () => _recomputeHabitDone(habit: habit, date: todayKey()),
+    );
+    _notifyChanged();
+  }
+
+  /// Deletes one sub-task row plus every log row for it (Appwrite).
+  /// Missing rows are fine (404 is ignored).
+  Future<void> _deleteSubtaskRows(String subtaskId) async {
+    try {
+      await _d.deleteRow(
+        databaseId: _dbId,
+        tableId: 'habit_subtasks',
+        rowId: subtaskId,
+      );
+    } on AppwriteException catch (e) {
+      if (e.code != 404) rethrow;
+    }
+    final logs = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'subtask_logs',
+      queries: [Query.equal('subtaskId', subtaskId), Query.limit(100)],
+    );
+    for (final doc in logs.rows) {
+      try {
+        await _d.deleteRow(
+          databaseId: _dbId,
+          tableId: 'subtask_logs',
+          rowId: doc.$id,
+        );
+      } on AppwriteException catch (e) {
+        if (e.code != 404) rethrow;
+      }
+    }
+  }
+
+  /// Deletes every sub-task of a habit plus their logs (used when a
+  /// habit is deleted, and by account deletion). Best-effort on the
+  /// local fallback (a failure there never blocks the habit delete).
+  Future<void> deleteSubtasksForHabit(String habitId) async {
+    final subtasks = await listSubtasksForHabit(habitId);
+    for (final sub in subtasks) {
+      if (_subtasksTablesAvailable) {
+        try {
+          await _deleteSubtaskRows(sub.id);
+        } on AppwriteException catch (e) {
+          if (e.code == 404 || e.code == 400) {
+            _subtasksTablesAvailable = false;
+            await _deleteLocalSubtask(sub.id);
+          } else {
+            rethrow;
+          }
+        } on AppwriteNotConfigured {
+          await _deleteLocalSubtask(sub.id);
+        }
+      } else {
+        await _deleteLocalSubtask(sub.id);
+      }
+    }
+  }
+
+  /// Desired end-state per sub-task log, keyed by log document id
+  /// (`{subtaskId}_{date}`) — the same coalescing trick as the habit
+  /// toggle (see [_desiredLogState]): rapid taps collapse into a
+  /// single server write and the last tap always wins.
+  final Map<String, bool> _desiredSubtaskState = {};
+  final Map<String, List<Completer<void>>> _subtaskSyncWaiters = {};
+  final Set<String> _subtaskSyncActive = {};
+
+  /// Tick or untick one sub-task for [date]. Writes the sub-task log,
+  /// then recomputes the habit's done state from ALL its due
+  /// sub-tasks (so the +2 XP follows the work, with the full reversal
+  /// when the last done sub-task is unticked). The UI paints
+  /// optimistically and never waits for this call.
+  Future<void> toggleSubtask({
+    required HabitSubtask subtask,
+    required String date,
+    required bool completed,
+  }) async {
+    final logId = _subtaskLogDocId(subtask.id, date);
+    _desiredSubtaskState[logId] = completed;
+    final completer = Completer<void>();
+    (_subtaskSyncWaiters[logId] ??= []).add(completer);
+    if (_subtaskSyncActive.add(logId)) {
+      unawaited(_syncSubtaskToDesired(subtask: subtask, date: date, logId: logId));
+    }
+    return completer.future;
+  }
+
+  /// Applies the latest desired state for one sub-task log, looping
+  /// while new taps arrive mid-sync (mirrors [_syncLogToDesired]).
+  Future<void> _syncSubtaskToDesired({
+    required HabitSubtask subtask,
+    required String date,
+    required String logId,
+  }) async {
+    var failures = 0;
+    try {
+      while (true) {
+        final desired = _desiredSubtaskState[logId];
+        if (desired == null) return;
+        try {
+          await _writeQueue.run(() async {
+            final current = _desiredSubtaskState[logId] ?? desired;
+            await _writeSubtaskLog(
+              subtask: subtask,
+              date: date,
+              done: current,
+            );
+            final habit = Habit(
+              id: subtask.habitId,
+              userId: '',
+              title: '',
+            );
+            await _recomputeHabitDone(habit: habit, date: date);
+            _notifyChanged();
+          });
+          failures = 0;
+        } catch (e) {
+          failures++;
+          if (failures >= 3) {
+            final waiters = _subtaskSyncWaiters.remove(logId);
+            _desiredSubtaskState.remove(logId);
+            if (waiters != null) {
+              for (final w in waiters) {
+                if (!w.isCompleted) w.completeError(e);
+              }
+            }
+            return;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          continue;
+        }
+        if (_desiredSubtaskState[logId] == desired) {
+          _desiredSubtaskState.remove(logId);
+          final waiters = _subtaskSyncWaiters.remove(logId);
+          if (waiters != null) {
+            for (final w in waiters) {
+              if (!w.isCompleted) w.complete();
+            }
+          }
+          return;
+        }
+      }
+    } finally {
+      _subtaskSyncActive.remove(logId);
+      if (_desiredSubtaskState.containsKey(logId) &&
+          _subtaskSyncActive.add(logId)) {
+        unawaited(_syncSubtaskToDesired(subtask: subtask, date: date, logId: logId));
+      }
+    }
+  }
+
+  /// Writes the intended sub-task log state, idempotently: a tick
+  /// creates the log (or marks an existing one done), an untick
+  /// deletes it (or does nothing when it is already gone). Falls back
+  /// to on-device storage when the table is missing.
+  Future<void> _writeSubtaskLog({
+    required HabitSubtask subtask,
+    required String date,
+    required bool done,
+  }) async {
+    final logId = _subtaskLogDocId(subtask.id, date);
+    if (_subtasksTablesAvailable) {
+      try {
+        if (done) {
+          try {
+            await _d.createRow(
+              databaseId: _dbId,
+              tableId: 'subtask_logs',
+              rowId: logId,
+              data: {
+                'subtaskId': subtask.id,
+                'date': date,
+                'completed': true,
+              },
+              permissions: _ownerPerms(_requireUserId()),
+            );
+          } on AppwriteException catch (e) {
+            if (e.code == 409) {
+              await _d.updateRow(
+                databaseId: _dbId,
+                tableId: 'subtask_logs',
+                rowId: logId,
+                data: {'completed': true},
+              );
+            } else {
+              rethrow;
+            }
+          }
+        } else {
+          try {
+            await _d.deleteRow(
+              databaseId: _dbId,
+              tableId: 'subtask_logs',
+              rowId: logId,
+            );
+          } on AppwriteException catch (e) {
+            if (e.code != 404) rethrow;
+          }
+        }
+        return;
+      } on AppwriteException catch (e) {
+        if (e.code == 404 || e.code == 400) {
+          _subtasksTablesAvailable = false;
+        } else {
+          rethrow;
+        }
+      } on AppwriteNotConfigured {
+        // Local fallback below.
+      }
+    }
+    // On-device fallback.
+    try {
+      final store = await LocalStore.getInstance();
+      final logs = store.loadSubtaskLogs();
+      final index = logs.indexWhere((l) => l.id == logId);
+      if (done) {
+        final log = SubtaskLog(id: logId, subtaskId: subtask.id, date: date);
+        if (index >= 0) {
+          logs[index] = log;
+        } else {
+          logs.add(log);
+        }
+      } else {
+        if (index >= 0) logs.removeAt(index);
+      }
+      await store.saveSubtaskLogs(logs);
+    } catch (_) {
+      // Best-effort only (see _saveLocalSubtask).
+    }
+  }
+
+  /// Recomputes one habit's done state for [date] from its due
+  /// sub-tasks and writes the habit log to match: all due sub-tasks
+  /// done → habit log done (+2 XP); otherwise → habit log gone (0
+  /// XP). A habit with NO sub-tasks due is left untouched (its own
+  /// tick rules it — see [toggleHabit]). Runs inside the caller's
+  /// [_writeQueue] job, so it cannot race another XP write. The
+  /// derived-XP recompute is the authority for the profile numbers.
+  Future<void> _recomputeHabitDone({
+    required Habit habit,
+    required String date,
+  }) async {
+    final subtasks = await listSubtasksForHabit(habit.id);
+    final due = dueSubtasks(subtasks, date);
+    if (due.isEmpty) return;
+    final doneIds = await completedSubtaskIdsForDate(date);
+    final allDone = due.every((s) => doneIds.contains(s.id));
+    final logId = _logDocId(habit.id, date);
+    await _applyLogState(
+      habit: habit,
+      date: date,
+      logId: logId,
+      done: allDone,
+    );
+    await _verifyLogWithRetry(logId: logId, expectDone: allDone);
+    await ProfileRepository(db: _db)._recomputeDerivedXpNow();
+  }
+
+  /// Sets a habit's done state for [date] — the single entry point
+  /// every screen's habit toggle must use (Home, Schedule,
+  /// Challenge detail).
+  ///
+  /// - Habit with sub-tasks due today → ticks/unticks ALL its due
+  ///   sub-tasks (the habit's done state is derived from them, so
+  ///   the main check means "do the whole habit").
+  /// - Habit with no sub-tasks → flips the habit log directly (the
+  ///   existing [toggleHabit] path).
+  Future<ToggleResult> setHabitDone({
+    required Habit habit,
+    required String date,
+    required bool done,
+  }) async {
+    final subtasks = await listSubtasksForHabit(habit.id);
+    final due = dueSubtasks(subtasks, date);
+    if (due.isEmpty) {
+      return toggleHabit(habit: habit, date: date, completed: done);
+    }
+    // Toggle every due sub-task (serialised through the same queue
+    // by toggleSubtask); the last one leaves the habit log in the
+    // derived state. Await them in order so the caller knows when
+    // the server matches the screen.
+    final completedBefore = await completedSubtaskIdsForDate(date);
+    final wasDone = due.every((s) => completedBefore.contains(s.id));
+    for (final sub in due) {
+      await toggleSubtask(subtask: sub, date: date, completed: done);
+    }
+    // The XP delta is the DERIVED change: +2 when the habit becomes
+    // done, -2 when it stops being done, 0 when nothing changed
+    // (it was already in the desired state).
+    return ToggleResult(
+      xpDelta: (done ? xpPerTask : 0) - (wasDone ? xpPerTask : 0),
+      allDone: done,
+    );
   }
 }
 
@@ -1875,6 +2502,12 @@ class AccountRepository {
       final profiles = ProfileRepository(db: _db);
       final profile = await profiles.fetchMyProfile();
 
+      // Sub-tasks have no ownerUid, so they are deleted per habit
+      // (before the habits themselves go).
+      final habits = await HabitRepository(db: _db).listMyHabits();
+      for (final habit in habits) {
+        await HabitRepository(db: _db).deleteSubtasksForHabit(habit.id);
+      }
       await _deleteAllRows('habits', 'ownerUid', userId);
       await _deleteAllRows('habit_logs', 'ownerUid', userId);
       await _deleteAllRows('daily_rewards', 'ownerUid', userId);

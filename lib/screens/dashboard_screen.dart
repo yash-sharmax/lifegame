@@ -6,6 +6,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 
 import '../data/models.dart';
 import '../data/repositories.dart';
+import '../logic/subtasks.dart';
 import '../logic/xp.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
@@ -106,6 +107,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   );
   List<Habit> _habitsList = [];
   Map<String, Set<String>> _logsByDate = {};
+  // Sub-tasks (v2.8.0): the daily score counts WORK DONE — sub-tasks
+  // — so the score card needs the sub-tasks due today (and this
+  // week) plus which of them are done, per date.
+  Map<String, List<HabitSubtask>> _subtasksByHabit = {};
+  Map<String, Set<String>> _subtaskDoneByDate = {};
   List<_LedgerEntry> _ledger = [];
   int _profileXp = 0;
   bool _loading = true;
@@ -215,6 +221,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
         dateKey(weekStart),
         dateKey(todayDate),
       );
+      // Sub-tasks for the score card (v2.8.0): all habits' sub-tasks
+      // plus which sub-tasks are done, per date, for this week. The
+      // repository degrades to empty lists when the tables are
+      // missing, so a failure here never breaks the dashboard.
+      final subtasksByHabit = await _habits.listSubtasksByHabit(
+        habits.map((h) => h.id),
+      );
+      final subtaskDoneByDate = await _habits.completedSubtaskIdsInRange(
+        dateKey(weekStart),
+        dateKey(todayDate),
+      );
       final profile = await _profiles.fetchMyProfile();
       // The ledger is derived from the same source as the XP rule:
       // every completed habit log + every done weekly/monthly task
@@ -260,6 +277,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _habitsList = habits;
         _logsByDate = byDate;
+        _subtasksByHabit = subtasksByHabit;
+        _subtaskDoneByDate = subtaskDoneByDate;
         _ledger = entries;
         _profileXp = profile?.xp ?? 0;
         _loading = false;
@@ -368,18 +387,66 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final missed = (applicableDays - totalDone).clamp(0, 1000000);
     final ledgerTotal = _ledger.length * xpPerTask;
 
-    // Today's score: habits due today, and which of them are done.
+    // Today's score (v2.8.0): the WORK DONE — sub-tasks — not just
+    // habit ticks. One item per due sub-task (habits with sub-tasks)
+    // or per habit (habits with no sub-tasks). The week's pace counts
+    // the same items, day by day, Monday to today.
     final todayHabits = _habitsFor(todayDate);
     final todayDoneIds = (_logsByDate[today] ?? const <String>{})
         .where((id) => todayHabits.any((h) => h.id == id))
         .toSet();
-    // This week's pace: Monday to today.
+    final todayDueByHabit = {
+      for (final h in todayHabits)
+        h.id: dueSubtasks(
+          _subtasksByHabit[h.id] ?? const <HabitSubtask>[],
+          today,
+        ),
+    };
+    final todayItems = scoreItemsForToday(
+      habits: todayHabits,
+      dueByHabit: todayDueByHabit,
+      doneSubtaskIds: _subtaskDoneByDate[today] ?? const <String>{},
+      doneHabitIds: todayDoneIds,
+    );
+    // Habits actually done today (derived: all due sub-tasks done,
+    // or the habit tick when it has none) — this is what the XP is.
+    var todayDoneHabits = 0;
+    for (final h in todayHabits) {
+      if (habitIsDone(
+        due: todayDueByHabit[h.id] ?? const <HabitSubtask>[],
+        doneSubtaskIds: _subtaskDoneByDate[today] ?? const <String>{},
+        habitTicked: todayDoneIds.contains(h.id),
+      )) {
+        todayDoneHabits++;
+      }
+    }
+    // This week's pace: Monday to today, same items as the score.
     final weekStart = _weekStart(todayDate);
-    var weekDone = 0;
-    var weekApplicable = 0;
-    for (var d = weekStart; !d.isAfter(todayDate); d = d.add(const Duration(days: 1))) {
-      weekApplicable += _habitsFor(d).length;
-      weekDone += _doneOn(d);
+    var weekDoneItems = 0;
+    var weekTotalItems = 0;
+    for (var d = weekStart;
+        !d.isAfter(todayDate);
+        d = d.add(const Duration(days: 1))) {
+      final key = dateKey(d);
+      final dayHabits = _habitsFor(d);
+      final dayDoneIds = (_logsByDate[key] ?? const <String>{})
+          .where((id) => dayHabits.any((h) => h.id == id))
+          .toSet();
+      final dayDueByHabit = {
+        for (final h in dayHabits)
+          h.id: dueSubtasks(
+            _subtasksByHabit[h.id] ?? const <HabitSubtask>[],
+            key,
+          ),
+      };
+      final dayItems = scoreItemsForToday(
+        habits: dayHabits,
+        dueByHabit: dayDueByHabit,
+        doneSubtaskIds: _subtaskDoneByDate[key] ?? const <String>{},
+        doneHabitIds: dayDoneIds,
+      );
+      weekTotalItems += dayItems.length;
+      weekDoneItems += dayItems.where((i) => i.done).length;
     }
 
     final String statsLine;
@@ -501,10 +568,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     // is being viewed.
                     _TodayScoreCard(
                       today: todayDate,
-                      habitsToday: todayHabits,
-                      doneIds: todayDoneIds,
-                      weekDone: weekDone,
-                      weekApplicable: weekApplicable,
+                      items: todayItems,
+                      doneHabitCount: todayDoneHabits,
+                      weekDoneItems: weekDoneItems,
+                      weekTotalItems: weekTotalItems,
                     ).animate().fadeIn().slideY(begin: 0.05),
                     const SizedBox(height: 14),
                     if (_habitsList.isEmpty)
@@ -596,37 +663,45 @@ String _prettyMonth(String key) {
   return monthName(DateTime(year, month));
 }
 
-/// Today's score: the honest percent for today, what was done (each
-/// habit + its +2 XP) and what is still pending — so the percent can
-/// be checked by hand. Score = done today / habits due today × 100.
-/// Plus today's pace and this week's pace.
+/// Today's score: the honest percent for today, what was done and
+/// what is still pending — so the percent can be checked by hand.
+/// The score counts WORK DONE (v2.8.0): sub-tasks for habits that
+/// have them, the habit itself for habits that do not. Score =
+/// items done today / items due today × 100. Plus today's pace and
+/// this week's pace (same items, Monday to today).
 class _TodayScoreCard extends StatelessWidget {
   const _TodayScoreCard({
     required this.today,
-    required this.habitsToday,
-    required this.doneIds,
-    required this.weekDone,
-    required this.weekApplicable,
+    required this.items,
+    required this.doneHabitCount,
+    required this.weekDoneItems,
+    required this.weekTotalItems,
   });
 
   final DateTime today;
-  final List<Habit> habitsToday;
-  final Set<String> doneIds;
-  final int weekDone;
-  final int weekApplicable;
+
+  /// Today's score items (sub-tasks and/or whole habits).
+  final List<ScoreItem> items;
+
+  /// Habits actually done today (derived from the sub-tasks) — this
+  /// is what today's XP is. Sub-tasks carry no XP of their own.
+  final int doneHabitCount;
+
+  /// This week's pace, in the same items.
+  final int weekDoneItems;
+  final int weekTotalItems;
 
   @override
   Widget build(BuildContext context) {
-    final total = habitsToday.length;
-    final doneHabits = habitsToday.where((h) => doneIds.contains(h.id)).toList();
-    final pendingHabits =
-        habitsToday.where((h) => !doneIds.contains(h.id)).toList();
-    final done = doneHabits.length;
-    final pct = total == 0 ? 0 : (done / total * 100).round();
-    final todayXp = done * xpPerTask;
-    final weekPct = weekApplicable == 0
+    final total = items.length;
+    final doneItems = items.where((i) => i.done).toList();
+    final pendingItems = items.where((i) => !i.done).toList();
+    final done = doneItems.length;
+    final pct = scorePercent(items);
+    final todayXp = doneHabitCount * xpPerTask;
+    final weekPct = weekTotalItems == 0
         ? 0
-        : (weekDone / weekApplicable * 100).round();
+        : (weekDoneItems / weekTotalItems * 100).round();
 
     final String pace;
     final IconData paceIcon;
@@ -703,14 +778,14 @@ class _TodayScoreCard extends StatelessWidget {
           if (total > 0) ...[
             const SizedBox(height: 2),
             Text(
-              "Today's XP: $todayXp XP ($done done × $xpPerTask XP)",
+              "Today's XP: $todayXp XP ($doneHabitCount ${doneHabitCount == 1 ? 'habit' : 'habits'} done × $xpPerTask XP)",
               style: const TextStyle(color: AppTheme.inkSoft, fontSize: 12),
             ),
           ],
-          if (weekApplicable > 0) ...[
+          if (weekTotalItems > 0) ...[
             const SizedBox(height: 2),
             Text(
-              'This week: $weekDone of $weekApplicable done — $weekPct%',
+              'This week: $weekDoneItems of $weekTotalItems done — $weekPct%',
               style: const TextStyle(color: AppTheme.inkSoft, fontSize: 12),
             ),
           ],
@@ -722,7 +797,7 @@ class _TodayScoreCard extends StatelessWidget {
             ),
           ] else ...[
             const SizedBox(height: 10),
-            if (doneHabits.isNotEmpty) ...[
+            if (doneItems.isNotEmpty) ...[
               Text(
                 'Done ($done)',
                 style: const TextStyle(
@@ -732,16 +807,16 @@ class _TodayScoreCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              for (final habit in doneHabits)
+              for (final item in doneItems)
                 _scoreRow(
-                  habit: habit,
+                  item: item,
                   done: true,
                 ),
             ],
-            if (pendingHabits.isNotEmpty) ...[
-              if (doneHabits.isNotEmpty) const SizedBox(height: 8),
+            if (pendingItems.isNotEmpty) ...[
+              if (doneItems.isNotEmpty) const SizedBox(height: 8),
               Text(
-                'Still to do (${pendingHabits.length})',
+                'Still to do (${pendingItems.length})',
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
@@ -749,9 +824,9 @@ class _TodayScoreCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              for (final habit in pendingHabits)
+              for (final item in pendingItems)
                 _scoreRow(
-                  habit: habit,
+                  item: item,
                   done: false,
                 ),
             ],
@@ -761,7 +836,11 @@ class _TodayScoreCard extends StatelessWidget {
     );
   }
 
-  Widget _scoreRow({required Habit habit, required bool done}) {
+  /// One row of the score card: the item's label ("Habit — Sub-task"
+  /// for a sub-task, the habit title otherwise). A whole habit earns
+  /// +2 XP when done; a sub-task carries no XP of its own — the
+  /// habit's +2 XP lands when ALL its sub-tasks are done.
+  Widget _scoreRow({required ScoreItem item, required bool done}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
@@ -774,7 +853,7 @@ class _TodayScoreCard extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              habit.title,
+              item.displayLabel,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -785,9 +864,13 @@ class _TodayScoreCard extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Text(
-            done ? '+$xpPerTask XP' : '+$xpPerTask XP when done',
+            item.isSubtask
+                ? 'Sub-task'
+                : (done ? '+$xpPerTask XP' : '+$xpPerTask XP when done'),
             style: TextStyle(
-              color: done ? AppTheme.ember : AppTheme.inkSoft,
+              color: done && !item.isSubtask
+                  ? AppTheme.ember
+                  : AppTheme.inkSoft,
               fontWeight: FontWeight.w700,
               fontSize: 12,
             ),

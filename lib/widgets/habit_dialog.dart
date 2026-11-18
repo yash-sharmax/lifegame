@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../data/models.dart';
+import '../data/repositories.dart';
+import '../logic/subtasks.dart';
+import '../logic/xp.dart';
+import '../screens/auth_screen.dart';
 import '../theme.dart';
 
 /// What the user chose in the habit edit dialog.
@@ -112,32 +116,172 @@ Future<HabitAddResult?> showAddHabitDialog(BuildContext context) async {
 }
 
 /// The habit edit dialog, shared by Home and Profile: rename a habit,
-/// add or edit its notes, or delete it. Returns null when the user
-/// cancels. The caller performs the save/delete itself and reloads
-/// afterwards.
+/// add or edit its notes, manage its sub-tasks, or delete it. Returns
+/// null when the user cancels. The caller performs the habit save /
+/// delete itself and reloads afterwards. Sub-task changes (tick, add,
+/// delete) apply right away through [habitRepo] — they are not part
+/// of the returned result.
 Future<HabitEditResult?> showHabitEditDialog(
   BuildContext context,
-  Habit habit,
-) async {
-  final titleController = TextEditingController(text: habit.title);
-  final notesController = TextEditingController(text: habit.notes);
-  final result = await showDialog<String>(
+  Habit habit, {
+  HabitRepository? habitRepo,
+}) async {
+  return showDialog<HabitEditResult>(
     context: context,
-    builder: (context) => AlertDialog(
+    builder: (context) => _HabitEditDialog(
+      habit: habit,
+      repo: habitRepo ?? HabitRepository(),
+    ),
+  );
+}
+
+class _HabitEditDialog extends StatefulWidget {
+  const _HabitEditDialog({required this.habit, required this.repo});
+
+  final Habit habit;
+  final HabitRepository repo;
+
+  @override
+  State<_HabitEditDialog> createState() => _HabitEditDialogState();
+}
+
+class _HabitEditDialogState extends State<_HabitEditDialog> {
+  late final TextEditingController _titleController;
+  late final TextEditingController _notesController;
+  final _dailyAddController = TextEditingController();
+  final _todayAddController = TextEditingController();
+  List<HabitSubtask> _subtasks = [];
+  Set<String> _doneToday = {};
+  bool _loadingSubtasks = true;
+
+  String get _today => todayKey();
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController = TextEditingController(text: widget.habit.title);
+    _notesController = TextEditingController(text: widget.habit.notes);
+    _loadSubtasks();
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _notesController.dispose();
+    _dailyAddController.dispose();
+    _todayAddController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSubtasks() async {
+    try {
+      final subtasks =
+          await widget.repo.listSubtasksForHabit(widget.habit.id);
+      final done = await widget.repo.completedSubtaskIdsForDate(_today);
+      if (!mounted) return;
+      setState(() {
+        _subtasks = subtasks;
+        _doneToday = done;
+        _loadingSubtasks = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingSubtasks = false);
+    }
+  }
+
+  /// Sub-tasks due today, split by kind.
+  List<HabitSubtask> get _daily =>
+      dueSubtasks(_subtasks, _today)
+          .where((s) => s.kind == HabitSubtask.kindDaily)
+          .toList();
+  List<HabitSubtask> get _todayOnly =>
+      dueSubtasks(_subtasks, _today)
+          .where((s) => s.kind == HabitSubtask.kindToday)
+          .toList();
+
+  Future<void> _toggleSubtask(HabitSubtask sub, bool value) async {
+    final wasDone = _doneToday.contains(sub.id);
+    if (wasDone == value) return;
+    setState(() {
+      if (value) {
+        _doneToday.add(sub.id);
+      } else {
+        _doneToday.remove(sub.id);
+      }
+    });
+    try {
+      await widget.repo.toggleSubtask(
+        subtask: sub,
+        date: _today,
+        completed: value,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        if (wasDone) {
+          _doneToday.add(sub.id);
+        } else {
+          _doneToday.remove(sub.id);
+        }
+      });
+      showError(context, e);
+    }
+  }
+
+  Future<void> _addSubtask(
+    String kind,
+    TextEditingController controller,
+  ) async {
+    final title = controller.text.trim();
+    if (title.isEmpty) return;
+    controller.clear();
+    try {
+      final sub = await widget.repo.addSubtask(
+        habit: widget.habit,
+        title: title,
+        kind: kind,
+      );
+      if (!mounted) return;
+      setState(() => _subtasks.add(sub));
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  Future<void> _deleteSubtask(HabitSubtask sub) async {
+    setState(() {
+      _subtasks.removeWhere((s) => s.id == sub.id);
+      _doneToday.remove(sub.id);
+    });
+    try {
+      await widget.repo.deleteSubtask(sub);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _subtasks.add(sub));
+      showError(context, e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final due = dueSubtasks(_subtasks, _today);
+    final doneCount = due.where((s) => _doneToday.contains(s.id)).length;
+    return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       title: const Text('Edit habit'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             TextField(
-              controller: titleController,
+              controller: _titleController,
               autofocus: true,
               decoration: const InputDecoration(labelText: 'Habit name'),
             ),
             const SizedBox(height: 14),
             TextField(
-              controller: notesController,
+              controller: _notesController,
               maxLines: 4,
               decoration: const InputDecoration(
                 labelText: 'Notes (optional)',
@@ -145,12 +289,76 @@ Future<HabitEditResult?> showHabitEditDialog(
                 alignLabelWithHint: true,
               ),
             ),
+            const SizedBox(height: 18),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Sub-tasks',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                  ),
+                ),
+                if (!_loadingSubtasks && due.isNotEmpty)
+                  Text(
+                    '$doneCount/${due.length} done today',
+                    style: const TextStyle(
+                      color: AppTheme.inkSoft,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'A habit is done when all its sub-tasks for today are done.',
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
+            ),
+            if (_loadingSubtasks)
+              const Padding(
+                padding: EdgeInsets.only(top: 12),
+                child: LinearProgressIndicator(),
+              )
+            else ...[
+              const SizedBox(height: 10),
+              _SubtaskGroup(
+                heading: 'Daily',
+                hint: 'Add a daily sub-task…',
+                subtasks: _daily,
+                doneToday: _doneToday,
+                onToggle: _toggleSubtask,
+                onDelete: _deleteSubtask,
+                onAdd: (controller) =>
+                    _addSubtask(HabitSubtask.kindDaily, controller),
+                addController: _dailyAddController,
+              ),
+              const SizedBox(height: 12),
+              _SubtaskGroup(
+                heading: 'Today',
+                hint: 'Add a sub-task for today only…',
+                subtasks: _todayOnly,
+                doneToday: _doneToday,
+                onToggle: _toggleSubtask,
+                onDelete: _deleteSubtask,
+                onAdd: (controller) =>
+                    _addSubtask(HabitSubtask.kindToday, controller),
+                addController: _todayAddController,
+              ),
+            ],
           ],
         ),
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop('delete'),
+          onPressed: () => Navigator.of(context).pop(
+            HabitEditResult(
+              HabitEditAction.delete,
+              _titleController.text.trim(),
+              notes: _notesController.text.trim(),
+            ),
+          ),
           child: const Text('Delete', style: TextStyle(color: AppTheme.flame)),
         ),
         TextButton(
@@ -158,25 +366,125 @@ Future<HabitEditResult?> showHabitEditDialog(
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop('save'),
+          onPressed: () => Navigator.of(context).pop(
+            HabitEditResult(
+              HabitEditAction.save,
+              _titleController.text.trim(),
+              notes: _notesController.text.trim(),
+            ),
+          ),
           child: const Text('Save'),
         ),
       ],
-    ),
-  );
-  if (result == 'save') {
-    return HabitEditResult(
-      HabitEditAction.save,
-      titleController.text.trim(),
-      notes: notesController.text.trim(),
     );
   }
-  if (result == 'delete') {
-    return HabitEditResult(
-      HabitEditAction.delete,
-      titleController.text.trim(),
-      notes: notesController.text.trim(),
+}
+
+/// One sub-task group ("Daily" or "Today") inside the habit edit
+/// dialog: the heading, its sub-tasks with a tick checkbox and a
+/// delete button, and an add field.
+class _SubtaskGroup extends StatelessWidget {
+  const _SubtaskGroup({
+    required this.heading,
+    required this.hint,
+    required this.subtasks,
+    required this.doneToday,
+    required this.onToggle,
+    required this.onDelete,
+    required this.onAdd,
+    required this.addController,
+  });
+
+  final String heading;
+  final String hint;
+  final List<HabitSubtask> subtasks;
+  final Set<String> doneToday;
+  final Future<void> Function(HabitSubtask, bool) onToggle;
+  final Future<void> Function(HabitSubtask) onDelete;
+  final Future<void> Function(TextEditingController) onAdd;
+  final TextEditingController addController;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          heading,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+            color: AppTheme.inkSoft,
+          ),
+        ),
+        const SizedBox(height: 4),
+        if (subtasks.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              heading == 'Daily'
+                  ? 'No daily sub-tasks yet.'
+                  : 'No sub-tasks for today yet.',
+              style: const TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+            ),
+          ),
+        for (final sub in subtasks)
+          Row(
+            children: [
+              Checkbox(
+                value: doneToday.contains(sub.id),
+                onChanged: (v) => onToggle(sub, v ?? false),
+                visualDensity: VisualDensity.compact,
+              ),
+              Expanded(
+                child: Text(
+                  sub.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              IconButton(
+                onPressed: () => onDelete(sub),
+                tooltip: 'Delete sub-task',
+                icon: const Icon(Icons.close, size: 18),
+                color: AppTheme.inkSoft,
+                constraints: const BoxConstraints(
+                  minWidth: 32,
+                  minHeight: 32,
+                ),
+                padding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: addController,
+                decoration: InputDecoration(
+                  hintText: hint,
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                ),
+                onSubmitted: (_) => onAdd(addController),
+              ),
+            ),
+            const SizedBox(width: 6),
+            IconButton(
+              onPressed: () => onAdd(addController),
+              tooltip: 'Add sub-task',
+              icon: const Icon(Icons.add_circle, color: AppTheme.ember),
+            ),
+          ],
+        ),
+      ],
     );
   }
-  return null;
 }

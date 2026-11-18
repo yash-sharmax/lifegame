@@ -225,10 +225,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           title: item.title,
           color: item.color,
         );
-        await _habits.toggleHabit(
+        await _habits.setHabitDone(
           habit: habit,
           date: todayKey(),
-          completed: value,
+          done: value,
         );
       } else if (item.kind == 'weekly') {
         await _tasks.toggleWeeklyTask(item.id, value);
