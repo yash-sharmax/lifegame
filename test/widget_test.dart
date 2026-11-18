@@ -387,17 +387,17 @@ void main() {
     );
     expect(find.text('Support'), findsOneWidget);
     expect(find.text('How Life Game works'), findsOneWidget);
-    expect(find.text('Email support'), findsOneWidget);
+    expect(find.text('Email support'), findsNothing);
     expect(find.text('Feedback'), findsOneWidget);
     expect(find.text('Send feedback'), findsOneWidget);
     expect(find.text('Delete account'), findsOneWidget);
     expect(find.text('Log out'), findsOneWidget);
     // About is clean: plain version only, no build suffix, no tech mentions.
     expect(
-      find.text('Version 2.8.2'),
+      find.text('Version 2.8.3'),
       findsOneWidget,
     );
-    expect(find.textContaining('+16'), findsNothing);
+    expect(find.textContaining('+17'), findsNothing);
     expect(find.textContaining('Flutter'), findsNothing);
     expect(find.textContaining('Appwrite'), findsNothing);
 
@@ -415,10 +415,10 @@ void main() {
     );
     expect(find.textContaining('Recruit to Legend'), findsOneWidget);
     expect(
-      find.text('Version 2.8.2'),
+      find.text('Version 2.8.3'),
       findsWidgets,
     );
-    expect(find.textContaining('+16'), findsNothing);
+    expect(find.textContaining('+17'), findsNothing);
     expect(find.textContaining('Flutter'), findsNothing);
     expect(find.textContaining('Appwrite'), findsNothing);
   });

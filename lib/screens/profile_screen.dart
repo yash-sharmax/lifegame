@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
 import '../config.dart';
@@ -14,12 +13,8 @@ import '../widgets/habit_dialog.dart';
 import 'auth_screen.dart';
 import 'search_screen.dart';
 
-/// Email shown for support — the developer's own address. It is copied
-/// to the clipboard on tap (no extra dependency needed for a mail link).
-const String _supportEmail = 'yashsharmaup2008@gmail.com';
-
 /// Display version: the plain version without the build-number suffix
-/// (e.g. '2.8.2' from '2.8.2+16') — the About screen shows this only.
+/// (e.g. '2.8.3' from '2.8.3+17') — the About screen shows this only.
 String get _displayVersion => AppConfig.appVersion.split('+').first;
 
 /// Short description shown in the About dialog — plain words about
@@ -488,11 +483,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Future<void> _copySupportEmail() async {
-    await Clipboard.setData(const ClipboardData(text: _supportEmail));
-    if (mounted) showInfo(context, 'Support email copied.');
-  }
-
   /// Two-step delete: a plain-language warning dialog with an
   /// explicit "I understand" checkbox, then the real delete.
   /// While it runs the screen shows a blocking overlay; on success the
@@ -729,18 +719,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               color: AppTheme.inkSoft,
                             ),
                             onTap: _showHowItWorks,
-                          ),
-                          const Divider(height: 1),
-                          ListTile(
-                            leading: const Icon(Icons.email_outlined),
-                            title: const Text('Email support'),
-                            subtitle: const Text(_supportEmail),
-                            trailing: const Icon(
-                              Icons.copy_outlined,
-                              color: AppTheme.inkSoft,
-                              size: 20,
-                            ),
-                            onTap: _copySupportEmail,
                           ),
                         ],
                       ),
