@@ -47,6 +47,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final _formKey = GlobalKey<FormState>();
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _confirmPassword = TextEditingController();
   final _username = TextEditingController();
   final _displayName = TextEditingController();
   bool _busy = false;
@@ -58,6 +59,7 @@ class _AuthScreenState extends State<AuthScreen> {
   void dispose() {
     _email.dispose();
     _password.dispose();
+    _confirmPassword.dispose();
     _username.dispose();
     _displayName.dispose();
     super.dispose();
@@ -293,6 +295,9 @@ class _AuthScreenState extends State<AuthScreen> {
                                   if (value.length < 3) {
                                     return 'Username needs at least 3 characters';
                                   }
+                                  if (value.length > 32) {
+                                    return 'Username must be at most 32 characters';
+                                  }
                                   if (!RegExp(r'^[a-zA-Z0-9_]+$')
                                       .hasMatch(value)) {
                                     return 'Letters, numbers and _ only';
@@ -333,6 +338,19 @@ class _AuthScreenState extends State<AuthScreen> {
                                     ? null
                                     : 'At least 8 characters',
                               ),
+                            if (_mode == AuthMode.signup) ...[
+                              const SizedBox(height: 14),
+                              TextFormField(
+                                controller: _confirmPassword,
+                                obscureText: _obscure,
+                                decoration: const InputDecoration(
+                                  labelText: 'Confirm password',
+                                ),
+                                validator: (v) => v == _password.text
+                                    ? null
+                                    : 'Passwords do not match',
+                              ),
+                            ],
                             if (_mode != AuthMode.forgot)
                               const SizedBox(height: 8),
                             if (_mode == AuthMode.login)

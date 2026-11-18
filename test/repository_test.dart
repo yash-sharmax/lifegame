@@ -829,6 +829,26 @@ void main() {
       );
       expect(await social.followProfiles(followers: true), isEmpty);
     });
+
+    test(
+      'v2.8.5: follow/unfollow/isFollowing round-trip via ID.unique() rows',
+      () async {
+        // Regression test for the 18 Nov Follow crash: the old
+        // '${followerId}_$followingId' rowId was 41 chars, over Appwrite's
+        // 36-char document-id limit (400). Follow rows are now created
+        // with ID.unique() and found by query.
+        final social = SocialRepository(db: db);
+        expect(await social.isFollowing('user-2'), isFalse);
+        await social.follow('user-2');
+        expect(await social.isFollowing('user-2'), isTrue);
+        expect(await social.followingIds(), ['user-2']);
+        await social.unfollow('user-2');
+        expect(await social.isFollowing('user-2'), isFalse);
+        expect(await social.followingIds(), isEmpty);
+        // Unfollowing someone not followed is a no-op, not an error.
+        await social.unfollow('user-2');
+      },
+    );
   });
 
   group('v2.8.0 (18 Nov 2026): sub-tasks inside habits', () {

@@ -2259,15 +2259,31 @@ class SocialRepository {
     return user.uid;
   }
 
-  String _followDocId(String followerId, String followingId) =>
-      '${followerId}_$followingId';
+  /// Id of the follow row for (me → [followingId]), or null when not
+  /// following. Follow rows are created with [ID.unique()] — a composite
+  /// id like '${followerId}_$followingId' is 41 chars, over Appwrite's
+  /// 36-char document-id limit, so it must be looked up, not computed.
+  Future<String?> _findFollowDocId(String followingId) async {
+    final userId = _requireUserId();
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'follows',
+      queries: [
+        Query.equal('followerUid', userId),
+        Query.equal('followingUid', followingId),
+        Query.limit(1),
+      ],
+    );
+    if (list.rows.isEmpty) return null;
+    return list.rows.first.$id;
+  }
 
   Future<void> follow(String followingId) async {
     final userId = _requireUserId();
     await _d.createRow(
       databaseId: _dbId,
       tableId: 'follows',
-      rowId: _followDocId(userId, followingId),
+      rowId: ID.unique(),
       data: {'followerUid': userId, 'followingUid': followingId},
       permissions: [
         Permission.read(Role.users()),
@@ -2278,27 +2294,17 @@ class SocialRepository {
   }
 
   Future<void> unfollow(String followingId) async {
-    final userId = _requireUserId();
+    final docId = await _findFollowDocId(followingId);
+    if (docId == null) return;
     await _d.deleteRow(
       databaseId: _dbId,
       tableId: 'follows',
-      rowId: _followDocId(userId, followingId),
+      rowId: docId,
     );
   }
 
   Future<bool> isFollowing(String followingId) async {
-    final userId = _requireUserId();
-    try {
-      await _d.getRow(
-        databaseId: _dbId,
-        tableId: 'follows',
-        rowId: _followDocId(userId, followingId),
-      );
-      return true;
-    } on AppwriteException catch (e) {
-      if (e.code == 404) return false;
-      rethrow;
-    }
+    return (await _findFollowDocId(followingId)) != null;
   }
 
   Future<List<String>> followingIds() async {

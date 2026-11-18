@@ -47,6 +47,51 @@ void main() {
     expect(find.text('Username'), findsOneWidget);
   });
 
+  testWidgets(
+    'v2.8.5: signup has a confirm password field, login does not',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(const LifeGameApp());
+      await tester.pumpAndSettle();
+
+      // Login mode: single password field, no confirmation.
+      expect(find.text('Confirm password'), findsNothing);
+
+      await tester.tap(find.text('Create account'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Confirm password'), findsOneWidget);
+
+      // Mismatched confirmation blocks the submit with an error.
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Password'),
+        'password123',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Confirm password'),
+        'different123',
+      );
+      await tester.tap(find.text('Create account'));
+      await tester.pump();
+      expect(find.text('Passwords do not match'), findsOneWidget);
+
+      // Matching confirmation clears the error (submit then fails
+      // elsewhere — the app is unconfigured in tests — but the
+      // mismatch error itself must be gone).
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Confirm password'),
+        'password123',
+      );
+      await tester.tap(find.text('Create account'));
+      await tester.pump();
+      expect(find.text('Passwords do not match'), findsNothing);
+    },
+  );
+
   testWidgets('home shows empty state when there are no habits', (
     tester,
   ) async {
@@ -394,10 +439,10 @@ void main() {
     expect(find.text('Log out'), findsOneWidget);
     // About is clean: plain version only, no build suffix, no tech mentions.
     expect(
-      find.text('Version 2.8.4'),
+      find.text('Version 2.8.5'),
       findsOneWidget,
     );
-    expect(find.textContaining('+18'), findsNothing);
+    expect(find.textContaining('+19'), findsNothing);
     expect(find.textContaining('Flutter'), findsNothing);
     expect(find.textContaining('Appwrite'), findsNothing);
 
@@ -415,10 +460,10 @@ void main() {
     );
     expect(find.textContaining('Recruit to Legend'), findsOneWidget);
     expect(
-      find.text('Version 2.8.4'),
+      find.text('Version 2.8.5'),
       findsWidgets,
     );
-    expect(find.textContaining('+18'), findsNothing);
+    expect(find.textContaining('+19'), findsNothing);
     expect(find.textContaining('Flutter'), findsNothing);
     expect(find.textContaining('Appwrite'), findsNothing);
   });
