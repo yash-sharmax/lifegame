@@ -22,9 +22,10 @@ class HabitEditResult {
   final String notes;
 }
 
-/// The result of the add-habit dialog: the title and the chosen banner
-/// colour (a gradient's first colour, stored as an ARGB int — the same
-/// value Home has always stored for a habit).
+/// The result of the add-habit dialog: the title and the chosen
+/// colour. The colour is the palette INDEX (0..5) for a preset, or
+/// the picked colour as an ARGB int for a custom colour — see
+/// [AppTheme.gradientForHabitColor], which renders both.
 class HabitAddResult {
   const HabitAddResult({required this.title, required this.color});
 
@@ -35,84 +36,383 @@ class HabitAddResult {
 /// The add-habit dialog, shared by Home and Schedule (18 Nov 2026):
 /// one habit-creation flow everywhere, so a habit added from Schedule
 /// behaves exactly like one added from Home. Returns null on cancel.
+///
+/// Colour picker (v2.9.0): exactly ONE colour is selected at a time.
+/// The selection is tracked by palette INDEX (not by colour value) —
+/// the old code compared the gradient's first colour, and two
+/// gradients shared the same violet, so two circles showed a
+/// checkmark at once (18 Nov 2026). The palette itself has no
+/// duplicates any more (the sixth colour is mint, not a second
+/// violet). A "+" tile opens a custom colour picker (hue / saturation
+/// / brightness sliders + a hex field); the picked colour becomes a
+/// circle of its own and follows the same single-selection rule.
 Future<HabitAddResult?> showAddHabitDialog(BuildContext context) async {
   final titleController = TextEditingController();
-  var color = AppTheme.habitGradients.first.colors.first.toARGB32();
+  // The selected preset (0..5), or -1 when the custom colour is
+  // selected. One variable, one selection — never two checkmarks.
+  var selectedIndex = 0;
+  Color? customColor;
   final saved = await showDialog<bool>(
     context: context,
     builder: (context) => StatefulBuilder(
-      builder: (context, setDialogState) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
-        title: const Text('Add a habit'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleController,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Habit name',
-                hintText: 'e.g. Read 10 pages',
-              ),
+      builder: (context, setDialogState) {
+        // Local snapshot of the custom colour: `customColor` is
+        // reassigned inside the dialog's setState closures, so it
+        // cannot be null-promoted — this final copy can.
+        final custom = customColor;
+        final circles = <Widget>[
+          for (var i = 0; i < AppTheme.habitGradients.length; i++)
+            _ColorCircle(
+              gradient: AppTheme.habitGradients[i],
+              selected: selectedIndex == i,
+              onTap: () => setDialogState(() => selectedIndex = i),
             ),
-            const SizedBox(height: 18),
-            const Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Pick a colour',
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
+          if (custom != null)
+            _ColorCircle(
+              gradient: AppTheme.gradientForHabitColor(custom.toARGB32()),
+              selected: selectedIndex == -1,
+              onTap: () => setDialogState(() => selectedIndex = -1),
             ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 10,
-              children: AppTheme.habitGradients.map((g) {
-                final c = g.colors.first.toARGB32();
-                final selected = c == color;
-                return GestureDetector(
-                  onTap: () => setDialogState(() => color = c),
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      gradient: g,
-                      shape: BoxShape.circle,
-                      border: selected
-                          ? Border.all(color: AppTheme.ink, width: 2.5)
-                          : null,
+          // The "+" tile: pick a custom colour.
+          GestureDetector(
+            onTap: () async {
+              final picked = await _showCustomColorPicker(
+                context,
+                initial: customColor ?? AppTheme.ember,
+              );
+              if (picked == null) return;
+              setDialogState(() {
+                customColor = picked;
+                selectedIndex = -1;
+              });
+            },
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: AppTheme.inkSoft,
+                  width: 1.5,
+                  style: BorderStyle.solid,
+                ),
+              ),
+              child: Icon(Icons.add, color: AppTheme.inkSoft, size: 22),
+            ),
+          ),
+        ];
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          title: const Text('Add a habit'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'Habit name',
+                  hintText: 'e.g. Read 10 pages',
+                ),
+              ),
+              const SizedBox(height: 18),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Pick a colour',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Wrap(spacing: 10, runSpacing: 10, children: circles),
+              if (customColor != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Custom colour — tap + to change it',
+                      style: TextStyle(
+                        color: AppTheme.inkSoft,
+                        fontSize: 12,
+                      ),
                     ),
-                    child: selected
-                        ? const Icon(
-                            Icons.check,
-                            color: AppTheme.ink,
-                            size: 20,
-                          )
-                        : null,
                   ),
-                );
-              }).toList(),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Add'),
             ),
           ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Add'),
-          ),
-        ],
-      ),
+        );
+      },
     ),
   );
   if (saved == true && titleController.text.trim().isNotEmpty) {
+    // A preset stores its index; a custom colour stores the colour.
+    final color = selectedIndex >= 0
+        ? selectedIndex
+        : (customColor?.toARGB32() ?? 0);
     return HabitAddResult(title: titleController.text.trim(), color: color);
   }
   return null;
+}
+
+/// One colour circle in the picker: a gradient disc with a white
+/// checkmark when [selected].
+class _ColorCircle extends StatelessWidget {
+  const _ColorCircle({
+    required this.gradient,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final Gradient gradient;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          gradient: gradient,
+          shape: BoxShape.circle,
+          border: selected
+              ? Border.all(color: AppTheme.ink, width: 2.5)
+              : null,
+        ),
+        child: selected
+            ? Icon(
+                // On the gradient circle — always white.
+                Icons.check,
+                color: AppTheme.onAccent,
+                size: 20,
+              )
+            : null,
+      ),
+    );
+  }
+}
+
+/// A small built-in custom colour picker (v2.9.0): hue, saturation
+/// and brightness sliders over gradient tracks, a live preview, and
+/// a hex field for an exact colour. No extra package — three sliders
+/// and a text field are all it needs. Returns the picked colour, or
+/// null when the user cancels.
+Future<Color?> _showCustomColorPicker(
+  BuildContext context, {
+  required Color initial,
+}) {
+  return showDialog<Color>(
+    context: context,
+    builder: (context) => _CustomColorPickerDialog(initial: initial),
+  );
+}
+
+class _CustomColorPickerDialog extends StatefulWidget {
+  const _CustomColorPickerDialog({required this.initial});
+
+  final Color initial;
+
+  @override
+  State<_CustomColorPickerDialog> createState() =>
+      _CustomColorPickerDialogState();
+}
+
+class _CustomColorPickerDialogState extends State<_CustomColorPickerDialog> {
+  late HSVColor _hsv;
+  late final TextEditingController _hexController;
+
+  @override
+  void initState() {
+    super.initState();
+    _hsv = HSVColor.fromColor(widget.initial);
+    _hexController = TextEditingController(text: _hex);
+  }
+
+  @override
+  void dispose() {
+    _hexController.dispose();
+    super.dispose();
+  }
+
+  String get _hex {
+    final c = _hsv.toColor();
+    final r = (c.r * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0');
+    final g = (c.g * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0');
+    final b = (c.b * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0');
+    return '#$r$g$b'.toUpperCase();
+  }
+
+  void _updateHexField() {
+    final hex = _hex;
+    if (_hexController.text != hex) {
+      _hexController.text = hex;
+      _hexController.selection = TextSelection.fromPosition(
+        TextPosition(offset: hex.length),
+      );
+    }
+  }
+
+  void _applyHex(String value) {
+    final cleaned = value.replaceAll('#', '').trim();
+    if (cleaned.length != 6) return;
+    final parsed = int.tryParse(cleaned, radix: 16);
+    if (parsed == null) return;
+    setState(() {
+      _hsv = HSVColor.fromColor(Color(0xFF000000 | parsed));
+      _updateHexField();
+    });
+  }
+
+  /// A slider over a gradient track: the slider's own track is
+  /// transparent so only the thumb shows, over the gradient.
+  Widget _gradientSlider({
+    required String label,
+    required double value,
+    required List<Color> trackColors,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            color: AppTheme.inkSoft,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              height: 12,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: trackColors),
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+            Slider(
+              value: value,
+              onChanged: onChanged,
+              activeColor: Colors.transparent,
+              inactiveColor: Colors.transparent,
+              thumbColor: AppTheme.ink,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _hsv.toColor();
+    final hueColor = HSVColor.fromAHSV(1, _hsv.hue, 1, 1).toColor();
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      title: const Text('Custom colour'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppTheme.cardBorder),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _hexController,
+                    decoration: const InputDecoration(
+                      labelText: 'Hex',
+                      hintText: '#7C5CFF',
+                      isDense: true,
+                    ),
+                    onSubmitted: _applyHex,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _gradientSlider(
+              label: 'Hue',
+              value: _hsv.hue / 360,
+              trackColors: const [
+                Color(0xFFFF0000),
+                Color(0xFFFFFF00),
+                Color(0xFF00FF00),
+                Color(0xFF00FFFF),
+                Color(0xFF0000FF),
+                Color(0xFFFF00FF),
+                Color(0xFFFF0000),
+              ],
+              onChanged: (v) => setState(() {
+                _hsv = _hsv.withHue(v * 360);
+                _updateHexField();
+              }),
+            ),
+            const SizedBox(height: 10),
+            _gradientSlider(
+              label: 'Saturation',
+              value: _hsv.saturation,
+              trackColors: [
+                HSVColor.fromAHSV(1, _hsv.hue, 0, _hsv.value).toColor(),
+                hueColor,
+              ],
+              onChanged: (v) => setState(() {
+                _hsv = _hsv.withSaturation(v);
+                _updateHexField();
+              }),
+            ),
+            const SizedBox(height: 10),
+            _gradientSlider(
+              label: 'Brightness',
+              value: _hsv.value,
+              trackColors: [Colors.black, hueColor],
+              onChanged: (v) => setState(() {
+                _hsv = _hsv.withValue(v);
+                _updateHexField();
+              }),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(color),
+          child: const Text('Use this colour'),
+        ),
+      ],
+    );
+  }
 }
 
 /// The habit edit dialog, shared by Home and Profile: rename a habit,
@@ -303,7 +603,7 @@ class _HabitEditDialogState extends State<_HabitEditDialog> {
                 if (!_loadingSubtasks && due.isNotEmpty)
                   Text(
                     '$doneCount/${due.length} done today',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppTheme.inkSoft,
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -312,7 +612,7 @@ class _HabitEditDialogState extends State<_HabitEditDialog> {
               ],
             ),
             const SizedBox(height: 4),
-            const Text(
+            Text(
               'A habit is done when all its sub-tasks for today are done.',
               style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
             ),
@@ -411,7 +711,7 @@ class _SubtaskGroup extends StatelessWidget {
       children: [
         Text(
           heading,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w800,
             color: AppTheme.inkSoft,
@@ -425,7 +725,7 @@ class _SubtaskGroup extends StatelessWidget {
               heading == 'Daily'
                   ? 'No daily sub-tasks yet.'
                   : 'No sub-tasks for today yet.',
-              style: const TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
             ),
           ),
         for (final sub in subtasks)

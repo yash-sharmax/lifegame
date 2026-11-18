@@ -42,6 +42,372 @@ class LocalStore {
   static const _subtasksKey = 'lifegame_subtasks_v1';
   static const _subtaskLogsKey = 'lifegame_subtask_logs_v1';
 
+  /// v2.9.0 offline-first caches: the app's own data, kept on-device
+  /// so it works with no network. The server is still the shared
+  /// truth when online; these caches are the fallback when it cannot
+  /// be reached, and the outbox (below) is what gets replayed to the
+  /// server when the network returns.
+  static const _habitsCacheKey = 'lifegame_habits_cache_v1';
+  static const _habitLogsCacheKey = 'lifegame_habit_logs_cache_v1';
+  static const _profileCacheKey = 'lifegame_profile_cache_v1';
+  static const _tasksCacheKey = 'lifegame_tasks_cache_v1';
+
+  /// Pending server writes (the outbox, v2.9.0): one JSON object per
+  /// op, e.g. {'kind': 'log', 'habitId': ..., 'date': ...,
+  /// 'done': true}. Replayed in order by SyncService when the network
+  /// returns; an op is removed only after the server confirms it.
+  static const _outboxKey = 'lifegame_outbox_v1';
+
+  /// Reminders chat (v2.9.0): the chat bubbles + the scheduled
+  /// reminders, per account (ownerId in each row).
+  static const _chatMessagesKey = 'lifegame_chat_messages_v1';
+  static const _chatRemindersKey = 'lifegame_chat_reminders_v1';
+
+  // -- Offline caches (v2.9.0) --------------------------------------------
+
+  List<Habit> loadCachedHabits(String ownerId) {
+    final raw = _prefs.getString(_habitsCacheKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .map((e) => Habit.fromLocalJson(Map<String, dynamic>.from(e as Map)))
+          .where((h) => h.userId == ownerId && !h.archived)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveCachedHabits(
+    String ownerId,
+    List<Habit> habits,
+  ) async {
+    final all = <Habit>[];
+    // Keep other accounts' cached habits (a shared device).
+    try {
+      final raw = _prefs.getString(_habitsCacheKey);
+      if (raw != null && raw.isNotEmpty) {
+        final list = jsonDecode(raw) as List<dynamic>;
+        all.addAll(
+          list
+              .map(
+                (e) => Habit.fromLocalJson(
+                  Map<String, dynamic>.from(e as Map),
+                ),
+              )
+              .where((h) => h.userId != ownerId),
+        );
+      }
+    } catch (_) {}
+    all.addAll(habits);
+    await _prefs.setString(
+      _habitsCacheKey,
+      jsonEncode(all.map((h) => h.toLocalJson()).toList()),
+    );
+  }
+
+  /// Merges one habit into the cache (add/update) without dropping
+  /// the others.
+  Future<void> upsertCachedHabit(Habit habit) async {
+    final mine = loadCachedHabits(habit.userId);
+    final index = mine.indexWhere((h) => h.id == habit.id);
+    if (index >= 0) {
+      mine[index] = habit;
+    } else {
+      mine.add(habit);
+    }
+    await saveCachedHabits(habit.userId, mine);
+  }
+
+  Future<void> removeCachedHabit(String ownerId, String habitId) async {
+    final mine = loadCachedHabits(
+      ownerId,
+    ).where((h) => h.id != habitId).toList();
+    await saveCachedHabits(ownerId, mine);
+  }
+
+  List<HabitLog> loadCachedHabitLogs(String ownerId) {
+    final raw = _prefs.getString(_habitLogsCacheKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .map(
+            (e) => HabitLog.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
+          .where((l) => l.userId == ownerId)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveCachedHabitLogs(
+    String ownerId,
+    List<HabitLog> logs,
+  ) async {
+    final all = <HabitLog>[];
+    try {
+      final raw = _prefs.getString(_habitLogsCacheKey);
+      if (raw != null && raw.isNotEmpty) {
+        final list = jsonDecode(raw) as List<dynamic>;
+        all.addAll(
+          list
+              .map(
+                (e) => HabitLog.fromJson(Map<String, dynamic>.from(e as Map)),
+              )
+              .where((l) => l.userId != ownerId),
+        );
+      }
+    } catch (_) {}
+    all.addAll(logs);
+    await _prefs.setString(
+      _habitLogsCacheKey,
+      jsonEncode(all.map((l) => l.toLocalJson()).toList()),
+    );
+  }
+
+  /// Applies one log toggle to the cache (add when done, remove when
+  /// undone) — the local source of truth while offline.
+  Future<void> applyCachedLog({
+    required String ownerId,
+    required String habitId,
+    required String date,
+    required bool done,
+  }) async {
+    final logs = loadCachedHabitLogs(ownerId);
+    final id = '${habitId}_$date';
+    logs.removeWhere((l) => l.id == id);
+    if (done) {
+      logs.add(
+        HabitLog(
+          id: id,
+          habitId: habitId,
+          userId: ownerId,
+          logDate: date,
+          completed: true,
+          xpEarned: 2,
+        ),
+      );
+    }
+    await saveCachedHabitLogs(ownerId, logs);
+  }
+
+  Profile? loadCachedProfile(String ownerId) {
+    final raw = _prefs.getString(_profileCacheKey);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final profile = Profile.fromJson({
+        'id': map['id'],
+        ...map,
+      });
+      return profile.id == ownerId ? profile : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveCachedProfile(Profile profile) async {
+    await _prefs.setString(
+      _profileCacheKey,
+      jsonEncode({
+        'id': profile.id,
+        'username': profile.username,
+        'displayName': profile.displayName,
+        'avatarUrl': profile.avatarUrl,
+        'bio': profile.bio,
+        'xp': profile.xp,
+        'currentStreak': profile.currentStreak,
+        'longestStreak': profile.longestStreak,
+        'lastActiveDate': profile.lastActiveDate,
+        'visibility': profile.visibility,
+        'discoverable': profile.discoverable,
+      }),
+    );
+  }
+
+  /// Weekly + monthly tasks, cached together (v2.9.0 offline-first).
+  ({List<WeeklyTask> weekly, List<MonthlyTask> monthly}) loadCachedTasks(
+    String ownerId,
+  ) {
+    final raw = _prefs.getString(_tasksCacheKey);
+    if (raw == null || raw.isEmpty) {
+      return (weekly: <WeeklyTask>[], monthly: <MonthlyTask>[]);
+    }
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final weekly =
+          (map['weekly'] as List<dynamic>? ?? [])
+              .map(
+                (e) => WeeklyTask.fromLocalJson(
+                  Map<String, dynamic>.from(e as Map),
+                ),
+              )
+              .where((t) => t.userId == ownerId)
+              .toList();
+      final monthly =
+          (map['monthly'] as List<dynamic>? ?? [])
+              .map(
+                (e) => MonthlyTask.fromLocalJson(
+                  Map<String, dynamic>.from(e as Map),
+                ),
+              )
+              .where((t) => t.userId == ownerId)
+              .toList();
+      return (weekly: weekly, monthly: monthly);
+    } catch (_) {
+      return (weekly: <WeeklyTask>[], monthly: <MonthlyTask>[]);
+    }
+  }
+
+  Future<void> saveCachedTasks(
+    String ownerId,
+    List<WeeklyTask> weekly,
+    List<MonthlyTask> monthly,
+  ) async {
+    // Keep other accounts' tasks.
+    var keptWeekly = <WeeklyTask>[];
+    var keptMonthly = <MonthlyTask>[];
+    try {
+      final raw = _prefs.getString(_tasksCacheKey);
+      if (raw != null && raw.isNotEmpty) {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        keptWeekly =
+            (map['weekly'] as List<dynamic>? ?? [])
+                .map(
+                  (e) => WeeklyTask.fromLocalJson(
+                    Map<String, dynamic>.from(e as Map),
+                  ),
+                )
+                .where((t) => t.userId != ownerId)
+                .toList();
+        keptMonthly =
+            (map['monthly'] as List<dynamic>? ?? [])
+                .map(
+                  (e) => MonthlyTask.fromLocalJson(
+                    Map<String, dynamic>.from(e as Map),
+                  ),
+                )
+                .where((t) => t.userId != ownerId)
+                .toList();
+      }
+    } catch (_) {}
+    await _prefs.setString(
+      _tasksCacheKey,
+      jsonEncode({
+        'weekly': [
+          ...keptWeekly.map((t) => t.toLocalJson()),
+          ...weekly.map((t) => t.toLocalJson()),
+        ],
+        'monthly': [
+          ...keptMonthly.map((t) => t.toLocalJson()),
+          ...monthly.map((t) => t.toLocalJson()),
+        ],
+      }),
+    );
+  }
+
+  // -- Outbox (v2.9.0) -------------------------------------------------------
+
+  List<Map<String, dynamic>> loadOutbox() {
+    final raw = _prefs.getString(_outboxKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveOutbox(List<Map<String, dynamic>> ops) async {
+    await _prefs.setString(_outboxKey, jsonEncode(ops));
+  }
+
+  Future<void> enqueueOutboxOp(Map<String, dynamic> op) async {
+    final ops = loadOutbox();
+    // A log toggle for the same habit+date replaces the earlier one
+    // (only the latest desired state matters).
+    if (op['kind'] == 'log') {
+      ops.removeWhere(
+        (o) =>
+            o['kind'] == 'log' &&
+            o['habitId'] == op['habitId'] &&
+            o['date'] == op['date'],
+      );
+    }
+    ops.add(op);
+    await saveOutbox(ops);
+  }
+
+  // -- Reminders chat (v2.9.0) ----------------------------------------------
+
+  List<ChatMessage> loadChatMessages(String ownerId) {
+    final raw = _prefs.getString(_chatMessagesKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .map(
+            (e) => ChatMessage.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
+          .where((m) => m.ownerId == ownerId)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveChatMessages(
+    String ownerId,
+    List<ChatMessage> messages,
+  ) async {
+    final all = <Map<String, dynamic>>[];
+    try {
+      final raw = _prefs.getString(_chatMessagesKey);
+      if (raw != null && raw.isNotEmpty) {
+        final list = jsonDecode(raw) as List<dynamic>;
+        for (final e in list) {
+          final map = Map<String, dynamic>.from(e as Map);
+          if ((map['ownerId'] as String? ?? '') != ownerId) {
+            all.add(map);
+          }
+        }
+      }
+    } catch (_) {}
+    for (final m in messages) {
+      all.add(m.toJson());
+    }
+    await _prefs.setString(_chatMessagesKey, jsonEncode(all));
+  }
+
+  List<ChatReminder> loadChatReminders(String ownerId) {
+    final raw = _prefs.getString(_chatRemindersKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .map(
+            (e) => ChatReminder.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
+          .where((r) => r.ownerId == ownerId)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveChatReminders(List<ChatReminder> reminders) async {
+    await _prefs.setString(
+      _chatRemindersKey,
+      jsonEncode(reminders.map((r) => r.toJson()).toList()),
+    );
+  }
+
   /// Raw locally stored sub-task rows (any owner). Each map carries
   /// its owner id under 'ownerId'.
   List<Map<String, dynamic>> loadSubtaskMaps() {
@@ -225,5 +591,34 @@ class LocalStore {
         .where((l) => !mySubtaskIds.contains(l.subtaskId))
         .toList();
     await saveSubtaskLogs(logs);
+    // v2.9.0 offline caches + outbox + chat: keep only other owners'.
+    await saveCachedHabits(
+      ownerId,
+      loadCachedHabits(ownerId).where((h) => h.userId != ownerId).toList(),
+    );
+    await saveCachedHabitLogs(
+      ownerId,
+      loadCachedHabitLogs(ownerId).where((l) => l.userId != ownerId).toList(),
+    );
+    final cachedProfile = loadCachedProfile(ownerId);
+    if (cachedProfile != null) {
+      await _prefs.remove(_profileCacheKey);
+    }
+    final tasks = loadCachedTasks(ownerId);
+    await saveCachedTasks(
+      ownerId,
+      tasks.weekly.where((t) => t.userId != ownerId).toList(),
+      tasks.monthly.where((t) => t.userId != ownerId).toList(),
+    );
+    final ops = loadOutbox().where((o) => o['ownerUid'] != ownerId).toList();
+    await saveOutbox(ops);
+    await saveChatMessages(
+      ownerId,
+      loadChatMessages(ownerId).where((m) => m.ownerId != ownerId).toList(),
+    );
+    final chatReminders = loadChatReminders(ownerId)
+        .where((r) => r.ownerId != ownerId)
+        .toList();
+    await saveChatReminders(chatReminders);
   }
 }

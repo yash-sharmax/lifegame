@@ -355,7 +355,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                         children: [
                           Text(
                             phaseLabel,
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: AppTheme.ink,
                               fontWeight: FontWeight.w700,
                               fontSize: 15,
@@ -374,7 +374,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                           const SizedBox(height: 8),
                           Text(
                             '${stats?.xp ?? 0} challenge XP • ${stats?.streak ?? 0}-day streak • ${stats?.daysCompleted ?? 0} days completed',
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: AppTheme.ink,
                               fontWeight: FontWeight.w700,
                               fontSize: 13,
@@ -425,7 +425,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                 locked
                     ? 'Habits are locked — no changes during the challenge.'
                     : 'You can still change these habits until the setup window ends.',
-                style: const TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+                style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
               ),
               const SizedBox(height: 12),
               ...challenge.habits.map((entry) {
@@ -471,7 +471,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                                     gradient: AppTheme.emberGradient,
                                     borderRadius: BorderRadius.circular(14),
                                   ),
-                                  child: const Icon(
+                                  child: Icon(
                                     Icons.check_circle_outline,
                                     color: AppTheme.ink,
                                     size: 24,
@@ -485,7 +485,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                                     children: [
                                       Text(
                                         entry.title,
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           fontSize: 16,
                                           fontWeight: FontWeight.w700,
                                           color: AppTheme.ink,
@@ -497,7 +497,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                                             : done
                                             ? 'Done today • +$xpPerTask XP'
                                             : 'Tap to complete • +$xpPerTask XP',
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           color: AppTheme.inkSoft,
                                           fontSize: 13,
                                         ),
@@ -532,7 +532,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 4),
-              const Text(
+              Text(
                 'Ranked by XP earned on the challenge habits during the challenge.',
                 style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
               ),
@@ -567,7 +567,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
                         ),
                       ),
                     const Divider(height: 1),
-                    const ListTile(
+                    ListTile(
                       leading: Icon(Icons.info_outline, color: AppTheme.ember),
                       title: Text(
                         'Solo challenge — only your XP shows here for now.',

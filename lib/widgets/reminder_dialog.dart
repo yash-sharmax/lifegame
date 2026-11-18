@@ -58,7 +58,7 @@ Future<ReminderDialogResult?> showReminderDialog(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Pick a time. The app reminds you every day at this time.',
               style: TextStyle(color: AppTheme.inkSoft, fontSize: 14),
             ),
@@ -114,7 +114,7 @@ Future<ReminderDialogResult?> showReminderDialog(
               onChanged: (v) => setDialogState(() => enabled = v),
             ),
             const SizedBox(height: 4),
-            const Text(
+            Text(
               'On the web, reminders show while the app is open. On Android, '
               'they also fire as a notification when the app is closed.',
               style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),

@@ -39,6 +39,14 @@ class ReminderAlert {
   final Reminder reminder;
 }
 
+/// A chat reminder that just fired — the UI shows it as a banner
+/// (v2.9.0, Reminders tab).
+class ChatReminderAlert {
+  const ChatReminderAlert({required this.reminder});
+
+  final ChatReminder reminder;
+}
+
 class ReminderService {
   ReminderService._();
 
@@ -48,6 +56,11 @@ class ReminderService {
 
   /// Fires once per due reminder (in-app banner; MainShell listens).
   Stream<ReminderAlert> get alerts => _alerts.stream;
+
+  final _chatAlerts = StreamController<ChatReminderAlert>.broadcast();
+
+  /// Fires once per due CHAT reminder (v2.9.0; MainShell listens).
+  Stream<ChatReminderAlert> get chatAlerts => _chatAlerts.stream;
 
   Timer? _timer;
   FlutterLocalNotificationsPlugin? _notifications;
@@ -181,6 +194,62 @@ class ReminderService {
       for (final reminder in reminders) {
         await scheduleAndroidReminder(reminder);
       }
+      // v2.9.0: the one-shot chat reminders too.
+      final chatReminders = store
+          .loadChatReminders(user.uid)
+          .where((r) => !r.fired);
+      for (final reminder in chatReminders) {
+        await scheduleAndroidChatReminder(reminder);
+      }
+    } catch (_) {}
+  }
+
+  // -- Chat reminders (v2.9.0, Reminders tab) ------------------------------
+  // A chat reminder is a ONE-SHOT alarm: it fires once, at the exact
+  // date + time the user typed. Unlike habit reminders it has no
+  // matchDateTimeComponents (no daily repeat) and no "enabled" flag —
+  // a fired reminder is marked fired and never fires again.
+
+  int _chatNotificationId(ChatReminder reminder) =>
+      ('chat:${reminder.id}').hashCode & 0x7fffffff;
+
+  /// Schedules the one-shot exact Android alarm for a chat reminder.
+  /// No-op on web and when the plugin failed to initialise. A
+  /// reminder already in the past is not scheduled.
+  Future<void> scheduleAndroidChatReminder(ChatReminder reminder) async {
+    final plugin = _notifications;
+    if (plugin == null) return;
+    if (reminder.fired) return;
+    final when = tz.TZDateTime.from(reminder.scheduledAt, tz.local);
+    if (when.isBefore(tz.TZDateTime.now(tz.local))) return;
+    try {
+      await plugin.zonedSchedule(
+        id: _chatNotificationId(reminder),
+        title: 'Reminder',
+        body: '${reminder.text} is due.',
+        scheduledDate: when,
+        notificationDetails: const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'lifegame_chat_reminders',
+            'Chat reminders',
+            channelDescription:
+                'Reminders you set by typing in the Reminders tab',
+            importance: Importance.high,
+            priority: Priority.high,
+          ),
+        ),
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        // No matchDateTimeComponents: this fires ONCE, at the date
+        // + time above — not every day.
+      );
+    } catch (_) {
+      // A failed schedule must not break saving the reminder itself.
+    }
+  }
+
+  Future<void> cancelAndroidChatReminder(ChatReminder reminder) async {
+    try {
+      await _notifications?.cancel(id: _chatNotificationId(reminder));
     } catch (_) {}
   }
 
@@ -217,6 +286,31 @@ class ReminderService {
             );
           } catch (_) {}
         }
+      }
+      // v2.9.0: chat reminders — due when their time has passed and
+      // they have not fired yet. Marking them fired here is what
+      // stops the in-app banner repeating; the Android alarm fires
+      // on its own even with the app closed.
+      final chatReminders = store.loadChatReminders(user.uid);
+      var changed = false;
+      for (final reminder in chatReminders) {
+        if (reminder.fired) continue;
+        if (reminder.scheduledAt.isAfter(now)) continue;
+        final fired = reminder.copyWith(fired: true);
+        final index = chatReminders.indexWhere((r) => r.id == reminder.id);
+        chatReminders[index] = fired;
+        changed = true;
+        if (!_chatAlerts.isClosed) {
+          _chatAlerts.add(ChatReminderAlert(reminder: fired));
+        }
+        if (kIsWeb) {
+          try {
+            showWebNotification('Reminder', '${reminder.text} is due.');
+          } catch (_) {}
+        }
+      }
+      if (changed) {
+        await store.saveChatReminders(chatReminders);
       }
     } catch (_) {}
   }

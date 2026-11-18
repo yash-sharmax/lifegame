@@ -135,6 +135,13 @@ const TABLES = [
       intCol('currentStreak', false, 0),
       intCol('longestStreak', false, 0),
       str('lastActiveDate', 10),
+      // v2.9.0 (18 Nov 2026): Public/Private account (who can see my
+      // habits) + global discoverability (show in Leaderboard/Search).
+      // Defaults apply to new rows; the app treats a missing value
+      // (old rows) as 'public' / shown. Re-running this script skips
+      // existing tables, so add them in the console too.
+      str('visibility', 20, false, 'public'),
+      boolCol('discoverable', false, true),
     ],
     indexes: [{ key: 'idx_xp', type: 'key', columns: ['xp'] }],
   },
@@ -233,7 +240,14 @@ const TABLES = [
     id: 'follows',
     name: 'Follows',
     permissions: TABLE_DEFAULT_PERMS,
-    columns: [str('followerUid', 64, true), str('followingUid', 64, true)],
+    columns: [
+      str('followerUid', 64, true),
+      str('followingUid', 64, true),
+      // v2.9.0 (18 Nov 2026): 'pending' (request to a private account)
+      // or 'accepted'. Missing = accepted (old rows). Re-running this
+      // script skips existing tables, so add it in the console too.
+      str('status', 20, false, 'accepted'),
+    ],
     indexes: [
       { key: 'idx_follower', type: 'key', columns: ['followerUid'] },
       { key: 'idx_following', type: 'key', columns: ['followingUid'] },

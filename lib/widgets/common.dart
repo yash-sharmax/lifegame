@@ -67,7 +67,8 @@ class AvatarCircle extends StatelessWidget {
       child: Text(
         initials,
         style: TextStyle(
-          color: AppTheme.ink,
+          // On the gradient circle — always white (see onAccent).
+          color: AppTheme.onAccent,
           fontWeight: FontWeight.w800,
           fontSize: fontSize ?? size * 0.36,
         ),
@@ -151,12 +152,13 @@ class XpBar extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.shield, color: AppTheme.ink, size: 18),
+                    // On the violet badge gradient — always white.
+                    Icon(Icons.shield, color: AppTheme.onAccent, size: 18),
                     const SizedBox(width: 6),
                     Text(
                       'LEVEL $level',
-                      style: const TextStyle(
-                        color: AppTheme.ink,
+                      style: TextStyle(
+                        color: AppTheme.onAccent,
                         fontWeight: FontWeight.w800,
                         fontSize: 15,
                         letterSpacing: 0.5,
@@ -182,7 +184,7 @@ class XpBar extends StatelessWidget {
               CountUp(
                 value: xp,
                 suffix: ' XP',
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppTheme.ink,
                   fontWeight: FontWeight.w800,
                   fontSize: 17,
@@ -213,7 +215,7 @@ class XpBar extends StatelessWidget {
           // "N XP to Level" caption alone (feedback, 14 Nov 2026).
           Text(
             '${xp % xpPerLevel} / $xpPerLevel XP to Level ${level + 1}',
-            style: const TextStyle(
+            style: TextStyle(
               color: AppTheme.inkSoft,
               fontWeight: FontWeight.w600,
               fontSize: 13,
@@ -282,7 +284,7 @@ class ProgressRing extends StatelessWidget {
                 curve: Curves.easeOutCubic,
                 builder: (context, value, _) => Text(
                   '${value.toStringAsFixed(1)}%',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 30,
                     fontWeight: FontWeight.w800,
                     color: AppTheme.ink,
@@ -291,7 +293,7 @@ class ProgressRing extends StatelessWidget {
               ),
               Text(
                 centerLabel ?? 'this month',
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppTheme.inkSoft,
                   fontWeight: FontWeight.w600,
                 ),
@@ -348,7 +350,7 @@ class EmptyState extends StatelessWidget {
             Text(
               subtitle,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: AppTheme.inkSoft, fontSize: 15),
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 15),
             ),
             if (actionLabel != null) ...[
               const SizedBox(height: 20),
@@ -404,11 +406,12 @@ class GradientButton extends StatelessWidget {
             ),
             child: Center(
               child: loading
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 22,
                       height: 22,
                       child: CircularProgressIndicator(
-                        color: AppTheme.ink,
+                        // On the gradient — always white.
+                        color: AppTheme.onAccent,
                         strokeWidth: 2.5,
                       ),
                     )
@@ -416,13 +419,13 @@ class GradientButton extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         if (icon != null) ...[
-                          Icon(icon, color: AppTheme.ink, size: 20),
+                          Icon(icon, color: AppTheme.onAccent, size: 20),
                           const SizedBox(width: 8),
                         ],
                         Text(
                           label,
-                          style: const TextStyle(
-                            color: AppTheme.ink,
+                          style: TextStyle(
+                            color: AppTheme.onAccent,
                             fontWeight: FontWeight.w700,
                             fontSize: 16,
                           ),
@@ -469,7 +472,7 @@ class WarriorSplash extends StatelessWidget {
                   ),
                 ],
               ),
-              child: const Icon(Icons.shield, color: AppTheme.ink, size: 46),
+              child: Icon(Icons.shield, color: AppTheme.onAccent, size: 46),
             )
                 .animate(onPlay: (c) => c.repeat(reverse: true))
                 .scale(
@@ -478,7 +481,7 @@ class WarriorSplash extends StatelessWidget {
                   duration: 900.ms,
                 ),
             const SizedBox(height: 20),
-            const Text(
+            Text(
               'LIFE GAME',
               style: TextStyle(
                 fontSize: 28,
@@ -490,10 +493,10 @@ class WarriorSplash extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               message ?? 'Loading…',
-              style: const TextStyle(color: AppTheme.inkSoft, fontSize: 15),
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 15),
             ),
             const SizedBox(height: 28),
-            const SizedBox(
+            SizedBox(
               width: 160,
               child: LinearProgressIndicator(
                 minHeight: 4,
@@ -621,7 +624,8 @@ class _BattleCheckState extends State<BattleCheck> {
             ],
           ),
           child: widget.done
-              ? Icon(Icons.check, color: AppTheme.ink, size: widget.size * 0.6)
+              // On the violet gradient when done — always white.
+              ? Icon(Icons.check, color: AppTheme.onAccent, size: widget.size * 0.6)
                   .animate(key: ValueKey('check-${widget.done}'))
                   .scale(
                     begin: const Offset(0.4, 0.4),

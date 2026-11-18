@@ -19,6 +19,7 @@ import '../widgets/reminder_dialog.dart';
 import 'auth_screen.dart';
 import 'challenges_screen.dart';
 import 'leaderboard_screen.dart';
+import 'notifications_screen.dart';
 import 'schedule_screen.dart';
 import 'search_screen.dart';
 
@@ -56,6 +57,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Set<String> _doneSubtasksToday = {};
   Profile? _profile;
   bool _loading = true;
+  // Pending follow requests (v2.9.0): the bell badge in the header.
+  // Best-effort — a failure just leaves the badge empty.
+  int _pendingRequests = 0;
   late final ConfettiController _confetti;
   // Strike counter per habit: bumped on every completion so the slash
   // sweep (StrikeOverlay) replays for that tile.
@@ -139,6 +143,11 @@ class _HomeScreenState extends State<HomeScreen> {
       } catch (_) {
         reminders = {};
       }
+      // Pending follow requests (the bell badge) — best-effort.
+      var pendingRequests = _pendingRequests;
+      try {
+        pendingRequests = await SocialRepository().pendingRequestCount();
+      } catch (_) {}
       if (!mounted) return;
       // Apply the done set + profile only when no toggle is in
       // flight: a reload that lands mid-toggle would fetch server
@@ -157,6 +166,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _remindersByKey = reminders;
         _subtasksByHabit = subtasksByHabit;
         _doneSubtasksToday = doneSubtasks;
+        _pendingRequests = pendingRequests;
         _loading = false;
       });
     } on AuthException catch (e) {
@@ -167,7 +177,11 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        showError(context, e);
+        // v2.9.0: a network failure is NOT an error to show — the
+        // repositories already fell back to the local cache, and the
+        // small offline line in the shell says so. Only a real
+        // (non-network) failure gets the error SnackBar.
+        if (!isNetworkError(e)) showError(context, e);
       }
     }
   }
@@ -398,6 +412,15 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Opens Notifications; the badge is re-read when the user comes
+  /// back (accepting / declining a request clears it).
+  Future<void> _openNotifications() async {
+    await Navigator.of(context).push(
+      WarriorPageRoute(builder: (_) => const NotificationsScreen()),
+    );
+    if (mounted) _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = _profile;
@@ -420,8 +443,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   displayName: profile?.displayName ?? 'Player',
                   streak: streak,
                   xp: xp,
+                  pendingRequests: _pendingRequests,
                   onXpTap: _openLeaderboard,
                   onSearchTap: _openSearch,
+                  onBellTap: _openNotifications,
                 ).animate().fadeIn().slideY(begin: -0.1),
               ),
               const SizedBox(height: 12),
@@ -606,7 +631,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             gradient: AppTheme.goldGradient,
                             borderRadius: BorderRadius.circular(20),
                           ),
-                          child: const Row(
+                          child: Row(
                             children: [
                               Icon(
                                 Icons.emoji_events,
@@ -663,21 +688,26 @@ class _HomeScreenState extends State<HomeScreen> {
 ///
 /// The XP pill is the way into the leaderboard now that it is no
 /// longer a bottom tab (18 Nov 2026): tapping the XP number opens the
-/// leaderboard screen.
+/// leaderboard screen. The bell (v2.9.0) opens Notifications; its
+/// badge is the count of pending follow requests.
 class _Header extends StatelessWidget {
   const _Header({
     required this.displayName,
     required this.streak,
     required this.xp,
+    required this.pendingRequests,
     required this.onXpTap,
     required this.onSearchTap,
+    required this.onBellTap,
   });
 
   final String displayName;
   final int streak;
   final int xp;
+  final int pendingRequests;
   final VoidCallback onXpTap;
   final VoidCallback onSearchTap;
+  final VoidCallback onBellTap;
 
   @override
   Widget build(BuildContext context) {
@@ -708,7 +738,7 @@ class _Header extends StatelessWidget {
             children: [
               Text(
                 '${greetingForHour()},',
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppTheme.inkSoft,
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
@@ -726,7 +756,7 @@ class _Header extends StatelessWidget {
               Text(
                 '${months[now.month]} ${now.day}, ${now.year} • '
                 'Day $day of the year • $left days left',
-                style: const TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+                style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
               ),
             ],
           ),
@@ -807,12 +837,64 @@ class _Header extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            IconButton(
-              onPressed: onSearchTap,
-              tooltip: 'Search people',
-              icon: const Icon(Icons.search, color: AppTheme.inkSoft),
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              padding: EdgeInsets.zero,
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Bell — Notifications, with a badge for pending
+                // follow requests.
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    IconButton(
+                      onPressed: onBellTap,
+                      tooltip: 'Notifications',
+                      icon: Icon(
+                        Icons.notifications_outlined,
+                        color: AppTheme.inkSoft,
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 36,
+                        minHeight: 36,
+                      ),
+                      padding: EdgeInsets.zero,
+                    ),
+                    if (pendingRequests > 0)
+                      Positioned(
+                        right: 2,
+                        top: 2,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.flame,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            '$pendingRequests',
+                            style: TextStyle(
+                              // On the coral badge — always white.
+                              color: AppTheme.onAccent,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                IconButton(
+                  onPressed: onSearchTap,
+                  tooltip: 'Search people',
+                  icon: Icon(Icons.search, color: AppTheme.inkSoft),
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                  padding: EdgeInsets.zero,
+                ),
+              ],
             ),
           ],
         ),
@@ -954,7 +1036,7 @@ class _DailyLineCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   line,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppTheme.ink,
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
@@ -1033,7 +1115,7 @@ class _HabitRow extends StatelessWidget {
                       children: [
                         Text(
                           habit.title,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
                             color: AppTheme.ink,
@@ -1043,7 +1125,7 @@ class _HabitRow extends StatelessWidget {
                           done
                               ? 'Done • +$xpPerTask XP'
                               : 'Tap to complete • +$xpPerTask XP',
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppTheme.inkSoft,
                             fontSize: 12,
                           ),
@@ -1055,7 +1137,7 @@ class _HabitRow extends StatelessWidget {
                             padding: const EdgeInsets.only(top: 2),
                             child: Row(
                               children: [
-                                const Icon(
+                                Icon(
                                   Icons.checklist,
                                   color: AppTheme.inkSoft,
                                   size: 13,
@@ -1066,7 +1148,7 @@ class _HabitRow extends StatelessWidget {
                                     subtaskProgress!,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       color: AppTheme.inkSoft,
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,
@@ -1083,7 +1165,7 @@ class _HabitRow extends StatelessWidget {
                             padding: const EdgeInsets.only(top: 2),
                             child: Row(
                               children: [
-                                const Icon(
+                                Icon(
                                   Icons.sticky_note_2_outlined,
                                   color: AppTheme.inkSoft,
                                   size: 13,
@@ -1094,7 +1176,7 @@ class _HabitRow extends StatelessWidget {
                                     habit.notes.split('\n').first,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       color: AppTheme.inkSoft,
                                       fontSize: 12,
                                     ),
@@ -1144,7 +1226,7 @@ class _HabitRow extends StatelessWidget {
                   IconButton(
                     onPressed: onEdit,
                     tooltip: 'Edit or delete habit',
-                    icon: const Icon(
+                    icon: Icon(
                       Icons.more_vert,
                       color: AppTheme.inkSoft,
                       size: 20,
@@ -1222,7 +1304,7 @@ class _QuickLinkCard extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppTheme.inkSoft,
                         fontSize: 12,
                       ),

@@ -68,6 +68,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int _rank = 0;
   int _followers = 0;
   int _following = 0;
+  // Mutual friends (v2.9.0): the Friend Circle row count.
+  int _friends = 0;
   bool _loading = true;
   bool _deletingAccount = false;
   // Active tab: 0 = Habits, 1 = Weekly, 2 = Monthly.
@@ -116,10 +118,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
       var rank = 0;
       var followers = 0;
       var following = 0;
+      var friends = 0;
       if (profile != null) {
         rank = await _profiles.fetchGlobalRank();
         followers = await _social.followersCount(profile.id);
         following = await _social.followingCount(profile.id);
+        // Mutual friends (the Friend Circle) — best-effort.
+        try {
+          friends = (await _social.mutualFriendIds()).length;
+        } catch (_) {}
       }
       if (!mounted) return;
       // The habit list, rank and follow counts are never changed by a
@@ -138,6 +145,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _rank = rank;
         _followers = followers;
         _following = following;
+        _friends = friends;
         _loading = false;
       });
     } on AuthException catch (e) {
@@ -568,6 +576,103 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  /// Opens the Friend Circle (v2.9.0): mutual follows only — people
+  /// who follow you back.
+  void _openFriendCircle() {
+    Navigator.of(context).push(
+      WarriorPageRoute(
+        builder: (_) => FollowListScreen(
+          followers: false,
+          friends: true,
+          socialRepo: _social,
+        ),
+      ),
+    );
+  }
+
+  /// Changes the account visibility (v2.9.0): Public = anyone can see
+  /// my habits on my profile; Private = only mutual friends can.
+  Future<void> _setVisibility(String visibility) async {
+    final profile = _profile;
+    if (profile == null) return;
+    try {
+      await _profiles.updateProfile(
+        displayName: profile.displayName,
+        bio: profile.bio,
+        visibility: visibility,
+      );
+      await _load();
+      if (mounted) {
+        showInfo(
+          context,
+          visibility == 'private'
+              ? 'Your account is now private — only mutual friends can see your habits.'
+              : 'Your account is now public — anyone can see your habits.',
+        );
+      }
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  /// Toggles global discoverability (v2.9.0): off hides me from the
+  /// Leaderboard and Search.
+  Future<void> _setDiscoverable(bool value) async {
+    final profile = _profile;
+    if (profile == null) return;
+    try {
+      await _profiles.updateProfile(
+        displayName: profile.displayName,
+        bio: profile.bio,
+        discoverable: value,
+      );
+      await _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  /// The visibility picker: Public / Private with a one-line
+  /// explanation each (v2.9.0).
+  Future<void> _pickVisibility() async {
+    final profile = _profile;
+    if (profile == null) return;
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Text('Account visibility'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _VisibilityOption(
+              title: 'Public',
+              subtitle: 'Anyone can see your habits',
+              selected: profile.isPublic,
+              onTap: () => Navigator.of(context).pop('public'),
+            ),
+            const SizedBox(height: 10),
+            _VisibilityOption(
+              title: 'Private',
+              subtitle: 'Only mutual friends can see your habits',
+              selected: !profile.isPublic,
+              onTap: () => Navigator.of(context).pop('private'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (chosen != null && chosen != profile.visibility) {
+      await _setVisibility(chosen);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = _profile;
@@ -635,6 +740,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       onFollowersTap: () => _openFollowList(followers: true),
                       onFollowingTap: () => _openFollowList(followers: false),
                     ).animate().fadeIn(delay: 80.ms).slideY(begin: 0.1),
+                    const SizedBox(height: 12),
+                    // Friend Circle (v2.9.0): mutual follows only —
+                    // people who follow you back.
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.people_outline),
+                        title: const Text('Friend Circle'),
+                        subtitle: Text(
+                          _friends == 0
+                              ? 'People who follow you back'
+                              : '$_friends friend${_friends == 1 ? '' : 's'} — people who follow you back',
+                        ),
+                        trailing: Icon(
+                          Icons.chevron_right,
+                          color: AppTheme.inkSoft,
+                        ),
+                        onTap: _openFriendCircle,
+                      ),
+                    ).animate().fadeIn(delay: 90.ms).slideY(begin: 0.1),
                     const SizedBox(height: 20),
                     // Tabs: Habits | Weekly | Monthly.
                     _TabBar(
@@ -714,7 +838,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             subtitle: const Text(
                               'Habits, XP, streaks and levels, in one place',
                             ),
-                            trailing: const Icon(
+                            trailing: Icon(
                               Icons.chevron_right,
                               color: AppTheme.inkSoft,
                             ),
@@ -735,6 +859,60 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     Card(
                       child: Column(
                         children: [
+                          // Theme (v2.9.0): dark / light switch.
+                          SwitchListTile(
+                            secondary: Icon(
+                              ThemeController.instance.isLight
+                                  ? Icons.light_mode
+                                  : Icons.dark_mode,
+                            ),
+                            title: const Text('Light theme'),
+                            subtitle: const Text(
+                              'Switch between the dark and light look',
+                            ),
+                            value: ThemeController.instance.isLight,
+                            onChanged: (value) => ThemeController.instance
+                                .setMode(
+                                  value
+                                      ? Brightness.light
+                                      : Brightness.dark,
+                                ),
+                          ),
+                          const Divider(height: 1),
+                          // Visibility (v2.9.0): Public / Private.
+                          ListTile(
+                            leading: Icon(
+                              profile.isPublic
+                                  ? Icons.public
+                                  : Icons.lock_outline,
+                            ),
+                            title: const Text('Account visibility'),
+                            subtitle: Text(
+                              profile.isPublic
+                                  ? 'Public — anyone can see your habits'
+                                  : 'Private — only mutual friends can see your habits',
+                            ),
+                            trailing: Icon(
+                              Icons.chevron_right,
+                              color: AppTheme.inkSoft,
+                            ),
+                            onTap: _pickVisibility,
+                          ),
+                          const Divider(height: 1),
+                          // Discoverability (v2.9.0): hide from
+                          // Leaderboard + Search.
+                          SwitchListTile(
+                            secondary: const Icon(Icons.search),
+                            title: const Text(
+                              'Show me in Leaderboard & Search',
+                            ),
+                            subtitle: const Text(
+                              'Off hides you from discovery — people who already follow you can still see your profile',
+                            ),
+                            value: profile.discoverable,
+                            onChanged: _setDiscoverable,
+                          ),
+                          const Divider(height: 1),
                           ListTile(
                             leading: const Icon(Icons.info_outline),
                             title: const Text('About Life Game'),
@@ -881,7 +1059,7 @@ class _FeedbackSectionState extends State<_FeedbackSection> {
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 2),
-        const Text(
+        Text(
           'Tell us what works, what does not, and what you want next.',
           style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
         ),
@@ -899,7 +1077,7 @@ class _FeedbackSectionState extends State<_FeedbackSection> {
           child: FilledButton.icon(
             onPressed: _sending ? null : _send,
             icon: _sending
-                ? const SizedBox(
+                ? SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
@@ -960,7 +1138,7 @@ class _FeedbackSectionState extends State<_FeedbackSection> {
                     const SizedBox(height: 6),
                     Text(
                       _dateLabel(entry.createdAt),
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppTheme.inkSoft,
                         fontSize: 12,
                       ),
@@ -1018,7 +1196,7 @@ class _IdentityCard extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       profile.bio,
-                      style: const TextStyle(color: AppTheme.inkSoft),
+                      style: TextStyle(color: AppTheme.inkSoft),
                     ),
                   ],
                   const SizedBox(height: 10),
@@ -1034,7 +1212,7 @@ class _IdentityCard extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(
+                        Icon(
                           Icons.shield,
                           color: AppTheme.ink,
                           size: 15,
@@ -1042,7 +1220,7 @@ class _IdentityCard extends StatelessWidget {
                         const SizedBox(width: 6),
                         Text(
                           'Level $level • ${rankNameForLevel(level)}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppTheme.ink,
                             fontWeight: FontWeight.w800,
                             fontSize: 13,
@@ -1138,7 +1316,7 @@ class _StatPill extends StatelessWidget {
           const SizedBox(height: 2),
           Text(
             label,
-            style: const TextStyle(color: AppTheme.inkSoft, fontSize: 11),
+            style: TextStyle(color: AppTheme.inkSoft, fontSize: 11),
             textAlign: TextAlign.center,
           ),
         ],
@@ -1204,7 +1382,8 @@ class _TabBar extends StatelessWidget {
                   child: Text(
                     '${labels[i]} (${counts[i]})',
                     style: TextStyle(
-                      color: active ? AppTheme.ink : AppTheme.inkSoft,
+                      // Active pill is violet — always white on it.
+                      color: active ? AppTheme.onAccent : AppTheme.inkSoft,
                       fontWeight: FontWeight.w800,
                       fontSize: 14,
                     ),
@@ -1254,7 +1433,7 @@ class _HabitsTab extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         if (habits.isEmpty)
-          const Card(
+          Card(
             child: Padding(
               padding: EdgeInsets.all(18),
               child: Text(
@@ -1284,7 +1463,7 @@ class _HabitRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final gradient =
-        AppTheme.habitGradients[habit.color % AppTheme.habitGradients.length];
+        AppTheme.gradientForHabitColor(habit.color);
     return Material(
       color: AppTheme.card,
       borderRadius: BorderRadius.circular(16),
@@ -1306,7 +1485,7 @@ class _HabitRow extends StatelessWidget {
                   gradient: gradient,
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.check_circle_outline,
                   color: AppTheme.ink,
                   size: 18,
@@ -1324,7 +1503,7 @@ class _HabitRow extends StatelessWidget {
               ),
               // Notes indicator: a habit with notes shows a note icon.
               if (habit.notes.isNotEmpty)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.only(right: 4),
                   child: Icon(
                     Icons.sticky_note_2_outlined,
@@ -1332,7 +1511,7 @@ class _HabitRow extends StatelessWidget {
                     size: 18,
                   ),
                 ),
-              const Icon(Icons.chevron_right, color: AppTheme.inkSoft),
+              Icon(Icons.chevron_right, color: AppTheme.inkSoft),
             ],
           ),
         ),
@@ -1383,7 +1562,7 @@ class _TaskSection extends StatelessWidget {
             Expanded(
               child: Text(
                 subtitle,
-                style: const TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+                style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
                 overflow: TextOverflow.ellipsis,
               ),
             ),
@@ -1396,7 +1575,7 @@ class _TaskSection extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         if (items.isEmpty)
-          const Card(
+          Card(
             child: Padding(
               padding: EdgeInsets.all(18),
               child: Text(
@@ -1421,7 +1600,7 @@ class _TaskSection extends StatelessWidget {
                         : null,
                     title: Text(
                       items[i].title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w700,
                         color: AppTheme.ink,
                       ),
@@ -1444,24 +1623,81 @@ class _TaskSection extends StatelessWidget {
 }
 
 /// Public profile view — what anyone sees when they tap a user on the
-/// leaderboard or in search. Habits are private (owner-only), so this
-/// shows the public profile: identity, bio and stats. Restyled with
-/// the same horizontal identity card as the own profile (18 Nov 2026).
-class UserProfileScreen extends StatelessWidget {
+/// leaderboard or in search. Restyled with the same horizontal
+/// identity card as the own profile (18 Nov 2026). v2.9.0: the habit
+/// list is gated by the account visibility — Public shows the habits,
+/// Private shows them only to mutual friends, otherwise only the
+/// basic info (name, level, rank) plus "This account is private".
+/// Your own profile always shows your own habits.
+class UserProfileScreen extends StatefulWidget {
   const UserProfileScreen({
     super.key,
     required this.profile,
     this.socialRepo,
+    this.profileRepo,
     this.myId,
   });
 
   final Profile profile;
   final SocialRepository? socialRepo;
+  final ProfileRepository? profileRepo;
   final String? myId;
 
   @override
+  State<UserProfileScreen> createState() => _UserProfileScreenState();
+}
+
+class _UserProfileScreenState extends State<UserProfileScreen> {
+  SocialRepository get _social => widget.socialRepo ?? SocialRepository();
+  ProfileRepository get _profiles =>
+      widget.profileRepo ?? ProfileRepository();
+
+  List<Habit> _habits = [];
+  bool _mutual = false;
+  bool _loadingHabits = true;
+
+  bool get _isMe {
+    final myId = widget.myId ?? AuthRepository.cachedUser?.uid;
+    return myId != null && myId == widget.profile.id;
+  }
+
+  bool get _canSeeHabits => _isMe || widget.profile.isPublic || _mutual;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    // Mutual status first — it decides whether the habits are
+    // visible on a private account.
+    var mutual = false;
+    try {
+      mutual = await _social.isMutual(widget.profile.id);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _mutual = mutual);
+    if (!_canSeeHabits) {
+      setState(() => _loadingHabits = false);
+      return;
+    }
+    try {
+      final habits = await _profiles.listHabitsForUser(widget.profile.id);
+      if (mounted) {
+        setState(() {
+          _habits = habits;
+          _loadingHabits = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadingHabits = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final isMe = myId != null && myId == profile.id;
+    final profile = widget.profile;
     final level = levelForXp(profile.xp);
     return Scaffold(
       appBar: AppBar(title: Text('@${profile.username}')),
@@ -1518,11 +1754,73 @@ class UserProfileScreen extends StatelessWidget {
               ),
             ],
           ),
-          if (!isMe) ...[
+          if (!_canSeeHabits) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppTheme.card,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppTheme.cardBorder),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.lock_outline, color: AppTheme.inkSoft),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'This account is private',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else if (_loadingHabits) ...[
+            const SizedBox(height: 16),
+            const SkeletonBox(height: 64, borderRadius: 16),
+          ] else if (_habits.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            const Text(
+              'Habits',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 10),
+            for (final habit in _habits)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    gradient: AppTheme.gradientForHabitColor(habit.color),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          habit.title,
+                          style: TextStyle(
+                            // On the habit gradient — always white.
+                            color: AppTheme.onAccent,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+          if (!_isMe) ...[
             const SizedBox(height: 16),
             _FollowButton(
               profile: profile,
-              socialRepo: socialRepo ?? SocialRepository(),
+              socialRepo: _social,
             ),
           ],
         ],
@@ -1554,8 +1852,10 @@ class _StatBox extends StatelessWidget {
         children: [
           Text(
             value,
-            style: const TextStyle(
-              color: AppTheme.ink,
+            style: TextStyle(
+              // On the gradient box — always white (the label below
+              // is already white).
+              color: AppTheme.onAccent,
               fontWeight: FontWeight.w800,
               fontSize: 17,
             ),
@@ -1574,6 +1874,72 @@ class _StatBox extends StatelessWidget {
   }
 }
 
+/// One option in the visibility picker: a title, a one-line
+/// explanation, and a checkmark when selected (v2.9.0).
+class _VisibilityOption extends StatelessWidget {
+  const _VisibilityOption({
+    required this.title,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected
+          ? AppTheme.ember.withValues(alpha: 0.12)
+          : AppTheme.card,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected ? AppTheme.ember : AppTheme.cardBorder,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: AppTheme.inkSoft,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (selected)
+                const Icon(Icons.check_circle, color: AppTheme.ember),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _FollowButton extends StatefulWidget {
   const _FollowButton({required this.profile, required this.socialRepo});
 
@@ -1585,7 +1951,9 @@ class _FollowButton extends StatefulWidget {
 }
 
 class _FollowButtonState extends State<_FollowButton> {
-  bool? _following;
+  /// 'none' | 'pending' | 'accepted' (v2.9.0): a pending request shows
+  /// as "Requested", not "Following".
+  String _status = 'none';
 
   @override
   void initState() {
@@ -1595,22 +1963,32 @@ class _FollowButtonState extends State<_FollowButton> {
 
   Future<void> _check() async {
     try {
-      final following = await widget.socialRepo.isFollowing(widget.profile.id);
-      if (mounted) setState(() => _following = following);
+      final status = await widget.socialRepo.followStatus(
+        widget.profile.id,
+      );
+      if (mounted) setState(() => _status = status);
     } catch (_) {
-      if (mounted) setState(() => _following = false);
+      if (mounted) setState(() => _status = 'none');
     }
   }
 
   Future<void> _toggle() async {
-    final following = _following ?? false;
+    final status = _status;
     try {
-      if (following) {
-        await widget.socialRepo.unfollow(widget.profile.id);
-      } else {
+      if (status == 'none') {
         await widget.socialRepo.follow(widget.profile.id);
+      } else {
+        // Unfollow, or cancel a pending request.
+        await widget.socialRepo.unfollow(widget.profile.id);
       }
-      if (mounted) setState(() => _following = !following);
+      if (mounted) {
+        setState(
+          () => _status = status == 'none' ? 'pending' : 'none',
+        );
+        // Re-check: a follow on a public account lands as 'accepted',
+        // on a private one as 'pending'.
+        if (status == 'none') await _check();
+      }
     } catch (e) {
       if (mounted) showError(context, e);
     }
@@ -1618,12 +1996,21 @@ class _FollowButtonState extends State<_FollowButton> {
 
   @override
   Widget build(BuildContext context) {
-    final following = _following ?? false;
+    final isRequested = _status == 'pending';
+    final isFollowing = _status == 'accepted';
     return GradientButton(
-      label: following ? 'Following' : 'Follow @${widget.profile.username}',
-      icon: following ? Icons.check : Icons.person_add_outlined,
+      label: isFollowing
+          ? 'Following'
+          : isRequested
+          ? 'Requested'
+          : 'Follow @${widget.profile.username}',
+      icon: isFollowing
+          ? Icons.check
+          : isRequested
+          ? Icons.hourglass_top
+          : Icons.person_add_outlined,
       onPressed: _toggle,
-      gradient: following
+      gradient: isFollowing || isRequested
           ? const LinearGradient(colors: [Color(0xFF9CA3AF), Color(0xFF6B7280)])
           : AppTheme.heroGradient,
     );
@@ -1633,16 +2020,21 @@ class _FollowButtonState extends State<_FollowButton> {
 /// Followers / Following list (18 Nov 2026): the numbers on the
 /// Profile stats strip are tappable and open the actual people.
 /// Each row shows avatar, name, username and level/rank; tapping a
-/// row opens that person's profile.
+/// row opens that person's profile. v2.9.0: a third mode, the Friend
+/// Circle ([friends] = true) — mutual follows only.
 class FollowListScreen extends StatefulWidget {
   const FollowListScreen({
     super.key,
     required this.followers,
+    this.friends = false,
     this.socialRepo,
   });
 
   /// True = people following me; false = people I follow.
   final bool followers;
+
+  /// True = the Friend Circle (mutual follows only).
+  final bool friends;
   final SocialRepository? socialRepo;
 
   @override
@@ -1664,9 +2056,9 @@ class _FollowListScreenState extends State<FollowListScreen> {
 
   Future<void> _load() async {
     try {
-      final people = await _social.followProfiles(
-        followers: widget.followers,
-      );
+      final people = widget.friends
+          ? await _social.mutualFriends()
+          : await _social.followProfiles(followers: widget.followers);
       if (mounted) setState(() => _people = people);
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -1677,10 +2069,13 @@ class _FollowListScreenState extends State<FollowListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final title = widget.friends
+        ? 'Friend Circle'
+        : widget.followers
+        ? 'Followers'
+        : 'Following';
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.followers ? 'Followers' : 'Following'),
-      ),
+      appBar: AppBar(title: Text(title)),
       body: ResponsiveCenter(
         maxWidth: 720,
         child: _loading
@@ -1701,19 +2096,25 @@ class _FollowListScreenState extends State<FollowListScreen> {
                   child: Text(
                     'Could not load the list. ${_error!}',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: AppTheme.inkSoft),
+                    style: TextStyle(color: AppTheme.inkSoft),
                   ),
                 ),
               )
             : _people.isEmpty
             ? EmptyState(
-                icon: widget.followers
+                icon: widget.friends
+                    ? Icons.people_outline
+                    : widget.followers
                     ? Icons.group_outlined
                     : Icons.person_add_outlined,
-                title: widget.followers
+                title: widget.friends
+                    ? 'No friends yet'
+                    : widget.followers
                     ? 'No followers yet'
                     : 'Not following anyone yet',
-                subtitle: widget.followers
+                subtitle: widget.friends
+                    ? 'Friends are people who follow you back. When someone you follow follows you back, they will show up here.'
+                    : widget.followers
                     ? 'When someone follows you, they will show up here.'
                     : 'Follow people from Search or the leaderboard and they will show up here.',
               )
@@ -1770,7 +2171,7 @@ class _FollowListScreenState extends State<FollowListScreen> {
                                       ),
                                       Text(
                                         '@${person.username}',
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           color: AppTheme.inkSoft,
                                           fontSize: 13,
                                         ),
@@ -1799,7 +2200,7 @@ class _FollowListScreenState extends State<FollowListScreen> {
                                   ),
                                 ),
                                 const SizedBox(width: 4),
-                                const Icon(
+                                Icon(
                                   Icons.chevron_right,
                                   color: AppTheme.inkSoft,
                                   size: 20,

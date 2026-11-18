@@ -24,6 +24,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:appwrite/appwrite.dart';
 import 'package:appwrite/enums.dart';
@@ -40,6 +41,31 @@ import '../logic/xp.dart';
 import 'appwrite_service.dart';
 import 'local_store.dart';
 import 'models.dart';
+
+/// True when [e] is a network failure (no connectivity, DNS, timeout)
+/// rather than a real server error. Network failures are the ones the
+/// app must survive silently (offline mode); other errors are real and
+/// should still surface. Lives here so both the repositories and
+/// [SyncService] can use it without a circular import.
+bool isNetworkError(Object e) {
+  if (e is AppwriteException) {
+    // The Appwrite SDK reports transport failures as code 0.
+    if (e.code == 0) return true;
+    final message = (e.message ?? '').toLowerCase();
+    return message.contains('failed host lookup') ||
+        message.contains('network is unreachable') ||
+        message.contains('connection') ||
+        message.contains('socket') ||
+        message.contains('timed out') ||
+        message.contains('timeout');
+  }
+  if (e is SocketException) return true;
+  if (e is TimeoutException) return true;
+  final message = e.toString().toLowerCase();
+  return message.contains('failed host lookup') ||
+      message.contains('network is unreachable') ||
+      message.contains('socketexception');
+}
 
 // ---------------------------------------------------------------------------
 // Small auth types (so screens never import appwrite directly)
@@ -332,6 +358,14 @@ class AuthRepository {
   /// in immediately after email+password signup; email verification is
   /// not enforced).
   ///
+  /// Creates the auth account, signs in, and creates the profile row
+  /// + the username reservation. [visibility] is the account choice
+  /// from the signup screen ('public' or 'private', v2.9.0); it is
+  /// stored on the profile row. If the `visibility` / `discoverable`
+  /// attributes are not on the live table yet, the profile is created
+  /// without them (the choice is kept in the local cache and pushed
+  /// by the next profile update) — signup never fails for that.
+  ///
   /// If the username document is taken in a race, the auth account
   /// already exists — the user just lands on the one-time username
   /// setup screen on next login (see [ProfileRepository.createProfile]).
@@ -340,6 +374,7 @@ class AuthRepository {
     required String password,
     required String username,
     required String displayName,
+    String visibility = 'public',
   }) async {
     final auth = _a;
     final db = _d;
@@ -354,14 +389,13 @@ class AuthRepository {
       );
       await auth.createEmailPasswordSession(email: email, password: password);
       _setUser(AppAuthUser.fromAppwrite(user));
-      final profile = Profile(id: user.$id, username: lower, displayName: name);
-      await db.createRow(
-        databaseId: _dbId,
-        tableId: 'users',
-        rowId: user.$id,
-        data: profile.toMap(),
-        permissions: _profilePerms(user.$id),
+      final profile = Profile(
+        id: user.$id,
+        username: lower,
+        displayName: name,
+        visibility: visibility,
       );
+      await _createProfileRow(db, user.$id, profile);
       try {
         await db.createRow(
           databaseId: _dbId,
@@ -382,6 +416,46 @@ class AuthRepository {
     } catch (e) {
       throw _wrapAuthError(e);
     }
+  }
+
+  /// Creates the profile row, retrying without the v2.9.0 attributes
+  /// (`visibility`, `discoverable`) when the live table does not have
+  /// them yet (AppwriteException 400). The choice is kept in the
+  /// local profile cache either way.
+  static Future<void> _createProfileRow(
+    TablesDB db,
+    String userId,
+    Profile profile,
+  ) async {
+    try {
+      await db.createRow(
+        databaseId: _dbId,
+        tableId: 'users',
+        rowId: userId,
+        data: profile.toMap(),
+        permissions: _profilePerms(userId),
+      );
+    } on AppwriteException catch (e) {
+      if (e.code == 400) {
+        final data = Map<String, dynamic>.from(profile.toMap())
+          ..remove('visibility')
+          ..remove('discoverable');
+        await db.createRow(
+          databaseId: _dbId,
+          tableId: 'users',
+          rowId: userId,
+          data: data,
+          permissions: _profilePerms(userId),
+        );
+      } else {
+        rethrow;
+      }
+    }
+    // Keep the choice locally even when the server row lacks it.
+    try {
+      final store = await LocalStore.getInstance();
+      await store.saveCachedProfile(profile);
+    } catch (_) {}
   }
 
   Future<void> signInWithGoogle() async {
@@ -534,6 +608,11 @@ class ProfileRepository {
     return fetchProfile(userId);
   }
 
+  /// Loads one profile. v2.9.0 offline-first: my own profile falls
+  /// back to the on-device cache when the network fails (so the app
+  /// still opens with my name, XP and streak); other users' profiles
+  /// return null offline (the Leaderboard just shows fewer entries).
+  /// A successful fetch of my own profile refreshes the cache.
   Future<Profile?> fetchProfile(String userId) async {
     try {
       final doc = await _d.getRow(
@@ -541,10 +620,51 @@ class ProfileRepository {
         tableId: 'users',
         rowId: userId,
       );
-      return Profile.fromJson(_docJson(doc));
+      final data = _docJson(doc);
+      var profile = Profile.fromJson(data);
+      final me = AuthRepository.cachedUser;
+      if (me != null && userId == me.uid) {
+        // If the live row was written before the v2.9.0 attributes
+        // existed, the server cannot tell us the choice — keep the
+        // locally cached one instead of defaulting to public.
+        if (!data.containsKey('visibility') ||
+            !data.containsKey('discoverable')) {
+          try {
+            final store = await LocalStore.getInstance();
+            final cached = store.loadCachedProfile(userId);
+            if (cached != null) {
+              profile = profile.copyWith(
+                visibility: data.containsKey('visibility')
+                    ? null
+                    : cached.visibility,
+                discoverable: data.containsKey('discoverable')
+                    ? null
+                    : cached.discoverable,
+              );
+            }
+          } catch (_) {}
+        }
+        try {
+          final store = await LocalStore.getInstance();
+          await store.saveCachedProfile(profile);
+        } catch (_) {}
+      }
+      return profile;
     } on AppwriteException catch (e) {
       if (e.code == 404) return null;
+      if (isNetworkError(e)) return _cachedProfileOrNull(userId);
       rethrow;
+    } on AppwriteNotConfigured {
+      return _cachedProfileOrNull(userId);
+    }
+  }
+
+  Future<Profile?> _cachedProfileOrNull(String userId) async {
+    try {
+      final store = await LocalStore.getInstance();
+      return store.loadCachedProfile(userId);
+    } catch (_) {
+      return null;
     }
   }
 
@@ -565,19 +685,19 @@ class ProfileRepository {
   Future<Profile> createProfile({
     required String username,
     required String displayName,
+    String visibility = 'public',
   }) async {
     final userId = _requireUserId();
     final lower = username.toLowerCase();
     final name = displayName.isEmpty ? lower : displayName;
-    final profile = Profile(id: userId, username: lower, displayName: name);
+    final profile = Profile(
+      id: userId,
+      username: lower,
+      displayName: name,
+      visibility: visibility,
+    );
     try {
-      await _d.createRow(
-        databaseId: _dbId,
-        tableId: 'users',
-        rowId: userId,
-        data: profile.toMap(),
-        permissions: _profilePerms(userId),
-      );
+      await AuthRepository._createProfileRow(_d, userId, profile);
     } on AppwriteException catch (e) {
       if (e.code == 409) {
         // Profile already exists (e.g. double-submit): return it.
@@ -605,20 +725,140 @@ class ProfileRepository {
     return profile;
   }
 
+  /// Updates my display name / bio and, optionally, the v2.9.0
+  /// account settings: [visibility] ('public' / 'private') and
+  /// [discoverable] (whether I appear in the Leaderboard + Search).
+  /// Offline: the change applies to the local cache immediately and
+  /// is queued in the outbox for the background sync — the caller
+  /// still gets the updated profile back, never an error.
   Future<Profile> updateProfile({
     required String displayName,
     required String bio,
+    String? visibility,
+    bool? discoverable,
   }) async {
     final userId = _requireUserId();
-    await _d.updateRow(
-      databaseId: _dbId,
-      tableId: 'users',
-      rowId: userId,
-      data: {'displayName': displayName, 'bio': bio},
-    );
+    final data = <String, dynamic>{
+      'displayName': displayName,
+      'bio': bio,
+    };
+    if (visibility != null) data['visibility'] = visibility;
+    if (discoverable != null) data['discoverable'] = discoverable;
+    try {
+      await _d.updateRow(
+        databaseId: _dbId,
+        tableId: 'users',
+        rowId: userId,
+        data: data,
+      );
+    } on AppwriteException catch (e) {
+      if (e.code == 400 &&
+          (visibility != null || discoverable != null)) {
+        // The v2.9.0 attributes are not on the live table yet — retry
+        // with just the name/bio so the edit still lands.
+        await _d.updateRow(
+          databaseId: _dbId,
+          tableId: 'users',
+          rowId: userId,
+          data: {'displayName': displayName, 'bio': bio},
+        );
+      } else if (isNetworkError(e)) {
+        // Offline: cache + queue, return the updated profile.
+        final cached = await _cachedProfileOrNull(userId);
+        final updated =
+            (cached ??
+                    Profile(
+                      id: userId,
+                      username: '',
+                      displayName: displayName,
+                      bio: bio,
+                    ))
+                .copyWith(
+                  displayName: displayName,
+                  bio: bio,
+                  visibility: visibility,
+                  discoverable: discoverable,
+                );
+        try {
+          final store = await LocalStore.getInstance();
+          await store.saveCachedProfile(updated);
+          await store.enqueueOutboxOp({
+            'kind': 'profile_update',
+            'ownerUid': userId,
+            'data': data,
+          });
+        } catch (_) {}
+        _notifyChanged();
+        return updated;
+      } else {
+        rethrow;
+      }
+    }
     final updated = await fetchProfile(userId);
     if (updated == null) throw const AuthException('Profile not found.');
+    // When the 400 fallback above dropped the settings, keep them in
+    // the local cache so the UI still shows the choice.
+    if (visibility != null || discoverable != null) {
+      final withSettings = updated.copyWith(
+        visibility: visibility,
+        discoverable: discoverable,
+      );
+      try {
+        final store = await LocalStore.getInstance();
+        await store.saveCachedProfile(withSettings);
+      } catch (_) {}
+      return withSettings;
+    }
     return updated;
+  }
+
+  /// Replays a queued profile update (server-only, no local writes —
+  /// used by [SyncService]). A 400 means the v2.9.0 attributes are
+  /// not on the live table yet; the name/bio part is still written.
+  Future<void> replayProfileUpdate(Map<String, dynamic> data) async {
+    final userId = _requireUserId();
+    try {
+      await _d.updateRow(
+        databaseId: _dbId,
+        tableId: 'users',
+        rowId: userId,
+        data: data,
+      );
+    } on AppwriteException catch (e) {
+      if (e.code == 400) {
+        final core = Map<String, dynamic>.from(data)
+          ..remove('visibility')
+          ..remove('discoverable');
+        if (core.isNotEmpty) {
+          await _d.updateRow(
+            databaseId: _dbId,
+            tableId: 'users',
+            rowId: userId,
+            data: core,
+          );
+        }
+      } else {
+        rethrow;
+      }
+    }
+  }
+
+  /// Another user's habits (v2.9.0): the habit list on a visited
+  /// profile. Public accounts show them; private accounts only to
+  /// mutual friends (the caller gates that — see
+  /// [SocialRepository.isMutual]).
+  Future<List<Habit>> listHabitsForUser(String userId) async {
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: 'habits',
+      queries: [
+        Query.equal('ownerUid', userId),
+        Query.equal('archived', false),
+        Query.orderAsc(r'$createdAt'),
+        Query.limit(100),
+      ],
+    );
+    return list.rows.map((doc) => Habit.fromJson(_docJson(doc))).toList();
   }
 
   Future<void> applyXpAndStreak({
@@ -758,8 +998,13 @@ class ProfileRepository {
       tableId: 'users',
       queries: [Query.orderDesc('xp'), Query.limit(limit)],
     );
+    // v2.9.0: hidden accounts (discoverable == false) never appear in
+    // discovery. Filtered client-side, NOT with Query.equal — rows
+    // written before the attribute existed have null, which means
+    // "shown" and would be excluded by a server-side equality filter.
     final profiles = list.rows
         .map((doc) => Profile.fromJson(_docJson(doc)))
+        .where((p) => p.discoverable)
         .toList();
     return [
       for (var i = 0; i < profiles.length; i++)
@@ -812,7 +1057,9 @@ class ProfileRepository {
       final ownerUid = doc.data['ownerUid'] as String?;
       if (ownerUid == null) continue;
       final profile = await fetchProfile(ownerUid);
-      if (profile != null) profiles.add(profile);
+      // v2.9.0: hidden accounts never appear in Search (same
+      // client-side filter as the Leaderboard — null = shown).
+      if (profile != null && profile.discoverable) profiles.add(profile);
     }
     return profiles;
   }
@@ -821,6 +1068,46 @@ class ProfileRepository {
 // ---------------------------------------------------------------------------
 // Habits + logs + XP orchestration
 // ---------------------------------------------------------------------------
+
+/// Recomputes XP + streak from the LOCAL caches (habit logs +
+/// weekly/monthly tasks) and writes them into the cached profile.
+/// The offline twin of [ProfileRepository._recomputeDerivedXpNow]
+/// (same rule: 2 XP per completed habit log / done task, no bonus, no
+/// penalty). Shared by [HabitRepository] and [TaskRepository] — the
+/// local caches are the source of truth while offline, so every local
+/// log/task change runs this.
+Future<void> recomputeLocalDerivedXpForUser() async {
+  try {
+    final user = AuthRepository.cachedUser;
+    if (user == null) return;
+    final userId = user.uid;
+    final store = await LocalStore.getInstance();
+    final logs = store.loadCachedHabitLogs(userId);
+    final completed = logs.where((l) => l.completed).length;
+    final tasks = store.loadCachedTasks(userId);
+    final weeklyDone = tasks.weekly.where((t) => t.done).length;
+    final monthlyDone = tasks.monthly.where((t) => t.done).length;
+    final xp = xpPerTask * (completed + weeklyDone + monthlyDone);
+    final dates = logs.where((l) => l.completed).map((l) => l.logDate).toSet();
+    final streak = computeStreak(dates);
+    final lastActive = dates.isEmpty
+        ? null
+        : dates.reduce((a, b) => a.compareTo(b) > 0 ? a : b);
+    final cached = store.loadCachedProfile(userId);
+    if (cached == null) return;
+    final longest = streak > cached.longestStreak
+        ? streak
+        : cached.longestStreak;
+    await store.saveCachedProfile(
+      cached.copyWith(
+        xp: xp,
+        currentStreak: streak,
+        longestStreak: longest,
+        lastActiveDate: lastActive,
+      ),
+    );
+  } catch (_) {}
+}
 
 class ToggleResult {
   const ToggleResult({required this.xpDelta, required this.allDone});
@@ -858,32 +1145,97 @@ class HabitRepository {
     return user.uid;
   }
 
+  // -- v2.9.0 offline-first helpers ----------------------------------------
+
+  /// The on-device store, or null when SharedPreferences is
+  /// unavailable (e.g. a widget test). Every local write is
+  /// best-effort: it must never break the server path.
+  Future<LocalStore?> _localStore() async {
+    try {
+      return await LocalStore.getInstance();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Merges server-fetched logs into the on-device cache (upsert by
+  /// id) so later offline reads see them.
+  Future<void> _mergeCachedLogs(List<HabitLog> logs) async {
+    if (logs.isEmpty) return;
+    final store = await _localStore();
+    if (store == null) return;
+    try {
+      final userId = _requireUserId();
+      final cached = store.loadCachedHabitLogs(userId);
+      final byId = {for (final l in cached) l.id: l};
+      for (final log in logs) {
+        byId[log.id] = log;
+      }
+      await store.saveCachedHabitLogs(userId, byId.values.toList());
+    } catch (_) {}
+  }
+
+  /// Recomputes XP + streak from the LOCAL caches (habit logs +
+  /// weekly/monthly tasks) and writes them into the cached profile —
+  /// the offline twin of [ProfileRepository._recomputeDerivedXpNow].
+  /// The rule is identical (2 XP per completed habit log / done task,
+  /// no bonus, no penalty); the streak is recomputed from the local
+  /// active dates. Runs after every local log/task change so a reload
+  /// offline shows the right numbers.
+  Future<void> _recomputeLocalDerivedXp() async {
+    await recomputeLocalDerivedXpForUser();
+  }
+
+  /// Queues one pending server write in the outbox (best-effort).
+  Future<void> _enqueueOp(Map<String, dynamic> op) async {
+    try {
+      final store = await LocalStore.getInstance();
+      await store.enqueueOutboxOp(op);
+    } catch (_) {}
+  }
+
   Future<List<Habit>> listMyHabits() async {
     final userId = _requireUserId();
-    final list = await _d.listRows(
-      databaseId: _dbId,
-      tableId: 'habits',
-      queries: [
-        Query.equal('ownerUid', userId),
-        Query.equal('archived', false),
-        Query.orderAsc(r'$createdAt'),
-      ],
-    );
-    final habits = list.rows
-        .map((doc) => Habit.fromJson(_docJson(doc)))
-        .toList();
-    // Overlay on-device notes (the fallback while the live `habits`
-    // table has no `notes` attribute — see updateHabit): a locally
-    // stored note wins, including an empty one (the user cleared it).
-    final localNotes = await _localNotesMap(userId);
-    if (localNotes.isEmpty) return habits;
-    return habits
-        .map(
-          (h) => localNotes.containsKey(h.id)
-              ? h.copyWith(notes: localNotes[h.id]!)
-              : h,
-        )
-        .toList();
+    try {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'habits',
+        queries: [
+          Query.equal('ownerUid', userId),
+          Query.equal('archived', false),
+          Query.orderAsc(r'$createdAt'),
+        ],
+      );
+      final habits = list.rows
+          .map((doc) => Habit.fromJson(_docJson(doc)))
+          .toList();
+      // Overlay on-device notes (the fallback while the live `habits`
+      // table has no `notes` attribute — see updateHabit): a locally
+      // stored note wins, including an empty one (the user cleared it).
+      final localNotes = await _localNotesMap(userId);
+      final withNotes = localNotes.isEmpty
+          ? habits
+          : habits
+                .map(
+                  (h) => localNotes.containsKey(h.id)
+                      ? h.copyWith(notes: localNotes[h.id]!)
+                      : h,
+                )
+                .toList();
+      // Refresh the offline cache (best-effort).
+      try {
+        final store = await LocalStore.getInstance();
+        await store.saveCachedHabits(userId, withNotes);
+      } catch (_) {}
+      return withNotes;
+    } on Object catch (e) {
+      // v2.9.0: no network → the cached habits, never a blank screen.
+      if (isNetworkError(e)) {
+        final store = await _localStore();
+        return store?.loadCachedHabits(userId) ?? <Habit>[];
+      }
+      rethrow;
+    }
   }
 
   /// On-device notes for [userId], keyed by habit id. Best-effort:
@@ -921,22 +1273,60 @@ class HabitRepository {
     }
   }
 
+  /// Adds a habit. v2.9.0 offline-first: the id is generated locally
+  /// (so the same id is used by the later server create — idempotent)
+  /// and the habit is in the local cache immediately. The server
+  /// create runs best-effort; offline it is queued in the outbox and
+  /// this still returns the habit (never an error).
   Future<Habit> addHabit({required String title, required int color}) async {
     final userId = _requireUserId();
-    final doc = await _d.createRow(
-      databaseId: _dbId,
-      tableId: 'habits',
-      rowId: ID.unique(),
-      data: {
-        'ownerUid': userId,
-        'title': title,
-        'color': color,
-        'archived': false,
-      },
-      permissions: _ownerPerms(userId),
-    );
+    final id = ID.unique();
+    final habit = Habit(id: id, userId: userId, title: title, color: color);
+    final store = await _localStore();
+    try {
+      await store?.upsertCachedHabit(habit);
+    } catch (_) {}
+    await _enqueueOp({
+      'kind': 'habit_add',
+      'ownerUid': userId,
+      'id': id,
+      'title': title,
+      'color': color,
+    });
+    try {
+      await _d.createRow(
+        databaseId: _dbId,
+        tableId: 'habits',
+        rowId: id,
+        data: {
+          'ownerUid': userId,
+          'title': title,
+          'color': color,
+          'archived': false,
+        },
+        permissions: _ownerPerms(userId),
+      );
+      // Landed on the server — the outbox op is no longer needed.
+      try {
+        final ops = store?.loadOutbox() ?? <Map<String, dynamic>>[];
+        ops.removeWhere((o) => o['kind'] == 'habit_add' && o['id'] == id);
+        await store?.saveOutbox(ops);
+      } catch (_) {}
+    } on Object catch (e) {
+      if (!isNetworkError(e)) {
+        // A real server error (e.g. 400): drop the local habit + op.
+        try {
+          await store?.removeCachedHabit(userId, id);
+          final ops = store?.loadOutbox() ?? <Map<String, dynamic>>[];
+          ops.removeWhere((o) => o['kind'] == 'habit_add' && o['id'] == id);
+          await store?.saveOutbox(ops);
+        } catch (_) {}
+        rethrow;
+      }
+      // Offline: the habit is local + queued; the sync replays it.
+    }
     _notifyChanged();
-    return Habit(id: doc.$id, userId: userId, title: title, color: color);
+    return habit;
   }
 
   /// Whether the live `habits` table has the `notes` attribute. It does
@@ -946,6 +1336,9 @@ class HabitRepository {
   /// this session stops trying Appwrite for notes.
   static bool _notesColumnAvailable = true;
 
+  /// Updates a habit. v2.9.0 offline-first: the change applies to the
+  /// local cache immediately and is queued in the outbox; the server
+  /// update is best-effort (offline it is replayed by the sync).
   Future<void> updateHabit(
     Habit habit, {
     String? title,
@@ -971,6 +1364,9 @@ class HabitRepository {
             // No `notes` attribute on the live table yet.
             _notesColumnAvailable = false;
             await _saveLocalNote(habit.id, notes);
+          } else if (isNetworkError(e)) {
+            // Offline: the note is local (and queued below).
+            await _saveLocalNote(habit.id, notes);
           } else {
             rethrow;
           }
@@ -979,26 +1375,81 @@ class HabitRepository {
         await _saveLocalNote(habit.id, notes);
       }
     }
+    // Local cache first (the source of truth while offline).
+    final updatedHabit = habit.copyWith(
+      title: title,
+      color: color,
+      notes: notes,
+    );
+    final store = await _localStore();
+    try {
+      await store?.upsertCachedHabit(updatedHabit);
+    } catch (_) {}
+    final op = <String, dynamic>{
+      'kind': 'habit_update',
+      'ownerUid': _requireUserId(),
+      'id': habit.id,
+    };
+    if (title != null) op['title'] = title;
+    if (color != null) op['color'] = color;
+    if (notes != null) op['notes'] = notes;
+    await _enqueueOp(op);
     if (updates.isEmpty) {
       _notifyChanged();
       return;
     }
-    await _d.updateRow(
-      databaseId: _dbId,
-      tableId: 'habits',
-      rowId: habit.id,
-      data: updates,
-    );
+    try {
+      await _d.updateRow(
+        databaseId: _dbId,
+        tableId: 'habits',
+        rowId: habit.id,
+        data: updates,
+      );
+      // Landed — drop the op.
+      try {
+        final ops = store?.loadOutbox() ?? <Map<String, dynamic>>[];
+        ops.removeWhere(
+          (o) => o['kind'] == 'habit_update' && o['id'] == habit.id,
+        );
+        await store?.saveOutbox(ops);
+      } catch (_) {}
+    } on Object catch (e) {
+      if (!isNetworkError(e)) rethrow;
+      // Offline: local + queued; the sync replays it.
+    }
     _notifyChanged();
   }
 
+  /// Archives a habit. v2.9.0 offline-first: local cache + outbox,
+  /// server best-effort.
   Future<void> archiveHabit(String habitId) async {
-    await _d.updateRow(
-      databaseId: _dbId,
-      tableId: 'habits',
-      rowId: habitId,
-      data: {'archived': true},
-    );
+    final userId = _requireUserId();
+    final store = await _localStore();
+    try {
+      await store?.removeCachedHabit(userId, habitId);
+    } catch (_) {}
+    await _enqueueOp({
+      'kind': 'habit_archive',
+      'ownerUid': userId,
+      'id': habitId,
+    });
+    try {
+      await _d.updateRow(
+        databaseId: _dbId,
+        tableId: 'habits',
+        rowId: habitId,
+        data: {'archived': true},
+      );
+      try {
+        final ops = store?.loadOutbox() ?? <Map<String, dynamic>>[];
+        ops.removeWhere(
+          (o) => o['kind'] == 'habit_archive' && o['id'] == habitId,
+        );
+        await store?.saveOutbox(ops);
+      } catch (_) {}
+    } on Object catch (e) {
+      if (!isNetworkError(e)) rethrow;
+    }
     _notifyChanged();
   }
 
@@ -1031,36 +1482,44 @@ class HabitRepository {
   /// completed log the habit contributed is reversed in full (+2 each,
   /// the derived-XP rule), and the streak is recomputed from the
   /// remaining logs. The longest streak never decreases (it is a
-  /// historical best).
+  /// historical best). v2.9.0 offline-first: the local cache is
+  /// cleared and the local XP recomputed immediately; the server
+  /// delete is best-effort (queued in the outbox when offline).
   Future<void> deleteHabit(String habitId) async {
-    return _writeQueue.run(() async {
-      final profiles = ProfileRepository(db: _db);
-      final logs = await _listLogsForHabit(habitId);
-      final completedCount = logs.where((l) => l.completed).length;
-      for (final log in logs) {
-        await _d.deleteRow(
-          databaseId: _dbId,
-          tableId: 'habit_logs',
-          rowId: log.id,
-        );
-      }
-      final me = await profiles.fetchMyProfile();
-      if (me != null) {
-        final dates = await activeDates();
-        final newStreak = computeStreak(dates.toSet());
-        final newLastActive = dates.isEmpty ? null : dates.first;
-        await profiles.applyXpAndStreak(
-          xpDelta: -xpPerTask * completedCount,
-          currentStreak: newStreak,
-          longestStreak: me.longestStreak,
-          lastActiveDate: newLastActive,
-        );
-      }
-      // The habit's sub-tasks and their logs go with it.
-      await deleteSubtasksForHabit(habitId);
-      await _deleteLocalNote(habitId);
-      await archiveHabit(habitId);
+    final userId = _requireUserId();
+    // Local first (the source of truth while offline).
+    final store = await _localStore();
+    try {
+      await store?.removeCachedHabit(userId, habitId);
+      final logs = store?.loadCachedHabitLogs(userId) ?? <HabitLog>[];
+      logs.removeWhere((l) => l.habitId == habitId);
+      await store?.saveCachedHabitLogs(userId, logs);
+      await _recomputeLocalDerivedXp();
+    } catch (_) {}
+    await _enqueueOp({
+      'kind': 'habit_delete',
+      'ownerUid': userId,
+      'id': habitId,
     });
+    try {
+      await _writeQueue.run(() => _deleteHabitOnServer(habitId));
+      // Landed — drop the op.
+      try {
+        final ops = store?.loadOutbox() ?? <Map<String, dynamic>>[];
+        ops.removeWhere(
+          (o) => o['kind'] == 'habit_delete' && o['id'] == habitId,
+        );
+        await store?.saveOutbox(ops);
+      } catch (_) {}
+    } on Object catch (e) {
+      if (!isNetworkError(e)) rethrow;
+      // Offline: local + queued; the sync replays the server delete.
+      // (The local sub-tasks are already dropped with the habit.)
+      try {
+        await deleteSubtasksForHabit(habitId);
+      } catch (_) {}
+    }
+    _notifyChanged();
   }
 
   Future<Map<String, dynamic>?> _getLogOrNull(String logId) async {
@@ -1079,43 +1538,123 @@ class HabitRepository {
 
   Future<List<HabitLog>> listLogsForDate(String date) async {
     final userId = _requireUserId();
-    final list = await _d.listRows(
-      databaseId: _dbId,
-      tableId: 'habit_logs',
-      queries: [
-        Query.equal('ownerUid', userId),
-        Query.equal('date', date),
-        Query.equal('completed', true),
-      ],
-    );
-    return list.rows.map((doc) => HabitLog.fromJson(_docJson(doc))).toList();
+    try {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'habit_logs',
+        queries: [
+          Query.equal('ownerUid', userId),
+          Query.equal('date', date),
+          Query.equal('completed', true),
+        ],
+      );
+      final logs = list.rows
+          .map((doc) => HabitLog.fromJson(_docJson(doc)))
+          .toList();
+      await _mergeCachedLogs(logs);
+      return logs;
+    } on Object catch (e) {
+      // v2.9.0: no network → the cached logs for that date.
+      if (isNetworkError(e)) {
+        final store = await _localStore();
+        final cached = store?.loadCachedHabitLogs(userId) ?? <HabitLog>[];
+        return cached
+            .where((l) => l.logDate == date && l.completed)
+            .toList();
+      }
+      rethrow;
+    }
   }
 
   Future<List<HabitLog>> listLogsInRange(String start, String end) async {
     final userId = _requireUserId();
-    final list = await _d.listRows(
-      databaseId: _dbId,
-      tableId: 'habit_logs',
-      queries: [
-        Query.equal('ownerUid', userId),
-        Query.equal('completed', true),
-        Query.greaterThanEqual('date', start),
-        Query.lessThanEqual('date', end),
-        Query.orderAsc('date'),
-      ],
-    );
-    return list.rows.map((doc) => HabitLog.fromJson(_docJson(doc))).toList();
+    try {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'habit_logs',
+        queries: [
+          Query.equal('ownerUid', userId),
+          Query.equal('completed', true),
+          Query.greaterThanEqual('date', start),
+          Query.lessThanEqual('date', end),
+          Query.orderAsc('date'),
+        ],
+      );
+      final logs = list.rows
+          .map((doc) => HabitLog.fromJson(_docJson(doc)))
+          .toList();
+      await _mergeCachedLogs(logs);
+      return logs;
+    } on Object catch (e) {
+      // v2.9.0: no network → the cached logs in that range.
+      if (isNetworkError(e)) {
+        final store = await _localStore();
+        final cached = store?.loadCachedHabitLogs(userId) ?? <HabitLog>[];
+        return cached
+            .where(
+              (l) =>
+                  l.completed &&
+                  l.logDate.compareTo(start) >= 0 &&
+                  l.logDate.compareTo(end) <= 0,
+            )
+            .toList();
+      }
+      rethrow;
+    }
   }
 
   /// Every completed habit log, newest first — the XP ledger on the
   /// Dashboard is derived from this (each log = +2 XP). Paginated: a
-  /// long-term user has more than one page of logs.
+  /// long-term user has more than one page of logs. v2.9.0: a
+  /// successful fetch refreshes the offline cache; offline, the
+  /// cached logs are returned.
   Future<List<HabitLog>> listAllCompletedLogs() async {
     final userId = _requireUserId();
-    final all = <HabitLog>[];
-    const page = 100;
-    var offset = 0;
-    while (true) {
+    try {
+      final all = <HabitLog>[];
+      const page = 100;
+      var offset = 0;
+      while (true) {
+        final list = await _d.listRows(
+          databaseId: _dbId,
+          tableId: 'habit_logs',
+          queries: [
+            Query.equal('ownerUid', userId),
+            Query.equal('completed', true),
+            Query.orderDesc('date'),
+            Query.limit(page),
+            Query.offset(offset),
+          ],
+        );
+        all.addAll(list.rows.map((doc) => HabitLog.fromJson(_docJson(doc))));
+        if (list.rows.length < page) break;
+        offset += page;
+      }
+      // This is the full completed-log list — replace the cache with
+      // it (a merge would keep stale logs for habits since deleted).
+      final store = await _localStore();
+      if (store != null) {
+        try {
+          await store.saveCachedHabitLogs(userId, all);
+        } catch (_) {}
+      }
+      return all;
+    } on Object catch (e) {
+      if (isNetworkError(e)) {
+        final store = await _localStore();
+        final cached = store?.loadCachedHabitLogs(userId) ?? <HabitLog>[];
+        cached.sort((a, b) => b.logDate.compareTo(a.logDate));
+        return cached.where((l) => l.completed).toList();
+      }
+      rethrow;
+    }
+  }
+
+  /// Distinct dates (newest first) with at least one completed habit.
+  /// v2.9.0: offline, derived from the cached logs.
+  Future<List<String>> activeDates({int limit = 370}) async {
+    final userId = _requireUserId();
+    try {
       final list = await _d.listRows(
         databaseId: _dbId,
         tableId: 'habit_logs',
@@ -1123,36 +1662,29 @@ class HabitRepository {
           Query.equal('ownerUid', userId),
           Query.equal('completed', true),
           Query.orderDesc('date'),
-          Query.limit(page),
-          Query.offset(offset),
+          Query.limit(limit),
         ],
       );
-      all.addAll(list.rows.map((doc) => HabitLog.fromJson(_docJson(doc))));
-      if (list.rows.length < page) break;
-      offset += page;
+      final dates = <String>{};
+      for (final doc in list.rows) {
+        final date = doc.data['date'] as String?;
+        if (date != null) dates.add(date);
+      }
+      return dates.toList();
+    } on Object catch (e) {
+      if (isNetworkError(e)) {
+        final store = await _localStore();
+        final cached = store?.loadCachedHabitLogs(userId) ?? <HabitLog>[];
+        final dates = cached
+            .where((l) => l.completed)
+            .map((l) => l.logDate)
+            .toSet()
+            .toList()
+          ..sort((a, b) => b.compareTo(a));
+        return dates.take(limit).toList();
+      }
+      rethrow;
     }
-    return all;
-  }
-
-  /// Distinct dates (newest first) with at least one completed habit.
-  Future<List<String>> activeDates({int limit = 370}) async {
-    final userId = _requireUserId();
-    final list = await _d.listRows(
-      databaseId: _dbId,
-      tableId: 'habit_logs',
-      queries: [
-        Query.equal('ownerUid', userId),
-        Query.equal('completed', true),
-        Query.orderDesc('date'),
-        Query.limit(limit),
-      ],
-    );
-    final dates = <String>{};
-    for (final doc in list.rows) {
-      final date = doc.data['date'] as String?;
-      if (date != null) dates.add(date);
-    }
-    return dates.toList();
   }
 
   /// Desired end-state per habit log, keyed by log document id
@@ -1198,6 +1730,28 @@ class HabitRepository {
     _desiredLogState[logId] = completed;
     final completer = Completer<ToggleResult>();
     (_logSyncWaiters[logId] ??= []).add(completer);
+    // v2.9.0 offline-first: the local cache is the source of truth.
+    // Apply the toggle locally RIGHT NOW (so the screen and every
+    // reload show the right state even with no network) and queue
+    // the server write in the outbox. The sync worker below still
+    // pushes it to the server when online.
+    try {
+      final store = await LocalStore.getInstance();
+      await store.applyCachedLog(
+        ownerId: _requireUserId(),
+        habitId: habit.id,
+        date: date,
+        done: completed,
+      );
+      await _recomputeLocalDerivedXp();
+      await store.enqueueOutboxOp({
+        'kind': 'log',
+        'ownerUid': _requireUserId(),
+        'habitId': habit.id,
+        'date': date,
+        'done': completed,
+      });
+    } catch (_) {}
     // First tap for this log: schedule the sync. Later taps for the
     // same log just update the desired state and piggyback on it.
     // (Set.add returns true only when the id was absent — atomic in
@@ -1224,10 +1778,12 @@ class HabitRepository {
         if (desired == null) return;
         ToggleResult result;
         try {
+          var applied = desired;
           result = await _writeQueue.run(() async {
             // Re-read the desire at execution time: a tap may have
             // changed it while this job waited in the queue.
             final current = _desiredLogState[logId] ?? desired;
+            applied = current;
             await _applyLogState(
               habit: habit,
               date: date,
@@ -1245,22 +1801,52 @@ class HabitRepository {
             return const ToggleResult(xpDelta: 0, allDone: false);
           });
           failures = 0;
+          // The server now holds this state — drop the matching
+          // outbox op (if a newer tap replaced it, the content
+          // differs and it stays queued).
+          try {
+            final store = await LocalStore.getInstance();
+            final ops = store.loadOutbox();
+            ops.removeWhere(
+              (o) =>
+                  o['kind'] == 'log' &&
+                  o['habitId'] == habit.id &&
+                  o['date'] == date &&
+                  o['done'] == applied,
+            );
+            await store.saveOutbox(ops);
+          } catch (_) {}
         } catch (e) {
           // Transient failure (network blip, read lag): retry the same
           // desire a couple of times before giving up. The waiters
           // stay pending — their UI already shows the desired state.
           failures++;
           if (failures >= 3) {
-            // Persistent failure: give up. Complete the waiters that
-            // arrived before this point with the error (their UI rolls
-            // back) and drop the desire. This block is synchronous, so
-            // a tap landing after it schedules its own sync via the
-            // finally clause below instead of being stranded.
+            // Persistent failure: give up on the server write. The
+            // waiters that arrived before this point are completed —
+            // with SUCCESS when it is a network failure (v2.9.0
+            // offline: the local cache already holds the desired
+            // state and the outbox op replays it when the network
+            // returns, so the UI must NOT roll back), with the error
+            // for a real server failure (their UI rolls back). This
+            // block is synchronous, so a tap landing after it
+            // schedules its own sync via the finally clause below
+            // instead of being stranded.
             final waiters = _logSyncWaiters.remove(logId);
             _desiredLogState.remove(logId);
             if (waiters != null) {
-              for (final w in waiters) {
-                if (!w.isCompleted) w.completeError(e);
+              if (isNetworkError(e)) {
+                for (final w in waiters) {
+                  if (!w.isCompleted) {
+                    w.complete(
+                      const ToggleResult(xpDelta: 0, allDone: false),
+                    );
+                  }
+                }
+              } else {
+                for (final w in waiters) {
+                  if (!w.isCompleted) w.completeError(e);
+                }
               }
             }
             return;
@@ -1372,6 +1958,227 @@ class HabitRepository {
       }
     }
     throw StateError('Habit toggle did not save properly. Please try again.');
+  }
+
+  // -- v2.9.0 outbox replay (server-only; used by SyncService) ---------
+  // These never touch the local cache or the outbox — the caller
+  // (SyncService) removes the op after a successful replay. They
+  // throw on network failure so the sync stops and keeps the op
+  // queued.
+
+  /// Replays a queued log toggle: the server write + verify +
+  /// derived-XP reconcile, in the serialised write queue.
+  Future<void> replayLogOp({
+    required String habitId,
+    required String date,
+    required bool done,
+  }) async {
+    final habit = Habit(id: habitId, userId: _requireUserId(), title: '');
+    final logId = _logDocId(habitId, date);
+    return _writeQueue.run(() async {
+      await _applyLogState(
+        habit: habit,
+        date: date,
+        logId: logId,
+        done: done,
+      );
+      await _verifyLogWithRetry(logId: logId, expectDone: done);
+      await ProfileRepository(db: _db)._recomputeDerivedXpNow();
+    });
+  }
+
+  /// Replays a queued habit add (the id was generated locally, so
+  /// this is idempotent — a 409 means it already landed).
+  Future<void> replayHabitAdd({
+    required String id,
+    required String title,
+    required int color,
+  }) async {
+    final userId = _requireUserId();
+    try {
+      await _d.createRow(
+        databaseId: _dbId,
+        tableId: 'habits',
+        rowId: id,
+        data: {
+          'ownerUid': userId,
+          'title': title,
+          'color': color,
+          'archived': false,
+        },
+        permissions: _ownerPerms(userId),
+      );
+    } on AppwriteException catch (e) {
+      if (e.code != 409) rethrow;
+    }
+  }
+
+  /// Replays a queued habit update.
+  Future<void> replayHabitUpdate({
+    required String id,
+    String? title,
+    int? color,
+    String? notes,
+  }) async {
+    final updates = <String, Object>{};
+    if (title != null) updates['title'] = title;
+    if (color != null) updates['color'] = color;
+    if (updates.isNotEmpty) {
+      await _d.updateRow(
+        databaseId: _dbId,
+        tableId: 'habits',
+        rowId: id,
+        data: updates,
+      );
+    }
+    if (notes != null && _notesColumnAvailable) {
+      try {
+        await _d.updateRow(
+          databaseId: _dbId,
+          tableId: 'habits',
+          rowId: id,
+          data: {'notes': notes},
+        );
+      } on AppwriteException catch (e) {
+        if (e.code == 400) {
+          _notesColumnAvailable = false;
+          await _saveLocalNote(id, notes);
+        } else {
+          rethrow;
+        }
+      }
+    }
+  }
+
+  /// Replays a queued habit archive.
+  Future<void> replayHabitArchive(String habitId) async {
+    await _d.updateRow(
+      databaseId: _dbId,
+      tableId: 'habits',
+      rowId: habitId,
+      data: {'archived': true},
+    );
+  }
+
+  /// Replays a queued habit delete (the server side only — the local
+  /// cache was already cleared when the user deleted it).
+  Future<void> replayHabitDelete(String habitId) async {
+    return _writeQueue.run(() => _deleteHabitOnServer(habitId));
+  }
+
+  /// The server side of a habit delete (logs + XP + sub-tasks +
+  /// archive). Shared by [deleteHabit] and [replayHabitDelete].
+  Future<void> _deleteHabitOnServer(String habitId) async {
+    final profiles = ProfileRepository(db: _db);
+    final logs = await _listLogsForHabit(habitId);
+    final completedCount = logs.where((l) => l.completed).length;
+    for (final log in logs) {
+      await _d.deleteRow(
+        databaseId: _dbId,
+        tableId: 'habit_logs',
+        rowId: log.id,
+      );
+    }
+    final me = await profiles.fetchMyProfile();
+    if (me != null) {
+      final dates = await activeDates();
+      final newStreak = computeStreak(dates.toSet());
+      final newLastActive = dates.isEmpty ? null : dates.first;
+      await profiles.applyXpAndStreak(
+        xpDelta: -xpPerTask * completedCount,
+        currentStreak: newStreak,
+        longestStreak: me.longestStreak,
+        lastActiveDate: newLastActive,
+      );
+    }
+    await deleteSubtasksForHabit(habitId);
+    await _deleteLocalNote(habitId);
+    await _d.updateRow(
+      databaseId: _dbId,
+      tableId: 'habits',
+      rowId: habitId,
+      data: {'archived': true},
+    );
+  }
+
+  /// Replays a queued sub-task log toggle (server-only; throws on a
+  /// network failure so the sync keeps it queued). Idempotent: a 409
+  /// on create means it already landed, a 404 on delete means it is
+  /// already gone.
+  Future<void> replaySubtaskLog({
+    required String subtaskId,
+    required String date,
+    required bool done,
+  }) async {
+    final logId = _subtaskLogDocId(subtaskId, date);
+    if (done) {
+      try {
+        await _d.createRow(
+          databaseId: _dbId,
+          tableId: 'subtask_logs',
+          rowId: logId,
+          data: {
+            'subtaskId': subtaskId,
+            'date': date,
+            'completed': true,
+          },
+          permissions: _ownerPerms(_requireUserId()),
+        );
+      } on AppwriteException catch (e) {
+        if (e.code == 409) {
+          await _d.updateRow(
+            databaseId: _dbId,
+            tableId: 'subtask_logs',
+            rowId: logId,
+            data: {'completed': true},
+          );
+        } else {
+          rethrow;
+        }
+      }
+    } else {
+      try {
+        await _d.deleteRow(
+          databaseId: _dbId,
+          tableId: 'subtask_logs',
+          rowId: logId,
+        );
+      } on AppwriteException catch (e) {
+        if (e.code != 404) rethrow;
+      }
+    }
+  }
+
+  /// Replays a queued sub-task add (server-only; 409 = already there).
+  Future<void> replaySubtaskAdd({
+    required String id,
+    required String habitId,
+    required String title,
+    required String kind,
+    required String date,
+  }) async {
+    try {
+      await _d.createRow(
+        databaseId: _dbId,
+        tableId: 'habit_subtasks',
+        rowId: id,
+        data: {
+          'habitId': habitId,
+          'title': title,
+          'kind': kind,
+          'date': date,
+          'archived': false,
+        },
+        permissions: _ownerPerms(_requireUserId()),
+      );
+    } on AppwriteException catch (e) {
+      if (e.code != 409) rethrow;
+    }
+  }
+
+  /// Replays a queued sub-task delete (server-only).
+  Future<void> replaySubtaskDelete(String subtaskId) async {
+    await _deleteSubtaskRows(subtaskId);
   }
 
   // -------------------------------------------------------------------------
@@ -1617,11 +2424,33 @@ class HabitRepository {
       } on AppwriteException catch (e) {
         if (e.code == 404 || e.code == 400) {
           _subtasksTablesAvailable = false;
+        } else if (isNetworkError(e)) {
+          // v2.9.0 offline: queue the replay, store locally below.
+          await _enqueueOp({
+            'kind': 'subtask_add',
+            'ownerUid': userId,
+            'id': id,
+            'habitId': habit.id,
+            'title': title,
+            'subtaskKind': kind,
+            'date': date,
+          });
         } else {
           rethrow;
         }
       } on AppwriteNotConfigured {
         // Local fallback below.
+      } on Object catch (e) {
+        if (!isNetworkError(e)) rethrow;
+        await _enqueueOp({
+          'kind': 'subtask_add',
+          'ownerUid': userId,
+          'id': id,
+          'habitId': habit.id,
+          'title': title,
+          'subtaskKind': kind,
+          'date': date,
+        });
       }
     }
     final subtask = HabitSubtask(
@@ -1693,11 +2522,25 @@ class HabitRepository {
       } on AppwriteException catch (e) {
         if (e.code == 404 || e.code == 400) {
           _subtasksTablesAvailable = false;
+        } else if (isNetworkError(e)) {
+          // v2.9.0 offline: queue the replay, delete locally below.
+          await _enqueueOp({
+            'kind': 'subtask_delete',
+            'ownerUid': _requireUserId(),
+            'id': subtask.id,
+          });
         } else {
           rethrow;
         }
       } on AppwriteNotConfigured {
         // Local fallback below.
+      } on Object catch (e) {
+        if (!isNetworkError(e)) rethrow;
+        await _enqueueOp({
+          'kind': 'subtask_delete',
+          'ownerUid': _requireUserId(),
+          'id': subtask.id,
+        });
       }
     }
     await _deleteLocalSubtask(subtask.id);
@@ -1822,11 +2665,22 @@ class HabitRepository {
         } catch (e) {
           failures++;
           if (failures >= 3) {
+            // Persistent failure. v2.9.0 offline: a network failure
+            // means the sub-task log is already stored locally (see
+            // _writeSubtaskLog) and queued for the sync — so the
+            // toggle SUCCEEDS from the user's view and the UI must
+            // NOT roll back. A real server failure still errors.
             final waiters = _subtaskSyncWaiters.remove(logId);
             _desiredSubtaskState.remove(logId);
             if (waiters != null) {
               for (final w in waiters) {
-                if (!w.isCompleted) w.completeError(e);
+                if (!w.isCompleted) {
+                  if (isNetworkError(e)) {
+                    w.complete();
+                  } else {
+                    w.completeError(e);
+                  }
+                }
               }
             }
             return;
@@ -1857,7 +2711,10 @@ class HabitRepository {
   /// Writes the intended sub-task log state, idempotently: a tick
   /// creates the log (or marks an existing one done), an untick
   /// deletes it (or does nothing when it is already gone). Falls back
-  /// to on-device storage when the table is missing.
+  /// to on-device storage when the table is missing. v2.9.0: a
+  /// network failure also falls back to on-device storage (and queues
+  /// a replay op) — the habit's done state is derived from the local
+  /// logs, so the toggle still works offline.
   Future<void> _writeSubtaskLog({
     required HabitSubtask subtask,
     required String date,
@@ -1906,11 +2763,29 @@ class HabitRepository {
       } on AppwriteException catch (e) {
         if (e.code == 404 || e.code == 400) {
           _subtasksTablesAvailable = false;
+        } else if (isNetworkError(e)) {
+          // Offline: queue the replay, then store locally below.
+          await _enqueueOp({
+            'kind': 'subtask_log',
+            'ownerUid': _requireUserId(),
+            'subtaskId': subtask.id,
+            'date': date,
+            'done': done,
+          });
         } else {
           rethrow;
         }
       } on AppwriteNotConfigured {
         // Local fallback below.
+      } on Object catch (e) {
+        if (!isNetworkError(e)) rethrow;
+        await _enqueueOp({
+          'kind': 'subtask_log',
+          'ownerUid': _requireUserId(),
+          'subtaskId': subtask.id,
+          'date': date,
+          'done': done,
+        });
       }
     }
     // On-device fallback.
@@ -1951,14 +2826,38 @@ class HabitRepository {
     final doneIds = await completedSubtaskIdsForDate(date);
     final allDone = due.every((s) => doneIds.contains(s.id));
     final logId = _logDocId(habit.id, date);
-    await _applyLogState(
-      habit: habit,
-      date: date,
-      logId: logId,
-      done: allDone,
-    );
-    await _verifyLogWithRetry(logId: logId, expectDone: allDone);
-    await ProfileRepository(db: _db)._recomputeDerivedXpNow();
+    try {
+      await _applyLogState(
+        habit: habit,
+        date: date,
+        logId: logId,
+        done: allDone,
+      );
+      await _verifyLogWithRetry(logId: logId, expectDone: allDone);
+      await ProfileRepository(db: _db)._recomputeDerivedXpNow();
+    } on Object catch (e) {
+      if (!isNetworkError(e)) rethrow;
+      // v2.9.0 offline: the habit log + XP are derived locally (the
+      // sub-task logs above already came from local storage), and the
+      // server write is queued for the background sync.
+      try {
+        final store = await LocalStore.getInstance();
+        await store.applyCachedLog(
+          ownerId: _requireUserId(),
+          habitId: habit.id,
+          date: date,
+          done: allDone,
+        );
+        await _recomputeLocalDerivedXp();
+        await store.enqueueOutboxOp({
+          'kind': 'log',
+          'ownerUid': _requireUserId(),
+          'habitId': habit.id,
+          'date': date,
+          'done': allDone,
+        });
+      } catch (_) {}
+    }
   }
 
   /// Sets a habit's done state for [date] — the single entry point
@@ -2029,62 +2928,159 @@ class TaskRepository {
 
   Future<List<WeeklyTask>> listWeeklyTasks(String weekStart) async {
     final userId = _requireUserId();
-    final list = await _d.listRows(
-      databaseId: _dbId,
-      tableId: 'weekly_tasks',
-      queries: [
-        Query.equal('ownerUid', userId),
-        Query.equal('weekStart', weekStart),
-        Query.orderAsc(r'$createdAt'),
-      ],
-    );
-    return list.rows.map((doc) => WeeklyTask.fromJson(_docJson(doc))).toList();
+    try {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'weekly_tasks',
+        queries: [
+          Query.equal('ownerUid', userId),
+          Query.equal('weekStart', weekStart),
+          Query.orderAsc(r'$createdAt'),
+        ],
+      );
+      final tasks = list.rows
+          .map((doc) => WeeklyTask.fromJson(_docJson(doc)))
+          .toList();
+      // Refresh the offline cache (best-effort).
+      try {
+        final store = await LocalStore.getInstance();
+        final cached = store.loadCachedTasks(userId);
+        final merged = <WeeklyTask>[
+          ...cached.weekly.where((t) => t.weekStart != weekStart),
+          ...tasks,
+        ];
+        await store.saveCachedTasks(userId, merged, cached.monthly);
+      } catch (_) {}
+      return tasks;
+    } on Object catch (e) {
+      // v2.9.0: no network → the cached tasks for that week.
+      if (isNetworkError(e)) {
+        try {
+          final store = await LocalStore.getInstance();
+          return store
+              .loadCachedTasks(userId)
+              .weekly
+              .where((t) => t.weekStart == weekStart)
+              .toList();
+        } catch (_) {
+          return <WeeklyTask>[];
+        }
+      }
+      rethrow;
+    }
   }
 
+  /// Adds a weekly task. v2.9.0 offline-first: local id + cache +
+  /// outbox, server best-effort.
   Future<void> addWeeklyTask(String title, String weekStart) async {
     final userId = _requireUserId();
-    await _d.createRow(
-      databaseId: _dbId,
-      tableId: 'weekly_tasks',
-      rowId: ID.unique(),
-      data: {
-        'ownerUid': userId,
-        'title': title,
-        'weekStart': weekStart,
-        'done': false,
-      },
-      permissions: _ownerPerms(userId),
+    final id = ID.unique();
+    final task = WeeklyTask(
+      id: id,
+      userId: userId,
+      title: title,
+      weekStart: weekStart,
     );
+    try {
+      final store = await LocalStore.getInstance();
+      final cached = store.loadCachedTasks(userId);
+      await store.saveCachedTasks(
+        userId,
+        [...cached.weekly, task],
+        cached.monthly,
+      );
+      await store.enqueueOutboxOp({
+        'kind': 'task_add_weekly',
+        'ownerUid': userId,
+        'id': id,
+        'title': title,
+        'key': weekStart,
+      });
+    } catch (_) {}
+    try {
+      await _d.createRow(
+        databaseId: _dbId,
+        tableId: 'weekly_tasks',
+        rowId: id,
+        data: {
+          'ownerUid': userId,
+          'title': title,
+          'weekStart': weekStart,
+          'done': false,
+        },
+        permissions: _ownerPerms(userId),
+      );
+      try {
+        final store = await LocalStore.getInstance();
+        final ops = store.loadOutbox();
+        ops.removeWhere(
+          (o) => o['kind'] == 'task_add_weekly' && o['id'] == id,
+        );
+        await store.saveOutbox(ops);
+      } catch (_) {}
+    } on Object catch (e) {
+      if (!isNetworkError(e)) {
+        try {
+          final store = await LocalStore.getInstance();
+          final cached = store.loadCachedTasks(userId);
+          await store.saveCachedTasks(
+            userId,
+            cached.weekly.where((t) => t.id != id).toList(),
+            cached.monthly,
+          );
+        } catch (_) {}
+        rethrow;
+      }
+    }
     _notifyChanged();
   }
 
   /// Every done weekly task, newest week first — the XP ledger on the
   /// Dashboard is derived from this (each done task = +2 XP).
   /// (listWeeklyTasks only covers one week; the ledger needs all.)
+  /// v2.9.0: offline, the cached done tasks are returned.
   Future<List<WeeklyTask>> listAllDoneWeeklyTasks() async {
     final userId = _requireUserId();
-    final all = <WeeklyTask>[];
-    const page = 100;
-    var offset = 0;
-    while (true) {
-      final list = await _d.listRows(
-        databaseId: _dbId,
-        tableId: 'weekly_tasks',
-        queries: [
-          Query.equal('ownerUid', userId),
-          Query.equal('done', true),
-          Query.orderDesc('weekStart'),
-          Query.limit(page),
-          Query.offset(offset),
-        ],
-      );
-      all.addAll(
-        list.rows.map((doc) => WeeklyTask.fromJson(_docJson(doc))),
-      );
-      if (list.rows.length < page) break;
-      offset += page;
+    try {
+      final all = <WeeklyTask>[];
+      const page = 100;
+      var offset = 0;
+      while (true) {
+        final list = await _d.listRows(
+          databaseId: _dbId,
+          tableId: 'weekly_tasks',
+          queries: [
+            Query.equal('ownerUid', userId),
+            Query.equal('done', true),
+            Query.orderDesc('weekStart'),
+            Query.limit(page),
+            Query.offset(offset),
+          ],
+        );
+        all.addAll(
+          list.rows.map((doc) => WeeklyTask.fromJson(_docJson(doc))),
+        );
+        if (list.rows.length < page) break;
+        offset += page;
+      }
+      return all;
+    } on Object catch (e) {
+      if (isNetworkError(e)) {
+        try {
+          final store = await LocalStore.getInstance();
+          final done = store
+              .loadCachedTasks(userId)
+              .weekly
+              .where((t) => t.done)
+              .toList()
+            ..sort((a, b) => b.weekStart.compareTo(a.weekStart));
+          return done;
+        } catch (_) {
+          return <WeeklyTask>[];
+        }
+      }
+      rethrow;
     }
-    return all;
   }
 
   /// Applies an XP delta to my profile, clamped at 0, leaving streak
@@ -2119,126 +3115,474 @@ class TaskRepository {
     }
   }
 
+  /// Applies a task toggle to the local cache. Returns the previous
+  /// `done` value, or null when the task is not cached. v2.9.0.
+  Future<bool?> _applyLocalTaskToggle({
+    required bool weekly,
+    required String id,
+    required bool done,
+  }) async {
+    try {
+      final userId = _requireUserId();
+      final store = await LocalStore.getInstance();
+      final cached = store.loadCachedTasks(userId);
+      if (weekly) {
+        final index = cached.weekly.indexWhere((t) => t.id == id);
+        if (index < 0) return null;
+        final wasDone = cached.weekly[index].done;
+        final task = cached.weekly[index];
+        cached.weekly[index] = WeeklyTask(
+          id: task.id,
+          userId: task.userId,
+          title: task.title,
+          weekStart: task.weekStart,
+          done: done,
+        );
+        await store.saveCachedTasks(userId, cached.weekly, cached.monthly);
+        return wasDone;
+      }
+      final index = cached.monthly.indexWhere((t) => t.id == id);
+      if (index < 0) return null;
+      final wasDone = cached.monthly[index].done;
+      final task = cached.monthly[index];
+      cached.monthly[index] = MonthlyTask(
+        id: task.id,
+        userId: task.userId,
+        title: task.title,
+        month: task.month,
+        done: done,
+      );
+      await store.saveCachedTasks(userId, cached.weekly, cached.monthly);
+      return wasDone;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Removes a task from the local cache. v2.9.0.
+  Future<bool?> _removeLocalTask({
+    required bool weekly,
+    required String id,
+  }) async {
+    try {
+      final userId = _requireUserId();
+      final store = await LocalStore.getInstance();
+      final cached = store.loadCachedTasks(userId);
+      if (weekly) {
+        final index = cached.weekly.indexWhere((t) => t.id == id);
+        if (index < 0) return null;
+        final wasDone = cached.weekly[index].done;
+        cached.weekly.removeAt(index);
+        await store.saveCachedTasks(userId, cached.weekly, cached.monthly);
+        return wasDone;
+      }
+      final index = cached.monthly.indexWhere((t) => t.id == id);
+      if (index < 0) return null;
+      final wasDone = cached.monthly[index].done;
+      cached.monthly.removeAt(index);
+      await store.saveCachedTasks(userId, cached.weekly, cached.monthly);
+      return wasDone;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Toggles a weekly task: +2 XP on completing, -2 XP on unticking
   /// (the full reversal — a done task is worth +2, a blank one 0).
   /// Reads the current state first so toggling to the same state
   /// grants nothing. Serialised with the other XP writes so two quick
-  /// toggles cannot read the same stale state.
+  /// toggles cannot read the same stale state. v2.9.0 offline-first:
+  /// the local cache + local XP update immediately; the server write
+  /// is queued when offline.
   Future<void> toggleWeeklyTask(String id, bool done) async {
-    return _writeQueue.run(() async {
-      final wasDone = await _taskDone('weekly_tasks', id);
-      await _d.updateRow(
-        databaseId: _dbId,
-        tableId: 'weekly_tasks',
-        rowId: id,
-        data: {'done': done},
-      );
-      if (wasDone != null) {
-        await _adjustXp(xpDeltaForToggle(completing: done, wasDone: wasDone));
-      }
+    final userId = _requireUserId();
+    await _applyLocalTaskToggle(weekly: true, id: id, done: done);
+    await recomputeLocalDerivedXpForUser();
+    try {
+      final store = await LocalStore.getInstance();
+      await store.enqueueOutboxOp({
+        'kind': 'task_toggle_weekly',
+        'ownerUid': userId,
+        'id': id,
+        'done': done,
+      });
+    } catch (_) {}
+    try {
+      await _writeQueue.run(() async {
+        final wasDone = await _taskDone('weekly_tasks', id);
+        await _d.updateRow(
+          databaseId: _dbId,
+          tableId: 'weekly_tasks',
+          rowId: id,
+          data: {'done': done},
+        );
+        if (wasDone != null) {
+          await _adjustXp(
+            xpDeltaForToggle(completing: done, wasDone: wasDone),
+          );
+        }
+        _notifyChanged();
+      });
+      try {
+        final store = await LocalStore.getInstance();
+        final ops = store.loadOutbox();
+        ops.removeWhere(
+          (o) => o['kind'] == 'task_toggle_weekly' && o['id'] == id,
+        );
+        await store.saveOutbox(ops);
+      } catch (_) {}
+    } on Object catch (e) {
+      if (!isNetworkError(e)) rethrow;
       _notifyChanged();
-    });
+    }
   }
 
   /// Deletes a weekly task. A task that was done loses its full +2 XP
-  /// — deleting must not leave phantom XP behind.
+  /// — deleting must not leave phantom XP behind. v2.9.0 offline-first:
+  /// local cache + local XP first, server best-effort.
   Future<void> deleteWeeklyTask(String id) async {
-    return _writeQueue.run(() async {
-      final wasDone = await _taskDone('weekly_tasks', id);
-      await _d.deleteRow(databaseId: _dbId, tableId: 'weekly_tasks', rowId: id);
-      if (wasDone == true) {
-        await _adjustXp(-xpPerTask);
-      }
+    final userId = _requireUserId();
+    await _removeLocalTask(weekly: true, id: id);
+    await recomputeLocalDerivedXpForUser();
+    try {
+      final store = await LocalStore.getInstance();
+      await store.enqueueOutboxOp({
+        'kind': 'task_delete_weekly',
+        'ownerUid': userId,
+        'id': id,
+      });
+    } catch (_) {}
+    try {
+      await _writeQueue.run(() async {
+        final wasDone = await _taskDone('weekly_tasks', id);
+        await _d.deleteRow(
+          databaseId: _dbId,
+          tableId: 'weekly_tasks',
+          rowId: id,
+        );
+        if (wasDone == true) {
+          await _adjustXp(-xpPerTask);
+        }
+        _notifyChanged();
+      });
+      try {
+        final store = await LocalStore.getInstance();
+        final ops = store.loadOutbox();
+        ops.removeWhere(
+          (o) => o['kind'] == 'task_delete_weekly' && o['id'] == id,
+        );
+        await store.saveOutbox(ops);
+      } catch (_) {}
+    } on Object catch (e) {
+      if (!isNetworkError(e)) rethrow;
       _notifyChanged();
-    });
+    }
   }
 
   Future<List<MonthlyTask>> listMonthlyTasks(String month) async {
     final userId = _requireUserId();
-    final list = await _d.listRows(
-      databaseId: _dbId,
-      tableId: 'monthly_tasks',
-      queries: [
-        Query.equal('ownerUid', userId),
-        Query.equal('month', month),
-        Query.orderAsc(r'$createdAt'),
-      ],
-    );
-    return list.rows.map((doc) => MonthlyTask.fromJson(_docJson(doc))).toList();
-  }
-
-  Future<void> addMonthlyTask(String title, String month) async {
-    final userId = _requireUserId();
-    await _d.createRow(
-      databaseId: _dbId,
-      tableId: 'monthly_tasks',
-      rowId: ID.unique(),
-      data: {'ownerUid': userId, 'title': title, 'month': month, 'done': false},
-      permissions: _ownerPerms(userId),
-    );
-    _notifyChanged();
-  }
-
-  /// Every done monthly task, newest month first — the XP ledger on the
-  /// Dashboard is derived from this (each done task = +2 XP).
-  Future<List<MonthlyTask>> listAllDoneMonthlyTasks() async {
-    final userId = _requireUserId();
-    final all = <MonthlyTask>[];
-    const page = 100;
-    var offset = 0;
-    while (true) {
+    try {
       final list = await _d.listRows(
         databaseId: _dbId,
         tableId: 'monthly_tasks',
         queries: [
           Query.equal('ownerUid', userId),
-          Query.equal('done', true),
-          Query.orderDesc('month'),
-          Query.limit(page),
-          Query.offset(offset),
+          Query.equal('month', month),
+          Query.orderAsc(r'$createdAt'),
         ],
       );
-      all.addAll(
-        list.rows.map((doc) => MonthlyTask.fromJson(_docJson(doc))),
-      );
-      if (list.rows.length < page) break;
-      offset += page;
+      final tasks = list.rows
+          .map((doc) => MonthlyTask.fromJson(_docJson(doc)))
+          .toList();
+      // Refresh the offline cache (best-effort).
+      try {
+        final store = await LocalStore.getInstance();
+        final cached = store.loadCachedTasks(userId);
+        final merged = <MonthlyTask>[
+          ...cached.monthly.where((t) => t.month != month),
+          ...tasks,
+        ];
+        await store.saveCachedTasks(userId, cached.weekly, merged);
+      } catch (_) {}
+      return tasks;
+    } on Object catch (e) {
+      // v2.9.0: no network → the cached tasks for that month.
+      if (isNetworkError(e)) {
+        try {
+          final store = await LocalStore.getInstance();
+          return store
+              .loadCachedTasks(userId)
+              .monthly
+              .where((t) => t.month == month)
+              .toList();
+        } catch (_) {
+          return <MonthlyTask>[];
+        }
+      }
+      rethrow;
     }
-    return all;
+  }
+
+  /// Adds a monthly task. v2.9.0 offline-first: local id + cache +
+  /// outbox, server best-effort.
+  Future<void> addMonthlyTask(String title, String month) async {
+    final userId = _requireUserId();
+    final id = ID.unique();
+    final task = MonthlyTask(
+      id: id,
+      userId: userId,
+      title: title,
+      month: month,
+    );
+    try {
+      final store = await LocalStore.getInstance();
+      final cached = store.loadCachedTasks(userId);
+      await store.saveCachedTasks(
+        userId,
+        cached.weekly,
+        [...cached.monthly, task],
+      );
+      await store.enqueueOutboxOp({
+        'kind': 'task_add_monthly',
+        'ownerUid': userId,
+        'id': id,
+        'title': title,
+        'key': month,
+      });
+    } catch (_) {}
+    try {
+      await _d.createRow(
+        databaseId: _dbId,
+        tableId: 'monthly_tasks',
+        rowId: id,
+        data: {'ownerUid': userId, 'title': title, 'month': month, 'done': false},
+        permissions: _ownerPerms(userId),
+      );
+      try {
+        final store = await LocalStore.getInstance();
+        final ops = store.loadOutbox();
+        ops.removeWhere(
+          (o) => o['kind'] == 'task_add_monthly' && o['id'] == id,
+        );
+        await store.saveOutbox(ops);
+      } catch (_) {}
+    } on Object catch (e) {
+      if (!isNetworkError(e)) {
+        try {
+          final store = await LocalStore.getInstance();
+          final cached = store.loadCachedTasks(userId);
+          await store.saveCachedTasks(
+            userId,
+            cached.weekly,
+            cached.monthly.where((t) => t.id != id).toList(),
+          );
+        } catch (_) {}
+        rethrow;
+      }
+    }
+    _notifyChanged();
+  }
+
+  /// Every done monthly task, newest month first — the XP ledger on the
+  /// Dashboard is derived from this (each done task = +2 XP).
+  /// v2.9.0: offline, the cached done tasks are returned.
+  Future<List<MonthlyTask>> listAllDoneMonthlyTasks() async {
+    final userId = _requireUserId();
+    try {
+      final all = <MonthlyTask>[];
+      const page = 100;
+      var offset = 0;
+      while (true) {
+        final list = await _d.listRows(
+          databaseId: _dbId,
+          tableId: 'monthly_tasks',
+          queries: [
+            Query.equal('ownerUid', userId),
+            Query.equal('done', true),
+            Query.orderDesc('month'),
+            Query.limit(page),
+            Query.offset(offset),
+          ],
+        );
+        all.addAll(
+          list.rows.map((doc) => MonthlyTask.fromJson(_docJson(doc))),
+        );
+        if (list.rows.length < page) break;
+        offset += page;
+      }
+      return all;
+    } on Object catch (e) {
+      if (isNetworkError(e)) {
+        try {
+          final store = await LocalStore.getInstance();
+          final done = store
+              .loadCachedTasks(userId)
+              .monthly
+              .where((t) => t.done)
+              .toList()
+            ..sort((a, b) => b.month.compareTo(a.month));
+          return done;
+        } catch (_) {
+          return <MonthlyTask>[];
+        }
+      }
+      rethrow;
+    }
   }
 
   /// Toggles a monthly task: same +2 / -2 XP rule as weekly tasks.
+  /// v2.9.0 offline-first: local cache + local XP first, server
+  /// best-effort (queued when offline).
   Future<void> toggleMonthlyTask(String id, bool done) async {
-    return _writeQueue.run(() async {
-      final wasDone = await _taskDone('monthly_tasks', id);
-      await _d.updateRow(
-        databaseId: _dbId,
-        tableId: 'monthly_tasks',
-        rowId: id,
-        data: {'done': done},
-      );
-      if (wasDone != null) {
-        await _adjustXp(xpDeltaForToggle(completing: done, wasDone: wasDone));
-      }
+    final userId = _requireUserId();
+    await _applyLocalTaskToggle(weekly: false, id: id, done: done);
+    await recomputeLocalDerivedXpForUser();
+    try {
+      final store = await LocalStore.getInstance();
+      await store.enqueueOutboxOp({
+        'kind': 'task_toggle_monthly',
+        'ownerUid': userId,
+        'id': id,
+        'done': done,
+      });
+    } catch (_) {}
+    try {
+      await _writeQueue.run(() async {
+        final wasDone = await _taskDone('monthly_tasks', id);
+        await _d.updateRow(
+          databaseId: _dbId,
+          tableId: 'monthly_tasks',
+          rowId: id,
+          data: {'done': done},
+        );
+        if (wasDone != null) {
+          await _adjustXp(
+            xpDeltaForToggle(completing: done, wasDone: wasDone),
+          );
+        }
+        _notifyChanged();
+      });
+      try {
+        final store = await LocalStore.getInstance();
+        final ops = store.loadOutbox();
+        ops.removeWhere(
+          (o) => o['kind'] == 'task_toggle_monthly' && o['id'] == id,
+        );
+        await store.saveOutbox(ops);
+      } catch (_) {}
+    } on Object catch (e) {
+      if (!isNetworkError(e)) rethrow;
       _notifyChanged();
-    });
+    }
   }
 
   /// Deletes a monthly task. A task that was done loses its full +2 XP
-  /// — deleting must not leave phantom XP behind.
+  /// — deleting must not leave phantom XP behind. v2.9.0 offline-first.
   Future<void> deleteMonthlyTask(String id) async {
+    final userId = _requireUserId();
+    await _removeLocalTask(weekly: false, id: id);
+    await recomputeLocalDerivedXpForUser();
+    try {
+      final store = await LocalStore.getInstance();
+      await store.enqueueOutboxOp({
+        'kind': 'task_delete_monthly',
+        'ownerUid': userId,
+        'id': id,
+      });
+    } catch (_) {}
+    try {
+      await _writeQueue.run(() async {
+        final wasDone = await _taskDone('monthly_tasks', id);
+        await _d.deleteRow(
+          databaseId: _dbId,
+          tableId: 'monthly_tasks',
+          rowId: id,
+        );
+        if (wasDone == true) {
+          await _adjustXp(-xpPerTask);
+        }
+        _notifyChanged();
+      });
+      try {
+        final store = await LocalStore.getInstance();
+        final ops = store.loadOutbox();
+        ops.removeWhere(
+          (o) => o['kind'] == 'task_delete_monthly' && o['id'] == id,
+        );
+        await store.saveOutbox(ops);
+      } catch (_) {}
+    } on Object catch (e) {
+      if (!isNetworkError(e)) rethrow;
+      _notifyChanged();
+    }
+  }
+
+  // -- v2.9.0 outbox replay (server-only; used by SyncService) ---------
+
+  /// Replays a queued task add (server-only; 409 = already there).
+  Future<void> replayTaskAdd({
+    required bool weekly,
+    required String id,
+    required String title,
+    required String key,
+  }) async {
+    final userId = _requireUserId();
+    try {
+      await _d.createRow(
+        databaseId: _dbId,
+        tableId: weekly ? 'weekly_tasks' : 'monthly_tasks',
+        rowId: id,
+        data: weekly
+            ? {
+                'ownerUid': userId,
+                'title': title,
+                'weekStart': key,
+                'done': false,
+              }
+            : {
+                'ownerUid': userId,
+                'title': title,
+                'month': key,
+                'done': false,
+              },
+        permissions: _ownerPerms(userId),
+      );
+    } on AppwriteException catch (e) {
+      if (e.code != 409) rethrow;
+    }
+  }
+
+  /// Replays a queued task toggle (server-only). The server XP is
+  /// healed by the derived-XP recompute the sync runs afterwards.
+  Future<void> replayTaskToggle({
+    required bool weekly,
+    required String id,
+    required bool done,
+  }) async {
     return _writeQueue.run(() async {
-      final wasDone = await _taskDone('monthly_tasks', id);
+      await _d.updateRow(
+        databaseId: _dbId,
+        tableId: weekly ? 'weekly_tasks' : 'monthly_tasks',
+        rowId: id,
+        data: {'done': done},
+      );
+    });
+  }
+
+  /// Replays a queued task delete (server-only; 404 = already gone).
+  Future<void> replayTaskDelete({
+    required bool weekly,
+    required String id,
+  }) async {
+    try {
       await _d.deleteRow(
         databaseId: _dbId,
-        tableId: 'monthly_tasks',
+        tableId: weekly ? 'weekly_tasks' : 'monthly_tasks',
         rowId: id,
       );
-      if (wasDone == true) {
-        await _adjustXp(-xpPerTask);
-      }
-      _notifyChanged();
-    });
+    } on AppwriteException catch (e) {
+      if (e.code != 404) rethrow;
+    }
   }
 }
 
@@ -2259,11 +3603,12 @@ class SocialRepository {
     return user.uid;
   }
 
-  /// Id of the follow row for (me → [followingId]), or null when not
-  /// following. Follow rows are created with [ID.unique()] — a composite
-  /// id like '${followerId}_$followingId' is 41 chars, over Appwrite's
-  /// 36-char document-id limit, so it must be looked up, not computed.
-  Future<String?> _findFollowDocId(String followingId) async {
+  /// The follow row for (me → [followingId]) as raw JSON, or null
+  /// when not following. Follow rows are created with [ID.unique()] —
+  /// a composite id like '${followerId}_$followingId' is 41 chars,
+  /// over Appwrite's 36-char document-id limit, so it must be looked
+  /// up, not computed.
+  Future<Map<String, dynamic>?> _findFollowRow(String followingId) async {
     final userId = _requireUserId();
     final list = await _d.listRows(
       databaseId: _dbId,
@@ -2275,22 +3620,83 @@ class SocialRepository {
       ],
     );
     if (list.rows.isEmpty) return null;
-    return list.rows.first.$id;
+    return _docJson(list.rows.first);
   }
 
+  /// Id of the follow row for (me → [followingId]), or null when not
+  /// following.
+  Future<String?> _findFollowDocId(String followingId) async {
+    final row = await _findFollowRow(followingId);
+    return row?['id'] as String?;
+  }
+
+  /// The follow status of a row: 'accepted' when the `status`
+  /// attribute is missing or null (rows written before v2.9.0, and
+  /// the attribute's default), 'pending' for a follow request that
+  /// has not been accepted yet.
+  static String followStatusOf(Map<String, dynamic> row) {
+    return row['status'] as String? ?? 'accepted';
+  }
+
+  /// 'none' | 'pending' | 'accepted' — my follow state towards
+  /// [followingId]. A pending request is NOT "following".
+  Future<String> followStatus(String followingId) async {
+    final row = await _findFollowRow(followingId);
+    if (row == null) return 'none';
+    return followStatusOf(row);
+  }
+
+  /// Follows [followingId]. v2.9.0: a follow on a PUBLIC account is
+  /// direct (status 'accepted'); a follow on a PRIVATE account is a
+  /// REQUEST (status 'pending') — the other user accepts or declines
+  /// it in their Notifications. If the `status` attribute is not on
+  /// the live table yet, the row is created without it (accepted by
+  /// default) and the request model degrades to a direct follow.
   Future<void> follow(String followingId) async {
     final userId = _requireUserId();
-    await _d.createRow(
-      databaseId: _dbId,
-      tableId: 'follows',
-      rowId: ID.unique(),
-      data: {'followerUid': userId, 'followingUid': followingId},
-      permissions: [
-        Permission.read(Role.users()),
-        Permission.update(Role.user(userId)),
-        Permission.delete(Role.user(userId)),
-      ],
-    );
+    final profiles = ProfileRepository(db: _db);
+    final target = await profiles.fetchProfile(followingId);
+    final status = (target != null && !target.isPublic)
+        ? 'pending'
+        : 'accepted';
+    final data = <String, dynamic>{
+      'followerUid': userId,
+      'followingUid': followingId,
+      'status': status,
+    };
+    try {
+      await _d.createRow(
+        databaseId: _dbId,
+        tableId: 'follows',
+        rowId: ID.unique(),
+        data: data,
+        permissions: [
+          Permission.read(Role.users()),
+          Permission.update(Role.user(userId)),
+          Permission.delete(Role.user(userId)),
+        ],
+      );
+    } on AppwriteException catch (e) {
+      if (e.code == 400) {
+        // The `status` attribute is not on the live table yet.
+        await _d.createRow(
+          databaseId: _dbId,
+          tableId: 'follows',
+          rowId: ID.unique(),
+          data: {
+            'followerUid': userId,
+            'followingUid': followingId,
+          },
+          permissions: [
+            Permission.read(Role.users()),
+            Permission.update(Role.user(userId)),
+            Permission.delete(Role.user(userId)),
+          ],
+        );
+      } else {
+        rethrow;
+      }
+    }
   }
 
   Future<void> unfollow(String followingId) async {
@@ -2303,15 +3709,26 @@ class SocialRepository {
     );
   }
 
+  /// True only when the follow is ACCEPTED (a pending request is not
+  /// "following" — the button shows "Requested" instead).
   Future<bool> isFollowing(String followingId) async {
-    return (await _findFollowDocId(followingId)) != null;
+    return (await followStatus(followingId)) == 'accepted';
   }
 
-  Future<List<String>> followingIds() async {
-    // Paginated (was: first page only — a user with >25 follows lost
-    // the rest from the Friends leaderboard and the Following list).
-    final userId = _requireUserId();
-    final ids = <String>[];
+  /// The follow rows where I am the follower, newest first
+  /// (paginated). [onlyAccepted] drops pending requests.
+  /// The follow rows where [field] == [value] (paginated). [onlyAccepted]
+  /// drops pending requests. Order is the server's default (oldest
+  /// first) unless [newestFirst] is set — the id lists (followers /
+  /// following) keep the old order, only the Notifications entries
+  /// (requests + recent followers) need newest first.
+  Future<List<Map<String, dynamic>>> _followRowsWhere({
+    required String field,
+    required String value,
+    bool onlyAccepted = false,
+    bool newestFirst = false,
+  }) async {
+    final rows = <Map<String, dynamic>>[];
     const page = 100;
     var offset = 0;
     while (true) {
@@ -2319,41 +3736,142 @@ class SocialRepository {
         databaseId: _dbId,
         tableId: 'follows',
         queries: [
-          Query.equal('followerUid', userId),
+          Query.equal(field, value),
+          if (newestFirst) Query.orderDesc(r'$createdAt'),
           Query.limit(page),
           Query.offset(offset),
         ],
       );
-      ids.addAll(
-        list.rows.map((doc) => doc.data['followingUid'] as String),
-      );
+      for (final doc in list.rows) {
+        final row = _docJson(doc);
+        if (onlyAccepted && followStatusOf(row) != 'accepted') continue;
+        rows.add(row);
+      }
       if (list.rows.length < page) break;
       offset += page;
     }
-    return ids;
+    return rows;
   }
 
-  /// Ids of the users following me.
+  /// Ids of the users I follow (accepted only — a pending request is
+  /// not a follow yet).
+  Future<List<String>> followingIds() async {
+    final userId = _requireUserId();
+    final rows = await _followRowsWhere(
+      field: 'followerUid',
+      value: userId,
+      onlyAccepted: true,
+    );
+    return rows.map((r) => r['followingUid'] as String).toList();
+  }
+
+  /// Ids of the users following me (accepted only).
   Future<List<String>> followersIds() async {
     final userId = _requireUserId();
-    final ids = <String>[];
-    const page = 100;
-    var offset = 0;
-    while (true) {
-      final list = await _d.listRows(
-        databaseId: _dbId,
-        tableId: 'follows',
-        queries: [
-          Query.equal('followingUid', userId),
-          Query.limit(page),
-          Query.offset(offset),
-        ],
-      );
-      ids.addAll(list.rows.map((doc) => doc.data['followerUid'] as String));
-      if (list.rows.length < page) break;
-      offset += page;
+    final rows = await _followRowsWhere(
+      field: 'followingUid',
+      value: userId,
+      onlyAccepted: true,
+    );
+    return rows.map((r) => r['followerUid'] as String).toList();
+  }
+
+  /// Pending follow REQUESTS to me (v2.9.0): (follow doc id, the
+  /// requester's profile), newest first. Accept → 'accepted';
+  /// Decline → the row is deleted.
+  Future<List<(String, Profile)>> pendingFollowRequests() async {
+    final userId = _requireUserId();
+    final rows = await _followRowsWhere(
+      field: 'followingUid',
+      value: userId,
+      newestFirst: true,
+    );
+    final profilesRepo = ProfileRepository(db: _db);
+    final requests = <(String, Profile)>[];
+    for (final row in rows) {
+      if (followStatusOf(row) != 'pending') continue;
+      final followerId = row['followerUid'] as String?;
+      if (followerId == null) continue;
+      final profile = await profilesRepo.fetchProfile(followerId);
+      if (profile != null) {
+        requests.add(((row['id'] as String?) ?? '', profile));
+      }
     }
-    return ids;
+    return requests;
+  }
+
+  /// Recent followers (accepted, newest first, up to [limit]) — the
+  /// "X started following you" entries on the Notifications screen.
+  Future<List<Profile>> recentFollowers({int limit = 20}) async {
+    final userId = _requireUserId();
+    final rows = await _followRowsWhere(
+      field: 'followingUid',
+      value: userId,
+      onlyAccepted: true,
+      newestFirst: true,
+    );
+    final profilesRepo = ProfileRepository(db: _db);
+    final followers = <Profile>[];
+    for (final row in rows.take(limit)) {
+      final followerId = row['followerUid'] as String?;
+      if (followerId == null) continue;
+      final profile = await profilesRepo.fetchProfile(followerId);
+      if (profile != null) followers.add(profile);
+    }
+    return followers;
+  }
+
+  /// Accepts a pending follow request (v2.9.0).
+  Future<void> acceptFollowRequest(String docId) async {
+    await _d.updateRow(
+      databaseId: _dbId,
+      tableId: 'follows',
+      rowId: docId,
+      data: {'status': 'accepted'},
+    );
+  }
+
+  /// Declines a pending follow request (v2.9.0): the row is deleted.
+  Future<void> declineFollowRequest(String docId) async {
+    await _d.deleteRow(
+      databaseId: _dbId,
+      tableId: 'follows',
+      rowId: docId,
+    );
+  }
+
+  /// Ids of my mutual friends (v2.9.0): users where BOTH follow each
+  /// other, both accepted. A one-sided follow does NOT count.
+  Future<List<String>> mutualFriendIds() async {
+    final following = await followingIds();
+    final followers = await followersIds();
+    final followerSet = followers.toSet();
+    return following.where((id) => followerSet.contains(id)).toList();
+  }
+
+  /// Profiles of my mutual friends, sorted by display name.
+  Future<List<Profile>> mutualFriends() async {
+    final ids = await mutualFriendIds();
+    final profilesRepo = ProfileRepository(db: _db);
+    final profiles = <Profile>[];
+    for (final id in ids) {
+      final profile = await profilesRepo.fetchProfile(id);
+      if (profile != null) profiles.add(profile);
+    }
+    profiles.sort(
+      (a, b) =>
+          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
+    );
+    return profiles;
+  }
+
+  /// True when [userId] and I follow each other (both accepted) —
+  /// the only case a private account's habits are visible to me.
+  Future<bool> isMutual(String userId) async {
+    final following = await followingIds();
+    if (!following.contains(userId)) return false;
+    final followers = await followersIds();
+    return followers.contains(userId);
   }
 
   /// Public profiles of my followers (or the people I follow), sorted
@@ -2374,22 +3892,34 @@ class SocialRepository {
     return profiles;
   }
 
+  /// How many users [userId] follows (accepted only).
   Future<int> followingCount(String userId) async {
-    final list = await _d.listRows(
-      databaseId: _dbId,
-      tableId: 'follows',
-      queries: [Query.equal('followerUid', userId), Query.limit(1)],
+    final rows = await _followRowsWhere(
+      field: 'followerUid',
+      value: userId,
+      onlyAccepted: true,
     );
-    return list.total;
+    return rows.length;
   }
 
+  /// How many users follow [userId] (accepted only).
   Future<int> followersCount(String userId) async {
-    final list = await _d.listRows(
-      databaseId: _dbId,
-      tableId: 'follows',
-      queries: [Query.equal('followingUid', userId), Query.limit(1)],
+    final rows = await _followRowsWhere(
+      field: 'followingUid',
+      value: userId,
+      onlyAccepted: true,
     );
-    return list.total;
+    return rows.length;
+  }
+
+  /// How many follow requests are waiting for me (the bell badge).
+  Future<int> pendingRequestCount() async {
+    final userId = _requireUserId();
+    final rows = await _followRowsWhere(
+      field: 'followingUid',
+      value: userId,
+    );
+    return rows.where((r) => followStatusOf(r) == 'pending').length;
   }
 }
 

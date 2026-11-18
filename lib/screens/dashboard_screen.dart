@@ -531,7 +531,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           foregroundColor: AppTheme.inkSoft,
                           selectedBackgroundColor: AppTheme.ember,
                           selectedForegroundColor: AppTheme.ink,
-                          side: const BorderSide(color: AppTheme.cardBorder),
+                          side: BorderSide(color: AppTheme.cardBorder),
                         ),
                       ),
                     ),
@@ -570,7 +570,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         alignment: Alignment.centerLeft,
                         child: Text(
                           statsLine,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppTheme.inkSoft,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
@@ -797,7 +797,7 @@ class _TodayScoreCard extends StatelessWidget {
                   total == 0
                       ? pace
                       : 'Today: $done of $total done — $pct% • $pace',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppTheme.inkSoft,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -810,19 +810,19 @@ class _TodayScoreCard extends StatelessWidget {
             const SizedBox(height: 2),
             Text(
               "Today's XP: $todayXp XP ($doneHabitCount ${doneHabitCount == 1 ? 'habit' : 'habits'} done × $xpPerTask XP)",
-              style: const TextStyle(color: AppTheme.inkSoft, fontSize: 12),
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
             ),
           ],
           if (weekTotalItems > 0) ...[
             const SizedBox(height: 2),
             Text(
               'This week: $weekDoneItems of $weekTotalItems done — $weekPct%',
-              style: const TextStyle(color: AppTheme.inkSoft, fontSize: 12),
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
             ),
           ],
           if (total == 0) ...[
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Add a habit from Home and your score will show up here.',
               style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
             ),
@@ -831,7 +831,7 @@ class _TodayScoreCard extends StatelessWidget {
             if (doneItems.isNotEmpty) ...[
               Text(
                 'Done ($done)',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
                   color: AppTheme.inkSoft,
@@ -848,7 +848,7 @@ class _TodayScoreCard extends StatelessWidget {
               if (doneItems.isNotEmpty) const SizedBox(height: 8),
               Text(
                 'Still to do (${pendingItems.length})',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
                   color: AppTheme.inkSoft,
@@ -985,13 +985,13 @@ class _DailyHabitList extends StatelessWidget {
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                   ),
                 ),
-                const Icon(
+                Icon(
                   Icons.visibility_outlined,
                   color: AppTheme.inkSoft,
                   size: 15,
                 ),
                 const SizedBox(width: 4),
-                const Text(
+                Text(
                   'View only — tick from Home',
                   style: TextStyle(color: AppTheme.inkSoft, fontSize: 11),
                 ),
@@ -1025,7 +1025,7 @@ class _DailyHabitList extends StatelessWidget {
                     ),
                     Text(
                       _prettyDate(key),
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppTheme.inkSoft,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -1038,7 +1038,7 @@ class _DailyHabitList extends StatelessWidget {
           ),
           const Divider(height: 1),
           if (habits.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(14, 14, 14, 14),
               child: Text(
                 'No habits due this day.',
@@ -1053,7 +1053,7 @@ class _DailyHabitList extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
             child: Row(
               children: [
-                const Text(
+                Text(
                   'Done',
                   style: TextStyle(
                     fontWeight: FontWeight.w700,
@@ -1089,7 +1089,7 @@ class _DailyHabitList extends StatelessWidget {
 
   Widget _habitRow(Habit habit, String key) {
     final gradient =
-        AppTheme.habitGradients[habit.color % AppTheme.habitGradients.length];
+        AppTheme.gradientForHabitColor(habit.color);
     final due = dueSubtasks(
       subtasksByHabit[habit.id] ?? const <HabitSubtask>[],
       key,
@@ -1098,7 +1098,7 @@ class _DailyHabitList extends StatelessWidget {
     final doneSubs = due.where((s) => doneSubtaskIds.contains(s.id)).length;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 10),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: AppTheme.cardBorder)),
       ),
       child: Padding(
@@ -1134,7 +1134,7 @@ class _DailyHabitList extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       '$doneSubs/${due.length} sub-tasks done',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppTheme.inkSoft,
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -1159,7 +1159,8 @@ class _DailyHabitList extends StatelessWidget {
                         : Border.all(color: AppTheme.cardBorder, width: 1.5),
                   ),
                   child: done
-                      ? const Icon(Icons.check, color: AppTheme.ink, size: 16)
+                      // On the violet gradient when done — always white.
+                      ? Icon(Icons.check, color: AppTheme.onAccent, size: 16)
                       : null,
                 ),
                 const SizedBox(height: 3),
@@ -1240,13 +1241,13 @@ class _HabitTable extends StatelessWidget {
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                   ),
                 ),
-                const Icon(
+                Icon(
                   Icons.visibility_outlined,
                   color: AppTheme.inkSoft,
                   size: 15,
                 ),
                 const SizedBox(width: 4),
-                const Text(
+                Text(
                   'View only — tick from Home',
                   style: TextStyle(color: AppTheme.inkSoft, fontSize: 11),
                 ),
@@ -1262,7 +1263,7 @@ class _HabitTable extends StatelessWidget {
                   // Header row: "Habit" + one column per date.
                   Row(
                     children: [
-                      const SizedBox(
+                      SizedBox(
                         width: _nameWidth,
                         child: Padding(
                           padding: EdgeInsets.only(left: 14),
@@ -1287,7 +1288,7 @@ class _HabitTable extends StatelessWidget {
                   // Footer: done count per day.
                   Row(
                     children: [
-                      const SizedBox(
+                      SizedBox(
                         width: _nameWidth,
                         child: Padding(
                           padding: EdgeInsets.only(left: 14),
@@ -1363,10 +1364,10 @@ class _HabitTable extends StatelessWidget {
 
   Widget _habitRow(Habit habit) {
     final gradient =
-        AppTheme.habitGradients[habit.color % AppTheme.habitGradients.length];
+        AppTheme.gradientForHabitColor(habit.color);
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 7),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: AppTheme.cardBorder)),
       ),
       child: Row(
@@ -1428,7 +1429,8 @@ class _HabitTable extends StatelessWidget {
                 : Border.all(color: AppTheme.cardBorder, width: 1.5),
           ),
           child: done
-              ? const Icon(Icons.check, color: AppTheme.ink, size: 13)
+              // On the violet gradient when done — always white.
+              ? Icon(Icons.check, color: AppTheme.onAccent, size: 13)
               : null,
         ),
       ),
@@ -1545,7 +1547,7 @@ class _ChartsCard extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text(
                   title.$1,
-                  style: const TextStyle(color: AppTheme.inkSoft, fontSize: 12),
+                  style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
                 ),
               ],
             ),
@@ -1580,7 +1582,7 @@ class _ChartsCard extends StatelessWidget {
               : period == _DashboardPeriod.weekly
                   ? 'Daily completions — this week'
                   : 'Daily completions — this month',
-          style: const TextStyle(color: AppTheme.inkSoft, fontSize: 12),
+          style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
         ),
         const SizedBox(height: 6),
         _lineChart(),
@@ -1604,7 +1606,7 @@ class _ChartsCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             title.$2,
-            style: const TextStyle(color: AppTheme.inkSoft, fontSize: 12),
+            style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
           ),
           const SizedBox(height: 10),
           LayoutBuilder(
@@ -1688,7 +1690,7 @@ class _ChartsCard extends StatelessWidget {
                 isDaily
                     ? '${habits[group.x].title}: ${rod.toY.toInt() == 1 ? 'Done' : 'Not done'}'
                     : 'Day ${group.x}: ${rod.toY.toInt()} done',
-                const TextStyle(
+                TextStyle(
                   color: AppTheme.ink,
                   fontWeight: FontWeight.w700,
                   fontSize: 12,
@@ -1710,7 +1712,7 @@ class _ChartsCard extends StatelessWidget {
                 interval: 1,
                 getTitlesWidget: (value, _) => Text(
                   value.toInt().toString(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppTheme.inkSoft,
                     fontSize: 10,
                   ),
@@ -1735,7 +1737,7 @@ class _ChartsCard extends StatelessWidget {
                       padding: const EdgeInsets.only(top: 4),
                       child: Text(
                         short,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppTheme.inkSoft,
                           fontSize: 10,
                         ),
@@ -1753,7 +1755,7 @@ class _ChartsCard extends StatelessWidget {
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
                       label,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppTheme.inkSoft,
                         fontSize: 10,
                       ),
@@ -1844,7 +1846,7 @@ class _ChartsCard extends StatelessWidget {
             drawVerticalLine: false,
             horizontalInterval: 1,
             getDrawingHorizontalLine: (_) =>
-                const FlLine(color: AppTheme.cardBorder, strokeWidth: 1),
+                FlLine(color: AppTheme.cardBorder, strokeWidth: 1),
           ),
           borderData: FlBorderData(show: false),
           lineTouchData: LineTouchData(
@@ -1855,7 +1857,7 @@ class _ChartsCard extends StatelessWidget {
                     final date = lineDates[spot.x.toInt()];
                     return LineTooltipItem(
                       '${_prettyDate(dateKey(date))}: ${spot.y.toInt()} done',
-                      const TextStyle(
+                      TextStyle(
                         color: AppTheme.ink,
                         fontWeight: FontWeight.w700,
                         fontSize: 12,
@@ -1879,7 +1881,7 @@ class _ChartsCard extends StatelessWidget {
                 interval: 1,
                 getTitlesWidget: (value, _) => Text(
                   value.toInt().toString(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppTheme.inkSoft,
                     fontSize: 10,
                   ),
@@ -1911,7 +1913,7 @@ class _ChartsCard extends StatelessWidget {
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
                       label,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppTheme.inkSoft,
                         fontSize: 10,
                       ),
@@ -1994,7 +1996,7 @@ class _ChartEmptyState extends StatelessWidget {
             Text(
               subtitle,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: AppTheme.inkSoft, fontSize: 12),
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
             ),
           ],
         ),
@@ -2065,18 +2067,18 @@ class _XpLedgerCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             '${entries.length} entries × $xpPerTask XP = $ledgerTotal XP',
-            style: const TextStyle(color: AppTheme.inkSoft, fontSize: 12),
+            style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
           ),
           if (profileXp != ledgerTotal) ...[
             const SizedBox(height: 4),
             Text(
               'Your profile shows $profileXp XP — the ledger above is the true count and will match after the next sync.',
-              style: const TextStyle(color: AppTheme.inkSoft, fontSize: 12),
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
             ),
           ],
           const SizedBox(height: 10),
           if (entries.isEmpty)
-            const Text(
+            Text(
               'No XP yet — complete a habit or a task and it will show up here.',
               style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
             )
@@ -2119,7 +2121,7 @@ class _XpLedgerCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text(
                       entry.dateLabel,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppTheme.inkSoft,
                         fontSize: 12,
                       ),
@@ -2133,7 +2135,7 @@ class _XpLedgerCard extends StatelessWidget {
               padding: const EdgeInsets.only(top: 4),
               child: Text(
                 'Showing the latest $shownLimit of ${entries.length} entries.',
-                style: const TextStyle(color: AppTheme.inkSoft, fontSize: 12),
+                style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
               ),
             ),
         ],

@@ -439,19 +439,20 @@ void main() {
     expect(find.text('Log out'), findsOneWidget);
     // About is clean: plain version only, no build suffix, no tech mentions.
     expect(
-      find.text('Version 2.8.5'),
+      find.text('Version 2.9.0'),
       findsOneWidget,
     );
-    expect(find.textContaining('+19'), findsNothing);
+    expect(find.textContaining('+20'), findsNothing);
     expect(find.textContaining('Flutter'), findsNothing);
     expect(find.textContaining('Appwrite'), findsNothing);
 
     // Tapping About opens the dialog with the app description.
-    await tester.scrollUntilVisible(
-      find.text('About Life Game'),
-      400,
-      scrollable: find.byType(Scrollable).first,
-    );
+    // ensureVisible (not scrollUntilVisible): the Settings card grew
+    // in v2.9.0 (theme + visibility + discoverable rows), so About
+    // can sit above the current scroll position — scrollUntilVisible
+    // only scrolls one way and left it off-screen.
+    await tester.ensureVisible(find.text('About Life Game'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('About Life Game'));
     await tester.pumpAndSettle();
     expect(
@@ -460,10 +461,10 @@ void main() {
     );
     expect(find.textContaining('Recruit to Legend'), findsOneWidget);
     expect(
-      find.text('Version 2.8.5'),
+      find.text('Version 2.9.0'),
       findsWidgets,
     );
-    expect(find.textContaining('+19'), findsNothing);
+    expect(find.textContaining('+20'), findsNothing);
     expect(find.textContaining('Flutter'), findsNothing);
     expect(find.textContaining('Appwrite'), findsNothing);
   });
@@ -963,6 +964,14 @@ void main() {
     // title and the nav pill label. 'Home' is gone from the nav.
     expect(find.text('Dashboard'), findsWidgets);
     expect(find.text('Home'), findsNothing);
+
+    // v2.9.0: four tabs — the Reminders tab opens the chat screen,
+    // and its 9-letter label fits the 58px bar on one line (no
+    // overflow at 390px wide).
+    await tester.tap(find.byIcon(Icons.chat_bubble_outline));
+    await tester.pumpAndSettle();
+    expect(find.text('Reminders'), findsWidgets);
+    expect(find.text('Dashboard'), findsNothing);
   });
 }
 

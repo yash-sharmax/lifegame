@@ -6,8 +6,25 @@ import '../data/repositories.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
+/// Shows an error as a SnackBar. v2.9.0: a NETWORK failure is a small
+/// subtle line (short text, the card background — never the big red /
+/// flame banner), because offline is a normal state the app handles
+/// by working from its local cache. A real (non-network) error keeps
+/// the existing red SnackBar.
 void showError(BuildContext context, Object e) {
   final message = e is AuthException ? e.message : e.toString();
+  if (isNetworkError(e)) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          "You're offline — changes will sync when you're back online.",
+          style: const TextStyle(fontSize: 13),
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+    return;
+  }
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(content: Text(message), backgroundColor: AppTheme.flame),
   );
@@ -52,6 +69,8 @@ class _AuthScreenState extends State<AuthScreen> {
   final _displayName = TextEditingController();
   bool _busy = false;
   bool _obscure = true;
+  // Account visibility (v2.9.0): Public by default.
+  String _visibility = 'public';
 
   AuthRepository get _auth => widget.authRepo ?? AuthRepository();
 
@@ -102,6 +121,7 @@ class _AuthScreenState extends State<AuthScreen> {
             displayName: _displayName.text.trim().isEmpty
                 ? username
                 : _displayName.text.trim(),
+            visibility: _visibility,
           );
           if (!mounted) return;
           if (!hasSession) {
@@ -169,14 +189,14 @@ class _AuthScreenState extends State<AuthScreen> {
                               gradient: AppTheme.heroGradient,
                               shape: BoxShape.circle,
                             ),
-                            child: const Icon(
+                            child: Icon(
                               Icons.shield,
                               color: AppTheme.ink,
                               size: 34,
                             ),
                           ),
                           const SizedBox(width: 12),
-                          const Text(
+                          Text(
                             'Life Game',
                             style: TextStyle(
                               color: AppTheme.ink,
@@ -188,7 +208,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         ],
                       ).animate().fadeIn().slideY(begin: -0.2),
                       const SizedBox(height: 8),
-                      const Text(
+                      Text(
                         'Small steps, every day.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
@@ -215,7 +235,7 @@ class _AuthScreenState extends State<AuthScreen> {
                             const SizedBox(height: 6),
                             Text(
                               _subtitle,
-                              style: const TextStyle(color: AppTheme.inkSoft),
+                              style: TextStyle(color: AppTheme.inkSoft),
                             ),
                             if (!AppConfig.isConfigured) ...[
                               const SizedBox(height: 16),
@@ -350,6 +370,14 @@ class _AuthScreenState extends State<AuthScreen> {
                                     ? null
                                     : 'Passwords do not match',
                               ),
+                              const SizedBox(height: 18),
+                              // Account visibility (v2.9.0): who can see
+                              // my habits. Public by default.
+                              _VisibilitySelector(
+                                value: _visibility,
+                                onChanged: (v) =>
+                                    setState(() => _visibility = v),
+                              ),
                             ],
                             if (_mode != AuthMode.forgot)
                               const SizedBox(height: 8),
@@ -381,7 +409,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                     _mode == AuthMode.login
                                         ? "New to Life Game?"
                                         : "Already have an account?",
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       color: AppTheme.inkSoft,
                                     ),
                                     overflow: TextOverflow.ellipsis,
@@ -424,6 +452,107 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 }
 
+/// The Public / Private account choice (v2.9.0), shared by signup
+/// and the one-time username setup: two options, each with a one-line
+/// explanation. Public is the default.
+class _VisibilitySelector extends StatelessWidget {
+  const _VisibilitySelector({required this.value, required this.onChanged});
+
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Who can see your habits?',
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+        ),
+        const SizedBox(height: 8),
+        _VisibilityOption(
+          title: 'Public',
+          subtitle: 'Anyone can see your habits',
+          selected: value == 'public',
+          onTap: () => onChanged('public'),
+        ),
+        const SizedBox(height: 8),
+        _VisibilityOption(
+          title: 'Private',
+          subtitle: 'Only mutual friends can see your habits',
+          selected: value == 'private',
+          onTap: () => onChanged('private'),
+        ),
+      ],
+    );
+  }
+}
+
+class _VisibilityOption extends StatelessWidget {
+  const _VisibilityOption({
+    required this.title,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected
+          ? AppTheme.ember.withValues(alpha: 0.12)
+          : AppTheme.card,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected ? AppTheme.ember : AppTheme.cardBorder,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: AppTheme.inkSoft,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (selected)
+                const Icon(Icons.check_circle, color: AppTheme.ember),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Shown after sign-in when the user has no profile row yet
 /// (e.g. signed up with Google, or email confirmation finished).
 /// Collects the unique username once.
@@ -442,6 +571,8 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   final _username = TextEditingController();
   final _displayName = TextEditingController();
   bool _busy = false;
+  // Account visibility (v2.9.0): Public by default.
+  String _visibility = 'public';
 
   @override
   void initState() {
@@ -475,6 +606,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         displayName: _displayName.text.trim().isEmpty
             ? username
             : _displayName.text.trim(),
+        visibility: _visibility,
       );
     } on AuthException catch (e) {
       if (mounted) showError(context, e);
@@ -509,7 +641,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    const Text(
+                    Text(
                       'This is how friends find you and how you appear on the leaderboard.',
                       style: TextStyle(color: AppTheme.inkSoft, fontSize: 15),
                     ),
@@ -537,6 +669,11 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                         }
                         return null;
                       },
+                    ),
+                    const SizedBox(height: 24),
+                    _VisibilitySelector(
+                      value: _visibility,
+                      onChanged: (v) => setState(() => _visibility = v),
                     ),
                     const SizedBox(height: 24),
                     GradientButton(
@@ -636,7 +773,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text(
+                  Text(
                     'Choose a new password for your Life Game account.',
                     style: TextStyle(color: AppTheme.inkSoft, fontSize: 15),
                   ),

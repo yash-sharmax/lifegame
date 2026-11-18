@@ -26,7 +26,9 @@ class _SearchScreenState extends State<SearchScreen> {
 
   final _query = TextEditingController();
   List<Profile> _results = [];
-  Map<String, bool> _following = {};
+  // v2.9.0: the follow status per result — 'none', 'pending'
+  // (request sent to a private account) or 'accepted'.
+  Map<String, String> _followStatus = {};
   bool _searching = false;
   bool _searched = false;
 
@@ -46,16 +48,16 @@ class _SearchScreenState extends State<SearchScreen> {
     try {
       final me = await _profiles.fetchMyProfile();
       final results = await _profiles.searchProfiles(q);
-      final following = <String, bool>{};
+      final statuses = <String, String>{};
       for (final p in results) {
         if (p.id != me?.id) {
-          following[p.id] = await _social.isFollowing(p.id);
+          statuses[p.id] = await _social.followStatus(p.id);
         }
       }
       if (!mounted) return;
       setState(() {
         _results = results.where((p) => p.id != me?.id).toList();
-        _following = following;
+        _followStatus = statuses;
         _searching = false;
       });
     } on AuthException catch (e) {
@@ -72,15 +74,21 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   Future<void> _toggleFollow(Profile profile) async {
-    final currently = _following[profile.id] ?? false;
+    final status = _followStatus[profile.id] ?? 'none';
     try {
-      if (currently) {
-        await _social.unfollow(profile.id);
-      } else {
+      if (status == 'none') {
         await _social.follow(profile.id);
+        // Public accounts land on 'accepted', private ones stay
+        // 'pending' — ask the server which it is.
+        final fresh = await _social.followStatus(profile.id);
+        if (!mounted) return;
+        setState(() => _followStatus[profile.id] = fresh);
+      } else {
+        // 'accepted' = unfollow, 'pending' = cancel the request.
+        await _social.unfollow(profile.id);
+        if (!mounted) return;
+        setState(() => _followStatus[profile.id] = 'none');
       }
-      if (!mounted) return;
-      setState(() => _following[profile.id] = !currently);
     } on AuthException catch (e) {
       if (mounted) showError(context, e);
     } catch (e) {
@@ -100,7 +108,7 @@ class _SearchScreenState extends State<SearchScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
           children: [
-            const Text(
+            Text(
               'Search by username or name, follow friends and compare ranks on the Friends board.',
               style: TextStyle(color: AppTheme.inkSoft, fontSize: 14),
             ),
@@ -150,13 +158,13 @@ class _SearchScreenState extends State<SearchScreen> {
           else
             ..._results.asMap().entries.map((entry) {
               final profile = entry.value;
-              final following = _following[profile.id] ?? false;
+              final status = _followStatus[profile.id] ?? 'none';
               return Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child:
                     _SearchRow(
                           profile: profile,
-                          following: following,
+                          followStatus: status,
                           onToggleFollow: () => _toggleFollow(profile),
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute(
@@ -180,13 +188,15 @@ class _SearchScreenState extends State<SearchScreen> {
 class _SearchRow extends StatelessWidget {
   const _SearchRow({
     required this.profile,
-    required this.following,
+    required this.followStatus,
     required this.onToggleFollow,
     required this.onTap,
   });
 
   final Profile profile;
-  final bool following;
+
+  /// 'none' | 'pending' | 'accepted'.
+  final String followStatus;
   final VoidCallback onToggleFollow;
   final VoidCallback onTap;
 
@@ -222,7 +232,7 @@ class _SearchRow extends StatelessWidget {
                       '${rankNameForLevel(levelForXp(profile.xp))} • '
                       '${profile.xp} XP • '
                       '${profile.currentStreak} day streak',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppTheme.inkSoft,
                         fontSize: 13,
                       ),
@@ -233,10 +243,14 @@ class _SearchRow extends StatelessWidget {
               FilledButton(
                 onPressed: onToggleFollow,
                 style: FilledButton.styleFrom(
-                  backgroundColor: following
-                      ? AppTheme.cardBorder
-                      : AppTheme.ember,
-                  foregroundColor: AppTheme.ink,
+                  backgroundColor: followStatus == 'none'
+                      ? AppTheme.ember
+                      : AppTheme.cardBorder,
+                  // White text on the violet button, normal text on
+                  // the grey one.
+                  foregroundColor: followStatus == 'none'
+                      ? AppTheme.onAccent
+                      : AppTheme.ink,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 10,
@@ -244,7 +258,11 @@ class _SearchRow extends StatelessWidget {
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                child: Text(following ? 'Following' : 'Follow'),
+                child: Text(switch (followStatus) {
+                  'accepted' => 'Following',
+                  'pending' => 'Requested',
+                  _ => 'Follow',
+                }),
               ),
             ],
           ),

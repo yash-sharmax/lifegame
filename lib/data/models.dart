@@ -29,6 +29,8 @@ class Profile {
     this.longestStreak = 0,
     this.lastActiveDate,
     this.createdAt,
+    this.visibility = 'public',
+    this.discoverable = true,
   });
 
   factory Profile.fromJson(Map<String, dynamic> json) => Profile(
@@ -42,6 +44,11 @@ class Profile {
     longestStreak: (json['longestStreak'] as num?)?.toInt() ?? 0,
     lastActiveDate: json['lastActiveDate'] as String?,
     createdAt: _createdAt(json),
+    // v2.9.0: null-safe — the attributes are being added to the live
+    // table in parallel; a row written before they existed reads as
+    // the default (public + discoverable).
+    visibility: json['visibility'] as String? ?? 'public',
+    discoverable: json['discoverable'] as bool? ?? true,
   );
 
   /// The document fields for a brand-new profile (XP starts at 0).
@@ -55,6 +62,8 @@ class Profile {
     'currentStreak': currentStreak,
     'longestStreak': longestStreak,
     'lastActiveDate': lastActiveDate,
+    'visibility': visibility,
+    'discoverable': discoverable,
   };
 
   final String id;
@@ -67,6 +76,18 @@ class Profile {
   final int longestStreak;
   final String? lastActiveDate;
   final DateTime? createdAt;
+
+  /// 'public' or 'private' (v2.9.0). Public: anyone can see my habits
+  /// on my profile. Private: only mutual friends can.
+  final String visibility;
+
+  /// False hides me from the Leaderboard and Search (v2.9.0). People
+  /// who already follow me, or open my profile directly, can still
+  /// see it (subject to [visibility]).
+  final bool discoverable;
+
+  /// True when other users may see my habits on my profile.
+  bool get isPublic => visibility != 'private';
 
   String get initials {
     final source = displayName.isNotEmpty ? displayName : username;
@@ -92,6 +113,8 @@ class Profile {
     String? lastActiveDate,
     String? displayName,
     String? bio,
+    String? visibility,
+    bool? discoverable,
   }) => Profile(
     id: id,
     username: username,
@@ -103,6 +126,8 @@ class Profile {
     longestStreak: longestStreak ?? this.longestStreak,
     lastActiveDate: lastActiveDate ?? this.lastActiveDate,
     createdAt: createdAt,
+    visibility: visibility ?? this.visibility,
+    discoverable: discoverable ?? this.discoverable,
   );
 }
 
@@ -139,6 +164,26 @@ class Habit {
     'color': color,
     'archived': archived,
   };
+
+  /// Local-cache JSON (v2.9.0 offline-first): the full habit,
+  /// including id + notes, so the app can show it with no network.
+  Map<String, dynamic> toLocalJson() => {
+    'id': id,
+    'ownerUid': userId,
+    'title': title,
+    'color': color,
+    'archived': archived,
+    'notes': notes,
+  };
+
+  factory Habit.fromLocalJson(Map<String, dynamic> json) => Habit(
+    id: json['id'] as String,
+    userId: json['ownerUid'] as String? ?? '',
+    title: json['title'] as String? ?? '',
+    color: (json['color'] as num?)?.toInt() ?? 0xFFF59E0B,
+    archived: json['archived'] as bool? ?? false,
+    notes: json['notes'] as String? ?? '',
+  );
 
   final String id;
   final String userId;
@@ -181,6 +226,17 @@ class HabitLog {
     completed: json['completed'] as bool? ?? true,
     xpEarned: (json['xpEarned'] as num?)?.toInt() ?? 0,
   );
+
+  /// Local-cache JSON (v2.9.0 offline-first). Round-trips through
+  /// fromJson: the same keys the server document carries.
+  Map<String, dynamic> toLocalJson() => {
+    'id': id,
+    'habitId': habitId,
+    'ownerUid': userId,
+    'date': logDate,
+    'completed': completed,
+    'xpEarned': xpEarned,
+  };
 
   final String id;
   final String habitId;
@@ -315,6 +371,18 @@ class WeeklyTask {
     done: json['done'] as bool? ?? false,
   );
 
+  /// Local-cache JSON (v2.9.0 offline-first).
+  Map<String, dynamic> toLocalJson() => {
+    'id': id,
+    'ownerUid': userId,
+    'title': title,
+    'weekStart': weekStart,
+    'done': done,
+  };
+
+  factory WeeklyTask.fromLocalJson(Map<String, dynamic> json) =>
+      WeeklyTask.fromJson(json);
+
   final String id;
   final String userId;
   final String title;
@@ -338,6 +406,18 @@ class MonthlyTask {
     month: json['month'] as String,
     done: json['done'] as bool? ?? false,
   );
+
+  /// Local-cache JSON (v2.9.0 offline-first).
+  Map<String, dynamic> toLocalJson() => {
+    'id': id,
+    'ownerUid': userId,
+    'title': title,
+    'month': month,
+    'done': done,
+  };
+
+  factory MonthlyTask.fromLocalJson(Map<String, dynamic> json) =>
+      MonthlyTask.fromJson(json);
 
   final String id;
   final String userId;
@@ -553,4 +633,104 @@ class Challenge {
   final List<String> memberIds;
 
   Set<String> get habitIds => habits.map((h) => h.habitId).toSet();
+}
+
+// ---------------------------------------------------------------------------
+// v2.9.0: chat reminders (the Reminders tab).
+//
+// A chat-style reminder is a plain-language message the user typed
+// ("Adrak aur kaali mirch lana hai at 6pm") that the app parsed into
+// a scheduled time (see logic/chat_reminders.dart). Both the chat
+// history and the scheduled reminders live in LOCAL storage
+// (SharedPreferences) — the source of truth; they never block on the
+// network, and the Android exact alarm fires even with the app closed.
+// ---------------------------------------------------------------------------
+
+/// One bubble in the Reminders chat: the user's message or the bot's
+/// reply (confirmation, tip, or "couldn't find a time").
+class ChatMessage {
+  const ChatMessage({
+    required this.id,
+    required this.ownerId,
+    required this.role,
+    required this.text,
+    required this.createdAt,
+  });
+
+  factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
+    id: json['id'] as String? ?? '',
+    ownerId: json['ownerId'] as String? ?? '',
+    role: json['role'] as String? ?? 'user',
+    text: json['text'] as String? ?? '',
+    createdAt: _parseDate(json['createdAt']) ?? DateTime.now(),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'ownerId': ownerId,
+    'role': role,
+    'text': text,
+    'createdAt': createdAt.toIso8601String(),
+  };
+
+  final String id;
+  final String ownerId;
+
+  /// 'user' or 'assistant'.
+  final String role;
+  final String text;
+  final DateTime createdAt;
+}
+
+/// One scheduled reminder created from a chat message.
+class ChatReminder {
+  const ChatReminder({
+    required this.id,
+    required this.ownerId,
+    required this.text,
+    required this.scheduledAt,
+    required this.createdAt,
+    this.fired = false,
+  });
+
+  factory ChatReminder.fromJson(Map<String, dynamic> json) => ChatReminder(
+    id: json['id'] as String? ?? '',
+    ownerId: json['ownerId'] as String? ?? '',
+    text: json['text'] as String? ?? '',
+    scheduledAt:
+        _parseDate(json['scheduledAt']) ?? DateTime.now(),
+    createdAt: _parseDate(json['createdAt']) ?? DateTime.now(),
+    fired: json['fired'] as bool? ?? false,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'ownerId': ownerId,
+    'text': text,
+    'scheduledAt': scheduledAt.toIso8601String(),
+    'createdAt': createdAt.toIso8601String(),
+    'fired': fired,
+  };
+
+  ChatReminder copyWith({bool? fired}) => ChatReminder(
+    id: id,
+    ownerId: ownerId,
+    text: text,
+    scheduledAt: scheduledAt,
+    createdAt: createdAt,
+    fired: fired ?? this.fired,
+  );
+
+  final String id;
+  final String ownerId;
+
+  /// The reminder text (time/date part removed).
+  final String text;
+
+  /// When it fires (local time).
+  final DateTime scheduledAt;
+  final DateTime createdAt;
+
+  /// True once it has fired (so it never fires twice).
+  final bool fired;
 }

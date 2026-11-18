@@ -11,6 +11,17 @@ import 'profile_screen.dart';
 
 /// Leaderboard with two tabs: Global (everyone by XP) and Friends
 /// (people you follow + you, by XP).
+///
+/// Redesign (18 Nov 2026): the layout type of the reference the user
+/// shared — a header, a week strip (current week + days left) with
+/// the user's own rank line beside it, and clean ranked rows (rank
+/// number, avatar with a level badge, name, XP on the right) —
+///
+/// adapted to Life Game's own clean professional navy/violet
+/// identity, NOT a clone of the other app: no "Live" badge (the user
+/// asked what it would even mean here), no league system, ranking
+/// still by XP, and hidden accounts (discoverable == false) still
+/// never appear (see ProfileRepository.fetchGlobalLeaderboard).
 class LeaderboardScreen extends StatefulWidget {
   const LeaderboardScreen({super.key, this.profileRepo});
 
@@ -28,7 +39,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
   List<LeaderboardEntry> _global = [];
   List<LeaderboardEntry> _friends = [];
   bool _loading = true;
-  String _myId = '';
+  Profile? _me;
 
   @override
   void initState() {
@@ -53,7 +64,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
       setState(() {
         _global = global;
         _friends = friends;
-        _myId = me?.id ?? '';
+        _me = me;
         _loading = false;
       });
     } on AuthException catch (e) {
@@ -89,6 +100,13 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
         maxWidth: 980,
         child: Column(
           children: [
+            // Week strip + my rank line (18 Nov 2026 redesign).
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+              child: _loading
+                  ? const SkeletonBox(height: 64, borderRadius: 16)
+                  : _WeekStrip(me: _me),
+            ),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
               child: Container(
@@ -104,7 +122,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
                     borderRadius: BorderRadius.circular(12),
                   ),
                   indicatorSize: TabBarIndicatorSize.tab,
-                  labelColor: AppTheme.ink,
+                  labelColor: AppTheme.onAccent,
                   unselectedLabelColor: AppTheme.inkSoft,
                   labelStyle: const TextStyle(fontWeight: FontWeight.w700),
                   tabs: const [
@@ -131,10 +149,10 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
                   : TabBarView(
                       controller: _tabs,
                       children: [
-                        _BoardList(entries: _global, myId: _myId),
+                        _BoardList(entries: _global, myId: _me?.id ?? ''),
                         _BoardList(
                           entries: _friends,
-                          myId: _myId,
+                          myId: _me?.id ?? '',
                           emptyTitle: 'No friends on the board yet',
                           emptySubtitle: 'Follow people from Search and they will show up here.',
                         ),
@@ -143,6 +161,86 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The week strip under the header: on the left the current week
+/// (Monday–Sunday) with the days left in it; on the right the
+/// viewer's own rank and how much XP the next rank needs — or, at
+/// Legend, that it is the top rank.
+class _WeekStrip extends StatelessWidget {
+  const _WeekStrip({required this.me});
+
+  final Profile? me;
+
+  @override
+  Widget build(BuildContext context) {
+    final daysLeft = daysLeftInWeek();
+    final endsText = daysLeft == 0
+        ? 'Ends today'
+        : 'Ends in $daysLeft ${daysLeft == 1 ? 'day' : 'days'}';
+    final xp = me?.xp ?? 0;
+    final rank = rankNameForXp(xp);
+    final nextRank = nextRankNameForXp(xp);
+    final toNext = xpToNextRank(xp);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.cardBorder),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  weekRangeLabel(),
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  endsText,
+                  style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.shield, color: AppTheme.ember, size: 15),
+                  const SizedBox(width: 5),
+                  Text(
+                    rank,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 3),
+              Text(
+                nextRank == null
+                    ? 'Legend — top rank'
+                    : '$toNext XP more for $nextRank',
+                style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -235,19 +333,53 @@ class _LeaderboardRow extends StatelessWidget {
           ),
           child: Row(
             children: [
+              // Rank number on the far left (top 3 tinted gold /
+              // silver / bronze, the rest muted).
               SizedBox(
-                width: 34,
-                child: entry.rank <= 3
-                    ? Icon(Icons.emoji_events, color: _rankColor, size: 26)
-                    : Text(
-                        '#${entry.rank}',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: AppTheme.inkSoft,
+                width: 30,
+                child: Text(
+                  '${entry.rank}',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: _rankColor,
+                  ),
+                ),
+              ),
+              // Avatar with a small level badge, like the reference's
+              // avatar badge — the level is visible right on the row.
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  AvatarCircle(initials: profile.initials, size: 46),
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: Container(
+                      width: 20,
+                      height: 20,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: AppTheme.ember,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: AppTheme.card,
+                          width: 2,
                         ),
                       ),
+                      child: Text(
+                        '$level',
+                        style: TextStyle(
+                          // White on the violet badge.
+                          color: AppTheme.onAccent,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              AvatarCircle(initials: profile.initials, size: 46),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -260,78 +392,19 @@ class _LeaderboardRow extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        Text(
-                          '@${profile.username}',
-                          style: const TextStyle(
-                            color: AppTheme.inkSoft,
-                            fontSize: 13,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        // Warrior rank chip: who is at what level is
-                        // visible right on the row (18 Nov 2026).
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppTheme.ember.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.shield,
-                                color: AppTheme.ember,
-                                size: 12,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                'LVL $level • ${rank.toUpperCase()}',
-                                style: const TextStyle(
-                                  color: AppTheme.ember,
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 11,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+                    Text(
+                      '@${profile.username} • $rank',
+                      style: TextStyle(
+                        color: AppTheme.inkSoft,
+                        fontSize: 13,
+                      ),
                     ),
                   ],
                 ),
               ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    '${profile.xp} XP',
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.local_fire_department,
-                        color: AppTheme.flame,
-                        size: 15,
-                      ),
-                      Text(
-                        ' ${profile.currentStreak}',
-                        style: const TextStyle(
-                          color: AppTheme.inkSoft,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+              Text(
+                '${profile.xp} XP',
+                style: const TextStyle(fontWeight: FontWeight.w800),
               ),
             ],
           ),

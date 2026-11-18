@@ -114,6 +114,66 @@ String weekStartKey([DateTime? date]) {
   return dateKey(monday);
 }
 
+// Sunday of the week containing [date].
+DateTime weekEndDate([DateTime? date]) {
+  final d = date ?? DateTime.now();
+  return d.add(Duration(days: 7 - d.weekday));
+}
+
+// Days left in the current week (Monday–Sunday): 6 on Monday, 0 on
+// Sunday ("Ends today").
+int daysLeftInWeek([DateTime? date]) {
+  final d = date ?? DateTime.now();
+  return 7 - d.weekday;
+}
+
+const _monthShortNames = [
+  '',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+// The current week as a short range, e.g. "Nov 16 - 22" (or
+// "Nov 30 - Dec 6" when the week spans two months). Used on the
+// leaderboard header (18 Nov 2026).
+String weekRangeLabel([DateTime? date]) {
+  final d = date ?? DateTime.now();
+  final monday = d.subtract(Duration(days: d.weekday - 1));
+  final sunday = d.add(Duration(days: 7 - d.weekday));
+  if (monday.month == sunday.month) {
+    return '${_monthShortNames[monday.month]} ${monday.day} - ${sunday.day}';
+  }
+  return '${_monthShortNames[monday.month]} ${monday.day} - '
+      '${_monthShortNames[sunday.month]} ${sunday.day}';
+}
+
+// The rank AFTER the one [xp] currently holds, or null at Legend
+// (the top rank — there is nothing above it).
+String? nextRankNameForXp(int xp) {
+  final level = levelForXp(xp);
+  if (level >= 11) return null;
+  final nextStartLevel = ((level - 1) ~/ 2 + 1) * 2 + 1;
+  return rankNameForLevel(nextStartLevel);
+}
+
+// XP still needed to reach the next rank (0 at Legend).
+int xpToNextRank(int xp) {
+  final level = levelForXp(xp);
+  if (level >= 11) return 0;
+  final nextStartLevel = ((level - 1) ~/ 2 + 1) * 2 + 1;
+  return (nextStartLevel - 1) * xpPerLevel - xp;
+}
+
 // Current month as 'YYYY-MM'.
 String monthKey([DateTime? date]) {
   final d = date ?? DateTime.now();

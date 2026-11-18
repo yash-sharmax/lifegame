@@ -361,7 +361,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                   children: [
                     Text(
                       '${months[now.month]} ${now.day}, ${now.year}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppTheme.inkSoft,
                         fontWeight: FontWeight.w600,
                         fontSize: 14,
@@ -480,7 +480,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                                   : 'Reminders fire as a notification, even when the '
                                         'app is closed. Keep notifications allowed '
                                         'for Life Game.',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 color: AppTheme.inkSoft,
                                 fontSize: 13,
                                 height: 1.4,
@@ -522,7 +522,7 @@ class _ScheduleTile extends StatelessWidget {
     // inside the null-checked branches below.
     final r = reminder;
     final gradient =
-        AppTheme.habitGradients[item.color % AppTheme.habitGradients.length];
+        AppTheme.gradientForHabitColor(item.color);
     return Material(
       color: AppTheme.card,
       borderRadius: BorderRadius.circular(16),
@@ -566,7 +566,7 @@ class _ScheduleTile extends StatelessWidget {
                       children: [
                         Text(
                           item.title,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
                             color: AppTheme.ink,
@@ -576,7 +576,7 @@ class _ScheduleTile extends StatelessWidget {
                           item.done
                               ? '${item.kindLabel} • Done • +$xpPerTask XP'
                               : '${item.kindLabel} • Tap to complete • +$xpPerTask XP',
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppTheme.inkSoft,
                             fontSize: 13,
                           ),

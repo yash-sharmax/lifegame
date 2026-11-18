@@ -153,7 +153,7 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
                         color: AppTheme.ember.withValues(alpha: 0.06),
                         borderRadius: BorderRadius.circular(16),
                       ),
-                      child: const Row(
+                      child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Icon(
@@ -273,7 +273,7 @@ class _ChallengeCard extends StatelessWidget {
                       gradient: AppTheme.emberGradient,
                       borderRadius: BorderRadius.circular(14),
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.flag,
                       color: AppTheme.ink,
                       size: 24,
@@ -294,7 +294,7 @@ class _ChallengeCard extends StatelessWidget {
                         const SizedBox(height: 2),
                         Text(
                           '${challenge.habits.length} habits • ${challenge.durationDays} days • $start to $end',
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppTheme.inkSoft,
                             fontSize: 13,
                           ),
@@ -302,7 +302,7 @@ class _ChallengeCard extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const Icon(
+                  Icon(
                     Icons.chevron_right,
                     color: AppTheme.inkSoft,
                   ),
@@ -400,7 +400,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 4),
-              const Text(
+              Text(
                 '3 days to set up your habits — then they lock for the whole challenge.',
                 style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
               ),
@@ -460,7 +460,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
               ),
               const SizedBox(height: 6),
               if (sheetHabits.isEmpty)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
                   child: Text(
                     'No habits yet — add one below to start your first challenge.',
