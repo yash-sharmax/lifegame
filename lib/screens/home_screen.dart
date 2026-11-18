@@ -204,10 +204,10 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       final profile = _profile;
       if (profile != null) {
-        // Streak estimate for a completion: the first tick of the day
-        // advances it (same rule the server uses). An untick leaves
-        // the streak estimate alone — the background refresh corrects
-        // it if today lost its last completion.
+        // Streak estimate: the first tick of the day advances it
+        // (same rule the server uses). Unticking today's last done
+        // habit drops it by one right away — the background refresh
+        // corrects the estimate if it is off.
         var streak = profile.currentStreak;
         var lastActive = profile.lastActiveDate;
         if (value && !wasDone) {
@@ -217,6 +217,15 @@ class _HomeScreenState extends State<HomeScreen> {
             today: _today,
           );
           lastActive = _today;
+        } else if (!value &&
+            wasDone &&
+            _doneToday.isEmpty &&
+            profile.lastActiveDate == _today) {
+          // The streak run ending today loses its final day, so it
+          // drops by exactly one (to the run ending yesterday, or
+          // to 0 when today was the only active day).
+          streak = (profile.currentStreak - 1).clamp(0, 1000000);
+          lastActive = streak > 0 ? yesterdayKey() : null;
         }
         _profile = profile.copyWith(
           xp: (profile.xp + delta).clamp(0, 100000000),

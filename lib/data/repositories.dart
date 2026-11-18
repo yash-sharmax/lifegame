@@ -685,48 +685,53 @@ class ProfileRepository {
   /// decreases (it is a historical best). Serialised through the
   /// write queue so it cannot race an in-flight toggle.
   Future<void> recomputeDerivedXp() async {
-    return _writeQueue.run(() async {
-      final userId = _requireUserId();
-      final me = await fetchProfile(userId);
-      if (me == null) return;
-      final habitLogs = await _countRows('habit_logs', [
-        Query.equal('ownerUid', userId),
-        Query.equal('completed', true),
-      ]);
-      final weeklyDone = await _countRows('weekly_tasks', [
-        Query.equal('ownerUid', userId),
-        Query.equal('done', true),
-      ]);
-      final monthlyDone = await _countRows('monthly_tasks', [
-        Query.equal('ownerUid', userId),
-        Query.equal('done', true),
-      ]);
-      final derivedXp = xpPerTask * (habitLogs + weeklyDone + monthlyDone);
-      final dates = await HabitRepository(db: _db).activeDates();
-      final newStreak = computeStreak(dates.toSet());
-      final newLastActive = dates.isEmpty ? null : dates.first;
-      final longest = newStreak > me.longestStreak
-          ? newStreak
-          : me.longestStreak;
-      if (derivedXp == me.xp &&
-          newStreak == me.currentStreak &&
-          newLastActive == me.lastActiveDate &&
-          longest == me.longestStreak) {
-        return;
-      }
-      await _d.updateRow(
-        databaseId: _dbId,
-        tableId: 'users',
-        rowId: userId,
-        data: {
-          'xp': derivedXp,
-          'currentStreak': newStreak,
-          'longestStreak': longest,
-          'lastActiveDate': newLastActive,
-        },
-      );
-      _notifyChanged();
-    });
+    return _writeQueue.run(_recomputeDerivedXpNow);
+  }
+
+  /// The derived-XP recompute itself, WITHOUT the queue. Only call from
+  /// inside a [_writeQueue] job (same library — [HabitRepository]
+  /// uses it so a toggle reconciles XP + streak from the logs in the
+  /// same serialised step as the log write). Calling it directly would
+  /// let it race an in-flight toggle.
+  Future<void> _recomputeDerivedXpNow() async {
+    final userId = _requireUserId();
+    final me = await fetchProfile(userId);
+    if (me == null) return;
+    final habitLogs = await _countRows('habit_logs', [
+      Query.equal('ownerUid', userId),
+      Query.equal('completed', true),
+    ]);
+    final weeklyDone = await _countRows('weekly_tasks', [
+      Query.equal('ownerUid', userId),
+      Query.equal('done', true),
+    ]);
+    final monthlyDone = await _countRows('monthly_tasks', [
+      Query.equal('ownerUid', userId),
+      Query.equal('done', true),
+    ]);
+    final derivedXp = xpPerTask * (habitLogs + weeklyDone + monthlyDone);
+    final dates = await HabitRepository(db: _db).activeDates();
+    final newStreak = computeStreak(dates.toSet());
+    final newLastActive = dates.isEmpty ? null : dates.first;
+    final longest = newStreak > me.longestStreak ? newStreak : me.longestStreak;
+    if (derivedXp == me.xp &&
+        newStreak == me.currentStreak &&
+        newLastActive == me.lastActiveDate &&
+        longest == me.longestStreak) {
+      return;
+    }
+    await _d.updateRow(
+      databaseId: _dbId,
+      tableId: 'users',
+      rowId: userId,
+      data: {
+        'xp': derivedXp,
+        'currentStreak': newStreak,
+        'longestStreak': longest,
+        'lastActiveDate': newLastActive,
+      },
+    );
+    _notifyChanged();
   }
 
   /// Runs the derived-XP sync once per app session, in the
@@ -1031,130 +1036,223 @@ class HabitRepository {
     return dates.toList();
   }
 
+  /// Desired end-state per habit log, keyed by log document id
+  /// (`{habitId}_{date}`). A tap records the state the UI shows; the
+  /// sync worker applies the LATEST recorded state, so a burst of
+  /// rapid taps collapses into a single server write and the last tap
+  /// always wins. Intermediate flips are never written one by one.
+  final Map<String, bool> _desiredLogState = {};
+
+  /// Callers waiting for the sync of a log id to land (one completer
+  /// per tap). All waiters complete together when the final desired
+  /// state is applied (or fail together when it cannot be saved).
+  final Map<String, List<Completer<ToggleResult>>> _logSyncWaiters = {};
+
+  /// Log ids with a sync currently scheduled or running.
+  final Set<String> _logSyncActive = {};
+
   /// Tick or untick a habit for [date]. Handles XP and streak.
-  /// +2 XP on completing, -2 on unticking (the full reversal — the
-  /// habit is worth 0 while blank, so unticking takes back exactly the
-  /// +2 it granted; repeated tick/untick nets 0 and cannot farm XP).
-  /// Untick deletes the log, so the day no longer counts toward the
-  /// streak when its last completion is undone (streak is recomputed
-  /// from the remaining logs). Returns what changed.
+  /// +2 XP while ticked, 0 while blank (the full reversal — unticking
+  /// takes back exactly the +2 the tick granted; repeated tick/untick
+  /// nets 0 and cannot farm XP). Untick deletes the log, so the day no
+  /// longer counts toward the streak when its last completion is
+  /// undone (streak is recomputed from the remaining logs).
   ///
   /// Fast by design (18 Nov 2026, "tick must not wait for the server"):
-  /// the two independent reads run together, the log write and the
-  /// profile write run together, and the "all done" flag is computed
-  /// by the UI (which already knows the done set) instead of two extra
-  /// list fetches here. The UI paints optimistically and never waits
-  /// for this call; the serialised [_writeQueue] still guarantees two
-  /// toggles fired in quick succession run one after the other, so the
-  /// second reads the first's result instead of the same stale state.
-  /// After the writes, the stored log is re-read and compared with the
-  /// intended state — a mismatch throws, so the UI reloads the true
-  /// server state instead of showing a toggle that never persisted.
-  /// (The profile XP write is a single updateRow that throws on
-  /// failure, so no separate XP re-read is needed.)
+  /// the UI paints optimistically and never waits for this call. The
+  /// server write is coalesced: rapid taps only update the desired
+  /// state and the sync worker writes the FINAL state once (see
+  /// [_syncLogToDesired]). The write itself sets the intended state
+  /// directly — it never decides from a read of the log, because a
+  /// stale read turned one untick in a rapid burst into a silent
+  /// no-op and the server kept DONE/2 XP while the UI showed
+  /// undone/0 XP (live test, 18 Nov 2026). After the write, the
+  /// stored log is re-read (with retries) and XP + streak are
+  /// reconciled from the derived rule, so the server always ends in
+  /// the same state as the screen.
   Future<ToggleResult> toggleHabit({
     required Habit habit,
     required String date,
     required bool completed,
   }) async {
-    return _writeQueue.run(() async {
-      final profiles = ProfileRepository(db: _db);
-      final userId = _requireUserId();
-      final today = todayKey();
-      final logId = _logDocId(habit.id, date);
+    final logId = _logDocId(habit.id, date);
+    _desiredLogState[logId] = completed;
+    final completer = Completer<ToggleResult>();
+    (_logSyncWaiters[logId] ??= []).add(completer);
+    // First tap for this log: schedule the sync. Later taps for the
+    // same log just update the desired state and piggyback on it.
+    // (Set.add returns true only when the id was absent — atomic in
+    // Dart's single-threaded event loop, so exactly one sync runs.)
+    if (_logSyncActive.add(logId)) {
+      unawaited(_syncLogToDesired(habit: habit, date: date, logId: logId));
+    }
+    return completer.future;
+  }
 
-      // The profile and the existing log are independent reads.
-      final reads = await Future.wait([
-        profiles.fetchMyProfile(),
-        _getLogOrNull(logId),
-      ]);
-      final me = reads[0] as Profile?;
-      if (me == null) throw const AuthException('Profile not found.');
-      final existing = reads[1] as Map<String, dynamic>?;
-      final alreadyDone =
-          existing != null && (existing['completed'] as bool? ?? false);
+  /// Applies the latest desired state for one log, looping while new
+  /// taps arrive mid-sync. The write + verify + derived reconcile run
+  /// inside the serialised [_writeQueue], so they cannot race another
+  /// XP write.
+  Future<void> _syncLogToDesired({
+    required Habit habit,
+    required String date,
+    required String logId,
+  }) async {
+    var failures = 0;
+    try {
+      while (true) {
+        final desired = _desiredLogState[logId];
+        if (desired == null) return;
+        ToggleResult result;
+        try {
+          result = await _writeQueue.run(() async {
+            // Re-read the desire at execution time: a tap may have
+            // changed it while this job waited in the queue.
+            final current = _desiredLogState[logId] ?? desired;
+            await _applyLogState(
+              habit: habit,
+              date: date,
+              logId: logId,
+              done: current,
+            );
+            await _verifyLogWithRetry(logId: logId, expectDone: current);
+            // Reconcile XP + streak from the server (derived rule) in
+            // the same serialised step — never an incremental delta
+            // computed from a possibly stale read.
+            await ProfileRepository(db: _db)._recomputeDerivedXpNow();
+            _notifyChanged();
+            // The UI paints XP optimistically and never reads this
+            // delta; the derived recompute is the authority.
+            return const ToggleResult(xpDelta: 0, allDone: false);
+          });
+          failures = 0;
+        } catch (e) {
+          // Transient failure (network blip, read lag): retry the same
+          // desire a couple of times before giving up. The waiters
+          // stay pending — their UI already shows the desired state.
+          failures++;
+          if (failures >= 3) {
+            // Persistent failure: give up. Complete the waiters that
+            // arrived before this point with the error (their UI rolls
+            // back) and drop the desire. This block is synchronous, so
+            // a tap landing after it schedules its own sync via the
+            // finally clause below instead of being stranded.
+            final waiters = _logSyncWaiters.remove(logId);
+            _desiredLogState.remove(logId);
+            if (waiters != null) {
+              for (final w in waiters) {
+                if (!w.isCompleted) w.completeError(e);
+              }
+            }
+            return;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          continue;
+        }
+        // No newer desire arrived while we worked: done.
+        if (_desiredLogState[logId] == desired) {
+          _desiredLogState.remove(logId);
+          final waiters = _logSyncWaiters.remove(logId);
+          if (waiters != null) {
+            for (final w in waiters) {
+              if (!w.isCompleted) w.complete(result);
+            }
+          }
+          return;
+        }
+        // A newer desire arrived: loop and apply it instead.
+      }
+    } finally {
+      // A tap may have landed after the final check above: re-schedule
+      // if a desire is still pending. These statements run with no
+      // await between them, so no tap can slip in unnoticed — either
+      // it arrived before the remove (and the check below sees it) or
+      // after it (and schedules its own sync).
+      _logSyncActive.remove(logId);
+      if (_desiredLogState.containsKey(logId) && _logSyncActive.add(logId)) {
+        unawaited(_syncLogToDesired(habit: habit, date: date, logId: logId));
+      }
+    }
+  }
 
-      final xpDelta = xpDeltaForToggle(
-        completing: completed,
-        wasDone: alreadyDone,
-      );
-
-      if (completed && !alreadyDone) {
-        final newStreak = streakAfterTick(
-          currentStreak: me.currentStreak,
-          lastActiveDate: me.lastActiveDate,
-          today: today,
+  /// Writes the intended log state, idempotently: a tick creates the
+  /// log (or marks an existing one done), an untick deletes it (or
+  /// does nothing when it is already gone). The outcome never depends
+  /// on a prior read, so a stale read cannot turn a toggle into a
+  /// silent no-op.
+  Future<void> _applyLogState({
+    required Habit habit,
+    required String date,
+    required String logId,
+    required bool done,
+  }) async {
+    final userId = _requireUserId();
+    if (done) {
+      try {
+        await _d.createRow(
+          databaseId: _dbId,
+          tableId: 'habit_logs',
+          rowId: logId,
+          data: {
+            'ownerUid': userId,
+            'habitId': habit.id,
+            'date': date,
+            'completed': true,
+            'xpEarned': xpPerTask,
+          },
+          permissions: _ownerPerms(userId),
         );
-        final longest = newStreak > me.longestStreak
-            ? newStreak
-            : me.longestStreak;
-        // The log write and the profile write are independent.
-        await Future.wait([
-          _d.createRow(
+      } on AppwriteException catch (e) {
+        if (e.code == 409) {
+          // The log already exists (an earlier tick landed): make sure
+          // it is marked done.
+          await _d.updateRow(
             databaseId: _dbId,
             tableId: 'habit_logs',
             rowId: logId,
-            data: {
-              'ownerUid': userId,
-              'habitId': habit.id,
-              'date': date,
-              'completed': true,
-              'xpEarned': xpPerTask,
-            },
-            permissions: _ownerPerms(userId),
-          ),
-          profiles.writeXpAndStreak(
-            current: me,
-            xpDelta: xpDelta,
-            currentStreak: newStreak,
-            longestStreak: longest,
-            lastActiveDate: date,
-          ),
-        ]);
-        await _verifyLog(logId: logId, expectDone: true);
-        _notifyChanged();
-        return ToggleResult(xpDelta: xpDelta, allDone: false);
+            data: {'completed': true, 'xpEarned': xpPerTask},
+          );
+        } else {
+          rethrow;
+        }
       }
-
-      if (!completed && alreadyDone) {
-        // Delete the log and list the remaining active dates together;
-        // the profile write needs the dates, so it follows.
-        final deleteFuture = _d.deleteRow(
+    } else {
+      try {
+        await _d.deleteRow(
           databaseId: _dbId,
           tableId: 'habit_logs',
           rowId: logId,
         );
-        final datesFuture = activeDates();
-        await deleteFuture;
-        final dates = await datesFuture;
-        final newStreak = computeStreak(dates.toSet());
-        final newLastActive = dates.isEmpty ? null : dates.first;
-        await profiles.writeXpAndStreak(
-          current: me,
-          xpDelta: xpDelta,
-          currentStreak: newStreak,
-          longestStreak: me.longestStreak,
-          lastActiveDate: newLastActive,
-        );
-        await _verifyLog(logId: logId, expectDone: false);
+      } on AppwriteException catch (e) {
+        if (e.code == 404) {
+          // Already gone — the desired state holds.
+        } else {
+          rethrow;
+        }
       }
-      _notifyChanged();
-      return ToggleResult(xpDelta: xpDelta, allDone: false);
-    });
+    }
   }
 
   /// Re-reads the stored log after a toggle and throws when it does
-  /// not match the intended one. A partial write (log saved but XP
-  /// not, or the reverse) must never look like a success.
-  Future<void> _verifyLog({
+  /// not match the intended one. Retries a few times first: reads can
+  /// lag a just-completed write by a moment under rapid toggling, and
+  /// a stale read must not look like a failed write. A persistent
+  /// mismatch throws, so the UI rolls back instead of showing a toggle
+  /// that never persisted.
+  Future<void> _verifyLogWithRetry({
     required String logId,
     required bool expectDone,
   }) async {
-    final log = await _getLogOrNull(logId);
-    final done = log != null && (log['completed'] as bool? ?? false);
-    if (done != expectDone) {
-      throw StateError('Habit toggle did not save properly. Please try again.');
+    const attempts = 6;
+    for (var i = 0; i < attempts; i++) {
+      final log = await _getLogOrNull(logId);
+      final done = log != null && (log['completed'] as bool? ?? false);
+      if (done == expectDone) return;
+      if (i < attempts - 1) {
+        await Future<void>.delayed(Duration(milliseconds: 100 * (i + 1)));
+      }
     }
+    throw StateError('Habit toggle did not save properly. Please try again.');
   }
 }
 

@@ -165,8 +165,8 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
                           Expanded(
                             child: Text(
                               'Choose your habits and a duration. You get 3 days to '
-                              'change the battles — after that they lock for the '
-                              'whole campaign. Daily battles outside a campaign '
+                              'change the habits — after that they lock for the '
+                              'whole challenge. Daily habits outside a challenge '
                               'can still change any time.',
                               style: TextStyle(
                                 color: AppTheme.inkSoft,
@@ -184,7 +184,7 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
                         icon: Icons.flag_outlined,
                         title: 'No challenges yet',
                         subtitle:
-                            'Start your first campaign — pick battles, set the days, and lock in.',
+                            'Start your first challenge — pick habits, set the days, and lock in.',
                         actionLabel: 'Start a challenge',
                         onAction: _create,
                       )
@@ -401,7 +401,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
               ),
               const SizedBox(height: 4),
               const Text(
-                '3 days to set up your battles — then they lock for the whole campaign.',
+                '3 days to set up your habits — then they lock for the whole challenge.',
                 style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
               ),
               const SizedBox(height: 16),
@@ -463,7 +463,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
                   child: Text(
-                    'No battles yet — add one below to start your first campaign.',
+                    'No habits yet — add one below to start your first challenge.',
                     style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
                   ),
                 ),

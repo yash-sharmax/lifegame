@@ -29,6 +29,62 @@ class FakeTablesDB extends TablesDB {
   final Map<String, Map<String, _FakeRow>> _tables = {};
   int _seq = 0;
 
+  /// When true, reads lag writes: for [staleWindow] after a mutation,
+  /// getRow/listRows see the tables as they were before that mutation
+  /// (the read-after-write lag Appwrite Cloud shows under rapid
+  /// toggling, 18 Nov 2026). Only [laggyTables] are affected — the
+  /// live failure was a habit-log read going stale right after a log
+  /// write; profile reads were fine live, and the UI paints XP
+  /// optimistically rather than trusting a re-read for it. Off by
+  /// default.
+  bool laggyReads = false;
+  Duration staleWindow = const Duration(milliseconds: 50);
+  final Set<String> laggyTables = {'habit_logs'};
+
+  Map<String, Map<String, _FakeRow>>? _staleSnapshot;
+  DateTime? _staleUntil;
+
+  Map<String, Map<String, _FakeRow>> _deepCopyTables() => {
+    for (final e in _tables.entries)
+      e.key: {
+        for (final r in e.value.entries)
+          r.key: _FakeRow(
+            id: r.value.id,
+            createdAt: r.value.createdAt,
+            data: Map<String, dynamic>.from(r.value.data),
+          ),
+      },
+  };
+
+  void _recordMutation(String tableId) {
+    if (!laggyReads || !laggyTables.contains(tableId)) return;
+    _staleSnapshot = _deepCopyTables();
+    _staleUntil = DateTime.now().add(staleWindow);
+  }
+
+  /// The tables a read sees: the pre-mutation snapshot while the
+  /// stale window lasts, the live tables otherwise.
+  Map<String, Map<String, _FakeRow>> _readTables() {
+    final snapshot = _staleSnapshot;
+    final until = _staleUntil;
+    if (laggyReads &&
+        snapshot != null &&
+        until != null &&
+        DateTime.now().isBefore(until)) {
+      return snapshot;
+    }
+    return _tables;
+  }
+
+  Map<String, _FakeRow> _readRowsOf(String tableId) {
+    // Only laggy tables read from the snapshot; every other table
+    // reads live (see the laggyReads doc above).
+    if (laggyReads && laggyTables.contains(tableId)) {
+      return _readTables()[tableId] ?? {};
+    }
+    return _rowsOf(tableId);
+  }
+
   Map<String, _FakeRow> _rowsOf(String tableId) =>
       _tables.putIfAbsent(tableId, () => {});
 
@@ -62,6 +118,7 @@ class FakeTablesDB extends TablesDB {
     String? transactionId,
   }) async {
     await _latency();
+    _recordMutation(tableId);
     final rows = _rowsOf(tableId);
     if (rows.containsKey(rowId)) {
       throw AppwriteException(
@@ -88,7 +145,7 @@ class FakeTablesDB extends TablesDB {
     String? transactionId,
   }) async {
     await _latency();
-    final row = _rowsOf(tableId)[rowId];
+    final row = _readRowsOf(tableId)[rowId];
     if (row == null) {
       throw AppwriteException('Row not found', 404, 'document_not_found');
     }
@@ -105,6 +162,7 @@ class FakeTablesDB extends TablesDB {
     String? transactionId,
   }) async {
     await _latency();
+    _recordMutation(tableId);
     final row = _rowsOf(tableId)[rowId];
     if (row == null) {
       throw AppwriteException('Row not found', 404, 'document_not_found');
@@ -121,6 +179,7 @@ class FakeTablesDB extends TablesDB {
     String? transactionId,
   }) async {
     await _latency();
+    _recordMutation(tableId);
     final removed = _rowsOf(tableId).remove(rowId);
     if (removed == null) {
       throw AppwriteException('Row not found', 404, 'document_not_found');
@@ -138,7 +197,7 @@ class FakeTablesDB extends TablesDB {
     int? ttl,
   }) async {
     await _latency();
-    var rows = _rowsOf(tableId).values.toList();
+    var rows = _readRowsOf(tableId).values.toList();
     var limit = 25;
     var offset = 0;
     for (final q in queries ?? const <String>[]) {
@@ -234,6 +293,11 @@ void main() {
     habits = HabitRepository(db: db);
     tasks = TaskRepository(db: db);
     profiles = ProfileRepository(db: db);
+    // Derived-consistent seed: XP is 2 x completed logs and the streak
+    // comes from the active dates, so a fresh profile starts at 0 XP /
+    // 0 streak. (A drifted seed — e.g. the old +50 daily bonus with no
+    // completed logs — is corrected to the derived value by the first
+    // toggle's reconcile; see the drift test below.)
     await db.createRow(
       databaseId: 'lifegame',
       tableId: 'users',
@@ -242,10 +306,10 @@ void main() {
         'username': 'tester',
         'displayName': 'Tester',
         'bio': '',
-        'xp': 50,
-        'currentStreak': 1,
-        'longestStreak': 1,
-        'lastActiveDate': today,
+        'xp': 0,
+        'currentStreak': 0,
+        'longestStreak': 0,
+        'lastActiveDate': null,
       },
     );
   });
@@ -264,8 +328,8 @@ void main() {
 
         // Fired together, like two fast taps: without serialisation the
         // untick reads the log before the tick has written it, no-ops,
-        // and the tick's +2 XP + log survive — the UI then shows 50/undone
-        // while the server holds 52/done.
+        // and the tick's +2 XP + log survive — the UI then shows 0/undone
+        // while the server holds 2/done.
         await Future.wait([
           habits.toggleHabit(habit: habit, date: today, completed: true),
           habits.toggleHabit(habit: habit, date: today, completed: false),
@@ -274,8 +338,8 @@ void main() {
         expect(await habits.listLogsForDate(today), isEmpty);
         final after = await myProfile();
         // Tick +2 then untick -2 (full reversal, 18 Nov 2026 rule):
-        // the tick's XP is taken back entirely, so the seeded 50 stays.
-        expect(after.xp, 50);
+        // the tick's XP is taken back entirely, so XP returns to 0.
+        expect(after.xp, 0);
         expect(after.currentStreak, 0);
       },
     );
@@ -283,7 +347,7 @@ void main() {
     test('concurrent untick then tick leaves the stored state done', () async {
       final habit = await habits.addHabit(title: 'XP Test', color: 0);
       await habits.toggleHabit(habit: habit, date: today, completed: true);
-      expect((await myProfile()).xp, 52);
+      expect((await myProfile()).xp, 2);
 
       await Future.wait([
         habits.toggleHabit(habit: habit, date: today, completed: false),
@@ -292,8 +356,8 @@ void main() {
 
       expect((await habits.listLogsForDate(today)).length, 1);
       final after = await myProfile();
-      // Untick -2 then tick +2 on top of the seeded 52: net 0.
-      expect(after.xp, 52);
+      // Untick -2 then tick +2: net 0, so XP stays 2.
+      expect(after.xp, 2);
       expect(after.currentStreak, 1);
     });
 
@@ -302,31 +366,103 @@ void main() {
       () async {
         final habit = await habits.addHabit(title: 'XP Test', color: 0);
         await habits.toggleHabit(habit: habit, date: today, completed: true);
-        expect((await myProfile()).xp, 52);
+        expect((await myProfile()).xp, 2);
         await habits.toggleHabit(habit: habit, date: today, completed: false);
 
         expect(await habits.listLogsForDate(today), isEmpty);
         final after = await myProfile();
         // Untick takes back the full +2 (18 Nov 2026 rule): XP is
-        // derived from what is currently done, so it returns to 50.
-        expect(after.xp, 50);
+        // derived from what is currently done, so it returns to 0.
+        expect(after.xp, 0);
         expect(after.currentStreak, 0);
       },
     );
+
+    test(
+      'rapid burst ending in untick saves undone even with laggy reads',
+      () async {
+        db.laggyReads = true;
+        final habit = await habits.addHabit(title: 'XP Test', color: 0);
+
+        // Five rapid tick/untick cycles, fired without awaiting (the
+        // live test, 18 Nov 2026): the old read-modify-write toggle
+        // lost one untick to a stale read and the server kept DONE/2 XP
+        // while the UI showed undone/0 XP. The coalesced sync writes
+        // only the final state, so the burst must end undone at 0 XP.
+        final pending = <Future<ToggleResult>>[];
+        for (var i = 0; i < 5; i++) {
+          pending.add(
+            habits.toggleHabit(habit: habit, date: today, completed: true),
+          );
+          pending.add(
+            habits.toggleHabit(habit: habit, date: today, completed: false),
+          );
+        }
+        await Future.wait(pending);
+
+        expect(await habits.listLogsForDate(today), isEmpty);
+        final after = await myProfile();
+        expect(after.xp, 0);
+        expect(after.currentStreak, 0);
+      },
+    );
+
+    test(
+      'rapid burst ending in tick saves done even with laggy reads',
+      () async {
+        db.laggyReads = true;
+        final habit = await habits.addHabit(title: 'XP Test', color: 0);
+
+        final pending = <Future<ToggleResult>>[];
+        for (var i = 0; i < 5; i++) {
+          pending.add(
+            habits.toggleHabit(habit: habit, date: today, completed: true),
+          );
+          pending.add(
+            habits.toggleHabit(habit: habit, date: today, completed: false),
+          );
+        }
+        pending.add(
+          habits.toggleHabit(habit: habit, date: today, completed: true),
+        );
+        await Future.wait(pending);
+
+        expect((await habits.listLogsForDate(today)).length, 1);
+        final after = await myProfile();
+        expect(after.xp, 2);
+        expect(after.currentStreak, 1);
+      },
+    );
+
+    test('a toggle corrects a drifted stored XP to the derived value', () async {
+      // The profile carries the legacy +50 daily bonus with no
+      // completed logs: XP is derived from the logs, so the first
+      // toggle heals the drift (18 Nov 2026 rule).
+      await db.updateRow(
+        databaseId: 'lifegame',
+        tableId: 'users',
+        rowId: 'user-1',
+        data: {'xp': 50},
+      );
+      final habit = await habits.addHabit(title: 'XP Test', color: 0);
+      await habits.toggleHabit(habit: habit, date: today, completed: true);
+      expect((await myProfile()).xp, 2);
+      expect((await myProfile()).currentStreak, 1);
+    });
   });
 
   group('deleteHabit keeps XP and streak consistent', () {
     test('deleting a habit done today takes back 2 XP', () async {
       final habit = await habits.addHabit(title: 'XP Test', color: 0);
       await habits.toggleHabit(habit: habit, date: today, completed: true);
-      expect((await myProfile()).xp, 52);
+      expect((await myProfile()).xp, 2);
 
       await habits.deleteHabit(habit.id);
 
       expect(await habits.listMyHabits(), isEmpty);
       expect(await habits.listLogsForDate(today), isEmpty);
       final after = await myProfile();
-      expect(after.xp, 50);
+      expect(after.xp, 0);
       expect(after.currentStreak, 0);
       expect(after.longestStreak, 1);
     });
@@ -344,7 +480,7 @@ void main() {
           date: today,
           completed: true,
         );
-        expect((await myProfile()).xp, 52);
+        expect((await myProfile()).xp, 2);
         expect((await myProfile()).currentStreak, 1);
 
         final habit = await habits.addHabit(title: 'XP Test', color: 0);
@@ -354,7 +490,7 @@ void main() {
         expect(remaining.map((h) => h.id), [doneHabit.id]);
         expect((await habits.listLogsForDate(today)).length, 1);
         final after = await myProfile();
-        expect(after.xp, 52);
+        expect(after.xp, 2);
         expect(after.currentStreak, 1);
       },
     );
@@ -366,12 +502,12 @@ void main() {
       await tasks.addWeeklyTask('Buy groceries', week);
       final task = (await tasks.listWeeklyTasks(week)).first;
       await tasks.toggleWeeklyTask(task.id, true);
-      expect((await myProfile()).xp, 52);
+      expect((await myProfile()).xp, 2);
 
       await tasks.deleteWeeklyTask(task.id);
 
       expect(await tasks.listWeeklyTasks(week), isEmpty);
-      expect((await myProfile()).xp, 50);
+      expect((await myProfile()).xp, 0);
     });
 
     test('deleting a pending weekly task leaves XP untouched', () async {
@@ -382,7 +518,7 @@ void main() {
       await tasks.deleteWeeklyTask(task.id);
 
       expect(await tasks.listWeeklyTasks(week), isEmpty);
-      expect((await myProfile()).xp, 50);
+      expect((await myProfile()).xp, 0);
     });
   });
   group('feedback', () {
@@ -469,8 +605,8 @@ void main() {
           data: {'username': 'tester', 'ownerUid': 'user-1'},
         );
         await social.follow('user-2');
-        // Sanity: 50 seed XP + 2 (habit) + 2 (weekly task).
-        expect((await profiles.fetchMyProfile())?.xp, 54);
+        // Sanity: 2 (habit, derived) + 2 (weekly task).
+        expect((await profiles.fetchMyProfile())?.xp, 4);
 
         await account.deleteAllMyData();
 
