@@ -66,7 +66,6 @@ void main() {
         app(
           DashboardScreen(
             habitRepo: _GoldenHabitRepo(),
-            profileRepo: _GoldenProfileRepo(),
           ),
         ),
       );
@@ -83,7 +82,6 @@ void main() {
         app(
           DashboardScreen(
             habitRepo: _GoldenHabitRepo(),
-            profileRepo: _GoldenProfileRepo(),
           ),
         ),
       );

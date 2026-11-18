@@ -437,11 +437,11 @@ class GradientButton extends StatelessWidget {
   }
 }
 
-/// Branded loading screen: shield logo, app name and a progress bar on
-/// the dark battlefield background. Used while the session/profile is
-/// being checked so the user never sees a blank page or a bare spinner
-/// (fast-load work, 18 Nov 2026). The web page (web/index.html) shows
-/// the same screen instantly, before Flutter even starts.
+/// Branded loading screen: logo, app name and a progress bar on the
+/// dark background. Used while the session/profile is being checked so
+/// the user never sees a blank page or a bare spinner (fast-load work,
+/// 18 Nov 2026). The web page (web/index.html) shows the same screen
+/// instantly, before Flutter even starts.
 class WarriorSplash extends StatelessWidget {
   const WarriorSplash({super.key, this.message});
 
@@ -489,7 +489,7 @@ class WarriorSplash extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              message ?? 'Sharpening swords…',
+              message ?? 'Loading…',
               style: const TextStyle(color: AppTheme.inkSoft, fontSize: 15),
             ),
             const SizedBox(height: 28),
@@ -542,11 +542,13 @@ class SkeletonBox extends StatelessWidget {
   }
 }
 
-/// The battle check: the circular tick button on a habit/task tile.
+/// The check button: the circular tick button on a habit/task tile.
 ///
 /// - Tapping it toggles the item; when it turns done, the circle pops
-///   with a gold glow (the "strike") and a floating "+2 XP" rises and
-///   fades; when it turns undone, a red "-1 XP" floats up instead.
+///   with a glow and a floating "+2 XP" rises and fades.
+/// - Unticking shows NO floating delta: there is no negative marking
+///   (18 Nov 2026) — the item is simply worth 0 while blank, so the
+///   tile just returns to its pending state and the XP total updates.
 /// - The floating delta is driven by [done] flips, so it works with
 ///   optimistic updates too.
 class BattleCheck extends StatefulWidget {
@@ -566,11 +568,11 @@ class _BattleCheckState extends State<BattleCheck> {
   @override
   void didUpdateWidget(BattleCheck oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.done != widget.done) {
+    // Only completions show a floating delta (+2 XP). Unticking shows
+    // nothing — no negative marking (18 Nov 2026).
+    if (oldWidget.done != widget.done && widget.done) {
       _timer?.cancel();
-      setState(() {
-        _delta = widget.done ? xpPerTask : -xpPerUntick;
-      });
+      setState(() => _delta = xpPerTask);
       _timer = Timer(const Duration(milliseconds: 1100), () {
         if (mounted) setState(() => _delta = null);
       });
@@ -601,15 +603,22 @@ class _BattleCheckState extends State<BattleCheck> {
             border: widget.done
                 ? null
                 : Border.all(color: AppTheme.cardBorder, width: 2),
-            boxShadow: widget.done
-                ? [
-                    BoxShadow(
-                      color: AppTheme.ember.withValues(alpha: 0.55),
-                      blurRadius: 12,
-                      offset: const Offset(0, 2),
-                    ),
-                  ]
-                : null,
+            // The shadow list always has exactly one entry: when the
+            // item is not done it is fully transparent. If the list
+            // went from 1 entry to null, the AnimatedContainer's
+            // easeOutBack overshoot (t > 1) would scale the shadow's
+            // blurRadius by a negative factor and trip a framework
+            // assertion in BoxShadow.lerpList (rapid tick/untick,
+            // 18 Nov 2026).
+            boxShadow: [
+              BoxShadow(
+                color: widget.done
+                    ? AppTheme.ember.withValues(alpha: 0.55)
+                    : Colors.transparent,
+                blurRadius: 12,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
           child: widget.done
               ? Icon(Icons.check, color: AppTheme.ink, size: widget.size * 0.6)
@@ -627,9 +636,9 @@ class _BattleCheckState extends State<BattleCheck> {
             top: -22,
             right: -6,
             child: Text(
-              _delta! > 0 ? '+${_delta!} XP' : '$_delta XP',
-              style: TextStyle(
-                color: _delta! > 0 ? AppTheme.gold : AppTheme.flame,
+              '+${_delta!} XP',
+              style: const TextStyle(
+                color: AppTheme.gold,
                 fontWeight: FontWeight.w800,
                 fontSize: 13,
               ),

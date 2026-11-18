@@ -71,80 +71,78 @@ class _LeaderboardScreenState extends State<LeaderboardScreen>
 
   @override
   Widget build(BuildContext context) {
-    return ResponsiveCenter(
-      maxWidth: 980,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-            child: Row(
-              children: [
-                const Text(
-                  'Hall of Warriors',
-                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
-                ),
-                const Spacer(),
-                IconButton(
-                  onPressed: _load,
-                  icon: const Icon(Icons.refresh),
-                  tooltip: 'Refresh',
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-            child: Container(
-              decoration: BoxDecoration(
-                color: AppTheme.card,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: TabBar(
-                controller: _tabs,
-                dividerColor: Colors.transparent,
-                indicator: BoxDecoration(
-                  gradient: AppTheme.emberGradient,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                indicatorSize: TabBarIndicatorSize.tab,
-                labelColor: AppTheme.ink,
-                unselectedLabelColor: AppTheme.inkSoft,
-                labelStyle: const TextStyle(fontWeight: FontWeight.w700),
-                tabs: const [
-                  Tab(text: 'Global'),
-                  Tab(text: 'Friends'),
-                ],
-              ),
-            ),
-          ),
-          Expanded(
-            child: _loading
-                ? ListView(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 100),
-                    children: const [
-                      SkeletonBox(height: 70, borderRadius: 18),
-                      SizedBox(height: 10),
-                      SkeletonBox(height: 70, borderRadius: 18),
-                      SizedBox(height: 10),
-                      SkeletonBox(height: 70, borderRadius: 18),
-                      SizedBox(height: 10),
-                      SkeletonBox(height: 70, borderRadius: 18),
-                    ],
-                  )
-                : TabBarView(
-                    controller: _tabs,
-                    children: [
-                      _BoardList(entries: _global, myId: _myId),
-                      _BoardList(
-                        entries: _friends,
-                        myId: _myId,
-                        emptyTitle: 'No friends on the board yet',
-                        emptySubtitle: 'Follow people from Search and they will show up here.',
-                      ),
-                    ],
-                  ),
+    // Push-only now (18 Nov 2026): the leaderboard opens from the XP
+    // pill on Home, so it needs its own Scaffold + AppBar with a back
+    // button instead of the in-body title it had as a bottom tab.
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Leaderboard'),
+        actions: [
+          IconButton(
+            onPressed: _load,
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh',
           ),
         ],
+      ),
+      body: ResponsiveCenter(
+        maxWidth: 980,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: AppTheme.card,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: TabBar(
+                  controller: _tabs,
+                  dividerColor: Colors.transparent,
+                  indicator: BoxDecoration(
+                    gradient: AppTheme.emberGradient,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  labelColor: AppTheme.ink,
+                  unselectedLabelColor: AppTheme.inkSoft,
+                  labelStyle: const TextStyle(fontWeight: FontWeight.w700),
+                  tabs: const [
+                    Tab(text: 'Global'),
+                    Tab(text: 'Friends'),
+                  ],
+                ),
+              ),
+            ),
+            Expanded(
+              child: _loading
+                  ? ListView(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 100),
+                      children: const [
+                        SkeletonBox(height: 70, borderRadius: 18),
+                        SizedBox(height: 10),
+                        SkeletonBox(height: 70, borderRadius: 18),
+                        SizedBox(height: 10),
+                        SkeletonBox(height: 70, borderRadius: 18),
+                        SizedBox(height: 10),
+                        SkeletonBox(height: 70, borderRadius: 18),
+                      ],
+                    )
+                  : TabBarView(
+                      controller: _tabs,
+                      children: [
+                        _BoardList(entries: _global, myId: _myId),
+                        _BoardList(
+                          entries: _friends,
+                          myId: _myId,
+                          emptyTitle: 'No friends on the board yet',
+                          emptySubtitle: 'Follow people from Search and they will show up here.',
+                        ),
+                      ],
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

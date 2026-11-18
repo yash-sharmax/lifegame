@@ -18,9 +18,22 @@ void main() {
       expect(xpDeltaForToggle(completing: true, wasDone: false), 2);
     });
 
-    test('unticking a done item removes 1 (18 Nov 2026: was 2)', () {
-      expect(xpPerUntick, 1);
-      expect(xpDeltaForToggle(completing: false, wasDone: true), -1);
+    test('unticking a done item removes its full +2 (18 Nov 2026: was -1)', () {
+      expect(xpDeltaForToggle(completing: false, wasDone: true), -2);
+    });
+
+    test('tick, untick, re-tick nets +2 — no farming', () {
+      // XP is derived (2 x currently-completed), not accumulated:
+      // completing adds +2, unticking removes the same +2, so
+      // repeated toggling nets 0 and re-ticking gives +2 again.
+      final tick = xpDeltaForToggle(completing: true, wasDone: false);
+      final untick = xpDeltaForToggle(completing: false, wasDone: true);
+      final retick = xpDeltaForToggle(completing: true, wasDone: false);
+      expect(tick, 2);
+      expect(untick, -2);
+      expect(retick, 2);
+      expect(tick + untick + retick, 2);
+      expect(tick + untick, 0);
     });
 
     test('no change when the state does not change', () {

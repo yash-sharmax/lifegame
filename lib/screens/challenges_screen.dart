@@ -22,6 +22,7 @@ import '../widgets/common.dart';
 import '../widgets/habit_dialog.dart';
 import 'auth_screen.dart';
 import 'challenge_detail_screen.dart';
+import 'search_screen.dart';
 
 class ChallengesScreen extends StatefulWidget {
   const ChallengesScreen({
@@ -98,7 +99,7 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
       );
       await _load(silent: true);
       if (!mounted) return;
-      showInfo(context, 'Campaign started — 3 days to set it up.');
+      showInfo(context, 'Challenge started — 3 days to set it up.');
     } catch (e) {
       if (mounted) showError(context, e);
     }
@@ -109,15 +110,24 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Campaigns',
+          'Challenges',
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
         backgroundColor: Colors.transparent,
+        actions: [
+          IconButton(
+            onPressed: () => Navigator.of(context).push(
+              WarriorPageRoute(builder: (_) => const SearchScreen()),
+            ),
+            tooltip: 'Search people',
+            icon: const Icon(Icons.search),
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _create,
         icon: const Icon(Icons.add),
-        label: const Text('New campaign'),
+        label: const Text('New challenge'),
       ),
       body: ResponsiveCenter(
         maxWidth: 720,
@@ -154,7 +164,7 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
                           SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'Choose your battles and a duration. You get 3 days to '
+                              'Choose your habits and a duration. You get 3 days to '
                               'change the battles — after that they lock for the '
                               'whole campaign. Daily battles outside a campaign '
                               'can still change any time.',
@@ -172,10 +182,10 @@ class _ChallengesScreenState extends State<ChallengesScreen> {
                     if (_list.isEmpty)
                       EmptyState(
                         icon: Icons.flag_outlined,
-                        title: 'No campaigns yet',
+                        title: 'No challenges yet',
                         subtitle:
                             'Start your first campaign — pick battles, set the days, and lock in.',
-                        actionLabel: 'Start a campaign',
+                        actionLabel: 'Start a challenge',
                         onAction: _create,
                       )
                     else
@@ -283,7 +293,7 @@ class _ChallengeCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '${challenge.habits.length} battles • ${challenge.durationDays} days • $start to $end',
+                          '${challenge.habits.length} habits • ${challenge.durationDays} days • $start to $end',
                           style: const TextStyle(
                             color: AppTheme.inkSoft,
                             fontSize: 13,
@@ -386,7 +396,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'New campaign',
+                'New challenge',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 4),
@@ -399,7 +409,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                 controller: nameController,
                 autofocus: true,
                 decoration: const InputDecoration(
-                  labelText: 'Campaign name',
+                  labelText: 'Challenge name',
                   hintText: 'e.g. 14-Day Focus',
                 ),
               ),
@@ -445,7 +455,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
               ],
               const SizedBox(height: 18),
               const Text(
-                'Battles in this campaign',
+                'Habits in this challenge',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 6),
@@ -516,7 +526,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                     if (name.isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Give your campaign a name.'),
+                          content: Text('Give your challenge a name.'),
                         ),
                       );
                       return;
@@ -524,7 +534,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                     if (selected.isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Pick at least one battle.'),
+                          content: Text('Pick at least one habit.'),
                         ),
                       );
                       return;
@@ -545,7 +555,7 @@ Future<CreateChallengeResult?> showCreateChallengeSheet(
                       ),
                     );
                   },
-                  child: const Text('Start campaign'),
+                  child: const Text('Start challenge'),
                 ),
               ),
             ],

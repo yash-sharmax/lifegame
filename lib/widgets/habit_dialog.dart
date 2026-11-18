@@ -37,7 +37,7 @@ Future<HabitAddResult?> showAddHabitDialog(BuildContext context) async {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(24),
         ),
-        title: const Text('Add a battle'),
+        title: const Text('Add a habit'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -45,7 +45,7 @@ Future<HabitAddResult?> showAddHabitDialog(BuildContext context) async {
               controller: titleController,
               autofocus: true,
               decoration: const InputDecoration(
-                labelText: 'Battle name',
+                labelText: 'Habit name',
                 hintText: 'e.g. Read 10 pages',
               ),
             ),
@@ -53,7 +53,7 @@ Future<HabitAddResult?> showAddHabitDialog(BuildContext context) async {
             const Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                'Pick a banner colour',
+                'Pick a colour',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),
             ),

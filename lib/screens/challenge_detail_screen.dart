@@ -2,8 +2,9 @@
 // today's check-ins, and the leaderboard.
 //
 // Check-ins reuse the normal habit toggles (+2 XP per completion,
-// -1 on untick) — challenge XP is computed from the existing habit
-// logs inside the active window, never from a second XP system.
+// unticking removes that habit's +2 XP) — challenge XP is computed
+// from the existing habit logs inside the active window, never from
+// a second XP system.
 library;
 
 import 'dart:async';
@@ -48,7 +49,6 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
   List<Habit> _myHabits = [];
   Set<String> _doneToday = {};
   bool _loading = true;
-  final Set<String> _toggling = {};
   // Strike counter per habit: bumped on every completion so the slash
   // sweep (StrikeOverlay) replays for that tile.
   final Map<String, int> _strikeKeys = {};
@@ -108,7 +108,6 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
   Future<void> _toggle(ChallengeHabitEntry entry, bool value) async {
     final habit = _myHabits.where((h) => h.id == entry.habitId).firstOrNull;
     if (habit == null) return;
-    if (_toggling.contains(entry.habitId)) return;
     final wasDone = _doneToday.contains(entry.habitId);
     setState(() {
       if (value) {
@@ -118,7 +117,6 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
         _doneToday.remove(entry.habitId);
       }
     });
-    _toggling.add(entry.habitId);
     try {
       await _habits.toggleHabit(
         habit: habit,
@@ -137,8 +135,6 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
         });
         showError(context, e);
       }
-    } finally {
-      _toggling.remove(entry.habitId);
     }
   }
 
@@ -537,7 +533,7 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
               ),
               const SizedBox(height: 4),
               const Text(
-                'Ranked by XP earned on the challenge battles during the challenge.',
+                'Ranked by XP earned on the challenge habits during the challenge.',
                 style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
               ),
               const SizedBox(height: 12),

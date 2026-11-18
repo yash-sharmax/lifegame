@@ -500,6 +500,28 @@ class ProfileRepository {
 
   TablesDB get _d => _requireDb(_db);
 
+  /// Broadcast whenever the profile itself changes (XP / streak
+  /// corrected by the derived-XP sync) — screens that show XP reload.
+  /// Habit/task changes have their own streams; this one is only for
+  /// profile-level corrections made without a habit or task change.
+  static final _changes = StreamController<void>.broadcast();
+  static Stream<void> get onChanged => _changes.stream;
+  static void _notifyChanged() {
+    if (!_changes.isClosed) _changes.add(null);
+  }
+
+  /// Test-only hook to simulate a profile change from a fake.
+  static void notifyChangedForTest() => _notifyChanged();
+
+  // The derived-XP sync runs once per app session (see
+  // [syncDerivedXpOnce]). A failed sync is retried next launch.
+  static bool _derivedXpSynced = false;
+
+  /// Test-only: lets a test run the once-per-session sync again.
+  static void debugResetDerivedXpSyncForTest() {
+    _derivedXpSynced = false;
+  }
+
   String _requireUserId() {
     final user = AuthRepository.cachedUser;
     if (user == null) throw const AuthException('Not signed in.');
@@ -607,17 +629,119 @@ class ProfileRepository {
     final userId = _requireUserId();
     final profile = await fetchProfile(userId);
     if (profile == null) return;
+    await writeXpAndStreak(
+      current: profile,
+      xpDelta: xpDelta,
+      currentStreak: currentStreak,
+      longestStreak: longestStreak,
+      lastActiveDate: lastActiveDate,
+    );
+  }
+
+  /// Writes XP + streak for [current] without re-fetching the profile.
+  /// The caller already holds the profile (e.g. a toggle just read it),
+  /// so this is one update instead of a read + an update.
+  Future<void> writeXpAndStreak({
+    required Profile current,
+    required int xpDelta,
+    required int currentStreak,
+    required int longestStreak,
+    required String? lastActiveDate,
+  }) async {
     await _d.updateRow(
       databaseId: _dbId,
       tableId: 'users',
-      rowId: userId,
+      rowId: current.id,
       data: {
-        'xp': (profile.xp + xpDelta).clamp(0, 100000000),
+        'xp': (current.xp + xpDelta).clamp(0, 100000000),
         'currentStreak': currentStreak,
         'longestStreak': longestStreak,
         'lastActiveDate': lastActiveDate,
       },
     );
+  }
+
+  /// Counts rows in [tableId] matching [queries] without fetching them:
+  /// limit 1, read the filtered total. Appwrite returns the full
+  /// filtered count in `total` even when only one row is returned.
+  Future<int> _countRows(String tableId, List<String> queries) async {
+    final list = await _d.listRows(
+      databaseId: _dbId,
+      tableId: tableId,
+      queries: [...queries, Query.limit(1)],
+    );
+    return list.total;
+  }
+
+  /// Recomputes my XP from the source of truth and writes it back.
+  ///
+  /// XP is DERIVED (18 Nov 2026): 2 XP per completed habit log (any
+  /// date) + 2 XP per done weekly/monthly task — never an accumulated
+  /// counter, never a bonus, never a penalty. This heals drift from
+  /// the old rules (the -1 untick, the +1 first-completion bonus, the
+  /// removed +50 daily bonus): whatever the stored XP was, it becomes
+  /// exactly 2 × what is actually completed. The streak is recomputed
+  /// from the active dates the same way; the longest streak never
+  /// decreases (it is a historical best). Serialised through the
+  /// write queue so it cannot race an in-flight toggle.
+  Future<void> recomputeDerivedXp() async {
+    return _writeQueue.run(() async {
+      final userId = _requireUserId();
+      final me = await fetchProfile(userId);
+      if (me == null) return;
+      final habitLogs = await _countRows('habit_logs', [
+        Query.equal('ownerUid', userId),
+        Query.equal('completed', true),
+      ]);
+      final weeklyDone = await _countRows('weekly_tasks', [
+        Query.equal('ownerUid', userId),
+        Query.equal('done', true),
+      ]);
+      final monthlyDone = await _countRows('monthly_tasks', [
+        Query.equal('ownerUid', userId),
+        Query.equal('done', true),
+      ]);
+      final derivedXp = xpPerTask * (habitLogs + weeklyDone + monthlyDone);
+      final dates = await HabitRepository(db: _db).activeDates();
+      final newStreak = computeStreak(dates.toSet());
+      final newLastActive = dates.isEmpty ? null : dates.first;
+      final longest = newStreak > me.longestStreak
+          ? newStreak
+          : me.longestStreak;
+      if (derivedXp == me.xp &&
+          newStreak == me.currentStreak &&
+          newLastActive == me.lastActiveDate &&
+          longest == me.longestStreak) {
+        return;
+      }
+      await _d.updateRow(
+        databaseId: _dbId,
+        tableId: 'users',
+        rowId: userId,
+        data: {
+          'xp': derivedXp,
+          'currentStreak': newStreak,
+          'longestStreak': longest,
+          'lastActiveDate': newLastActive,
+        },
+      );
+      _notifyChanged();
+    });
+  }
+
+  /// Runs the derived-XP sync once per app session, in the
+  /// background. Best-effort: a failure (e.g. no network, or no
+  /// signed-in user in a test) must never break the app — the toggle
+  /// paths keep XP in sync with full-reversal deltas, so a missed
+  /// sync only leaves old drift unhealed until the next launch.
+  Future<void> syncDerivedXpOnce() async {
+    if (_derivedXpSynced) return;
+    _derivedXpSynced = true;
+    try {
+      await recomputeDerivedXp();
+    } catch (_) {
+      // Best-effort (see above).
+    }
   }
 
   Future<List<LeaderboardEntry>> fetchGlobalLeaderboard({
@@ -809,15 +933,16 @@ class HabitRepository {
   }
 
   /// Deletes a habit for good: archives the habit row, removes ALL its
-  /// logs, and adjusts XP/streak so the numbers stay consistent — a
-  /// habit that is done today loses 1 XP for today (the untick rule,
-  /// never below 0), and the streak is recomputed from the remaining
-  /// logs. The longest streak never decreases (it is a historical best).
+  /// logs, and adjusts XP/streak so the numbers stay consistent — every
+  /// completed log the habit contributed is reversed in full (+2 each,
+  /// the derived-XP rule), and the streak is recomputed from the
+  /// remaining logs. The longest streak never decreases (it is a
+  /// historical best).
   Future<void> deleteHabit(String habitId) async {
     return _writeQueue.run(() async {
       final profiles = ProfileRepository(db: _db);
       final logs = await _listLogsForHabit(habitId);
-      final doneToday = logs.any((l) => l.logDate == todayKey() && l.completed);
+      final completedCount = logs.where((l) => l.completed).length;
       for (final log in logs) {
         await _d.deleteRow(
           databaseId: _dbId,
@@ -831,7 +956,7 @@ class HabitRepository {
         final newStreak = computeStreak(dates.toSet());
         final newLastActive = dates.isEmpty ? null : dates.first;
         await profiles.applyXpAndStreak(
-          xpDelta: doneToday ? -xpPerUntick : 0,
+          xpDelta: -xpPerTask * completedCount,
           currentStreak: newStreak,
           longestStreak: me.longestStreak,
           lastActiveDate: newLastActive,
@@ -907,18 +1032,26 @@ class HabitRepository {
   }
 
   /// Tick or untick a habit for [date]. Handles XP and streak.
-  /// +2 XP on completing, -1 XP on unticking (never below 0, enforced
-  /// by the clamp in [ProfileRepository.applyXpAndStreak]). No bonus.
+  /// +2 XP on completing, -2 on unticking (the full reversal — the
+  /// habit is worth 0 while blank, so unticking takes back exactly the
+  /// +2 it granted; repeated tick/untick nets 0 and cannot farm XP).
   /// Untick deletes the log, so the day no longer counts toward the
   /// streak when its last completion is undone (streak is recomputed
   /// from the remaining logs). Returns what changed.
   ///
-  /// Serialised through [_writeQueue]: two toggles fired in quick
-  /// succession must run one after the other, so the second reads the
-  /// first's result instead of the same stale state. After the writes,
-  /// the stored log + XP + streak are re-read and compared with the
+  /// Fast by design (18 Nov 2026, "tick must not wait for the server"):
+  /// the two independent reads run together, the log write and the
+  /// profile write run together, and the "all done" flag is computed
+  /// by the UI (which already knows the done set) instead of two extra
+  /// list fetches here. The UI paints optimistically and never waits
+  /// for this call; the serialised [_writeQueue] still guarantees two
+  /// toggles fired in quick succession run one after the other, so the
+  /// second reads the first's result instead of the same stale state.
+  /// After the writes, the stored log is re-read and compared with the
   /// intended state — a mismatch throws, so the UI reloads the true
   /// server state instead of showing a toggle that never persisted.
+  /// (The profile XP write is a single updateRow that throws on
+  /// failure, so no separate XP re-read is needed.)
   Future<ToggleResult> toggleHabit({
     required Habit habit,
     required String date,
@@ -926,13 +1059,18 @@ class HabitRepository {
   }) async {
     return _writeQueue.run(() async {
       final profiles = ProfileRepository(db: _db);
-      final me = await profiles.fetchMyProfile();
-      if (me == null) throw const AuthException('Profile not found.');
       final userId = _requireUserId();
       final today = todayKey();
       final logId = _logDocId(habit.id, date);
 
-      final existing = await _getLogOrNull(logId);
+      // The profile and the existing log are independent reads.
+      final reads = await Future.wait([
+        profiles.fetchMyProfile(),
+        _getLogOrNull(logId),
+      ]);
+      final me = reads[0] as Profile?;
+      if (me == null) throw const AuthException('Profile not found.');
+      final existing = reads[1] as Map<String, dynamic>?;
       final alreadyDone =
           existing != null && (existing['completed'] as bool? ?? false);
 
@@ -941,24 +1079,8 @@ class HabitRepository {
         wasDone: alreadyDone,
       );
 
-      int newStreak = me.currentStreak;
-      String? newLastActive = me.lastActiveDate;
       if (completed && !alreadyDone) {
-        await _d.createRow(
-          databaseId: _dbId,
-          tableId: 'habit_logs',
-          rowId: logId,
-          data: {
-            'ownerUid': userId,
-            'habitId': habit.id,
-            'date': date,
-            'completed': true,
-            'xpEarned': xpPerTask,
-          },
-          permissions: _ownerPerms(userId),
-        );
-
-        newStreak = streakAfterTick(
+        final newStreak = streakAfterTick(
           currentStreak: me.currentStreak,
           lastActiveDate: me.lastActiveDate,
           today: today,
@@ -966,72 +1088,71 @@ class HabitRepository {
         final longest = newStreak > me.longestStreak
             ? newStreak
             : me.longestStreak;
-        newLastActive = date;
-
-        final habits = await listMyHabits();
-        final todaysLogs = await listLogsForDate(date);
-        final allDone = habits.isNotEmpty && todaysLogs.length >= habits.length;
-        await profiles.applyXpAndStreak(
-          xpDelta: xpDelta,
-          currentStreak: newStreak,
-          longestStreak: longest,
-          lastActiveDate: newLastActive,
-        );
-        await _verifyToggle(
-          logId: logId,
-          expectDone: true,
-          expectXp: (me.xp + xpDelta).clamp(0, 100000000),
-          expectStreak: newStreak,
-        );
+        // The log write and the profile write are independent.
+        await Future.wait([
+          _d.createRow(
+            databaseId: _dbId,
+            tableId: 'habit_logs',
+            rowId: logId,
+            data: {
+              'ownerUid': userId,
+              'habitId': habit.id,
+              'date': date,
+              'completed': true,
+              'xpEarned': xpPerTask,
+            },
+            permissions: _ownerPerms(userId),
+          ),
+          profiles.writeXpAndStreak(
+            current: me,
+            xpDelta: xpDelta,
+            currentStreak: newStreak,
+            longestStreak: longest,
+            lastActiveDate: date,
+          ),
+        ]);
+        await _verifyLog(logId: logId, expectDone: true);
         _notifyChanged();
-        return ToggleResult(xpDelta: xpDelta, allDone: allDone);
+        return ToggleResult(xpDelta: xpDelta, allDone: false);
       }
 
       if (!completed && alreadyDone) {
-        await _d.deleteRow(
+        // Delete the log and list the remaining active dates together;
+        // the profile write needs the dates, so it follows.
+        final deleteFuture = _d.deleteRow(
           databaseId: _dbId,
           tableId: 'habit_logs',
           rowId: logId,
         );
-        // Recompute the streak from the remaining active dates.
-        final dates = await activeDates();
-        newStreak = computeStreak(dates.toSet());
-        newLastActive = dates.isEmpty ? null : dates.first;
-        await profiles.applyXpAndStreak(
+        final datesFuture = activeDates();
+        await deleteFuture;
+        final dates = await datesFuture;
+        final newStreak = computeStreak(dates.toSet());
+        final newLastActive = dates.isEmpty ? null : dates.first;
+        await profiles.writeXpAndStreak(
+          current: me,
           xpDelta: xpDelta,
           currentStreak: newStreak,
           longestStreak: me.longestStreak,
           lastActiveDate: newLastActive,
         );
-        await _verifyToggle(
-          logId: logId,
-          expectDone: false,
-          expectXp: (me.xp + xpDelta).clamp(0, 100000000),
-          expectStreak: newStreak,
-        );
+        await _verifyLog(logId: logId, expectDone: false);
       }
       _notifyChanged();
       return ToggleResult(xpDelta: xpDelta, allDone: false);
     });
   }
 
-  /// Re-reads the stored state after a toggle and throws when it does
+  /// Re-reads the stored log after a toggle and throws when it does
   /// not match the intended one. A partial write (log saved but XP
   /// not, or the reverse) must never look like a success.
-  Future<void> _verifyToggle({
+  Future<void> _verifyLog({
     required String logId,
     required bool expectDone,
-    required int expectXp,
-    required int expectStreak,
   }) async {
     final log = await _getLogOrNull(logId);
     final done = log != null && (log['completed'] as bool? ?? false);
     if (done != expectDone) {
-      throw StateError('Habit toggle did not save properly. Please try again.');
-    }
-    final profile = await ProfileRepository(db: _db).fetchMyProfile();
-    if (profile == null) throw const AuthException('Profile not found.');
-    if (profile.xp != expectXp || profile.currentStreak != expectStreak) {
       throw StateError('Habit toggle did not save properly. Please try again.');
     }
   }
@@ -1128,10 +1249,11 @@ class TaskRepository {
     }
   }
 
-  /// Toggles a weekly task: +2 XP on completing, -1 XP on unticking
-  /// (never below 0). Reads the current state first so toggling to
-  /// the same state grants nothing. Serialised with the other XP
-  /// writes so two quick toggles cannot read the same stale state.
+  /// Toggles a weekly task: +2 XP on completing, -2 XP on unticking
+  /// (the full reversal — a done task is worth +2, a blank one 0).
+  /// Reads the current state first so toggling to the same state
+  /// grants nothing. Serialised with the other XP writes so two quick
+  /// toggles cannot read the same stale state.
   Future<void> toggleWeeklyTask(String id, bool done) async {
     return _writeQueue.run(() async {
       final wasDone = await _taskDone('weekly_tasks', id);
@@ -1148,14 +1270,14 @@ class TaskRepository {
     });
   }
 
-  /// Deletes a weekly task. A task that was done loses 1 XP
-  /// (never below 0) — deleting must not leave phantom XP behind.
+  /// Deletes a weekly task. A task that was done loses its full +2 XP
+  /// — deleting must not leave phantom XP behind.
   Future<void> deleteWeeklyTask(String id) async {
     return _writeQueue.run(() async {
       final wasDone = await _taskDone('weekly_tasks', id);
       await _d.deleteRow(databaseId: _dbId, tableId: 'weekly_tasks', rowId: id);
       if (wasDone == true) {
-        await _adjustXp(-xpPerUntick);
+        await _adjustXp(-xpPerTask);
       }
       _notifyChanged();
     });
@@ -1187,7 +1309,7 @@ class TaskRepository {
     _notifyChanged();
   }
 
-  /// Toggles a monthly task: same +2 / -1 XP rule as weekly tasks.
+  /// Toggles a monthly task: same +2 / -2 XP rule as weekly tasks.
   Future<void> toggleMonthlyTask(String id, bool done) async {
     return _writeQueue.run(() async {
       final wasDone = await _taskDone('monthly_tasks', id);
@@ -1204,8 +1326,8 @@ class TaskRepository {
     });
   }
 
-  /// Deletes a monthly task. A task that was done loses 1 XP
-  /// (never below 0) — deleting must not leave phantom XP behind.
+  /// Deletes a monthly task. A task that was done loses its full +2 XP
+  /// — deleting must not leave phantom XP behind.
   Future<void> deleteMonthlyTask(String id) async {
     return _writeQueue.run(() async {
       final wasDone = await _taskDone('monthly_tasks', id);
@@ -1215,7 +1337,7 @@ class TaskRepository {
         rowId: id,
       );
       if (wasDone == true) {
-        await _adjustXp(-xpPerUntick);
+        await _adjustXp(-xpPerTask);
       }
       _notifyChanged();
     });

@@ -29,6 +29,7 @@ import '../widgets/common.dart';
 import '../widgets/habit_dialog.dart';
 import '../widgets/reminder_dialog.dart';
 import 'auth_screen.dart';
+import 'search_screen.dart';
 
 class _ScheduleItem {
   const _ScheduleItem({
@@ -51,11 +52,11 @@ class _ScheduleItem {
   String get kindLabel {
     switch (kind) {
       case 'weekly':
-        return 'Weekly mission';
+        return 'Weekly task';
       case 'monthly':
-        return 'Monthly mission';
+        return 'Monthly task';
       default:
-        return 'Battle';
+        return 'Habit';
     }
   }
 }
@@ -85,7 +86,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   List<_ScheduleItem> _items = [];
   Map<String, Reminder> _remindersByKey = {};
   bool _loading = true;
-  final Set<String> _toggling = {};
   // Strike counter per item: bumped on every completion so the slash
   // sweep (StrikeOverlay) replays for that tile.
   final Map<String, int> _strikeKeys = {};
@@ -202,7 +202,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   int get _doneCount => _items.where((i) => i.done).length;
 
   Future<void> _toggle(_ScheduleItem item, bool value) async {
-    if (_toggling.contains(item.key)) return;
     final index = _items.indexWhere((i) => i.key == item.key);
     if (index < 0) return;
     final prev = _items[index];
@@ -218,7 +217,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         _strikeKeys[item.key] = (_strikeKeys[item.key] ?? 0) + 1;
       }
     });
-    _toggling.add(item.key);
     try {
       if (item.kind == 'habit') {
         final habit = Habit(
@@ -242,8 +240,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         setState(() => _items[index] = prev);
         showError(context, e);
       }
-    } finally {
-      _toggling.remove(item.key);
     }
   }
 
@@ -322,15 +318,22 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Battle Plan',
+          'Schedule',
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
         backgroundColor: Colors.transparent,
         actions: [
           IconButton(
+            onPressed: () => Navigator.of(context).push(
+              WarriorPageRoute(builder: (_) => const SearchScreen()),
+            ),
+            tooltip: 'Search people',
+            icon: const Icon(Icons.search),
+          ),
+          IconButton(
             onPressed: _addHabit,
             icon: const Icon(Icons.add),
-            tooltip: 'Add a battle',
+            tooltip: 'Add a habit',
           ),
         ],
       ),
@@ -378,7 +381,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                           Row(
                             children: [
                               const Text(
-                                'Battle progress',
+                                "Today's progress",
                                 style: TextStyle(
                                   fontSize: 17,
                                   fontWeight: FontWeight.w800,
@@ -426,10 +429,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                     if (items.isEmpty)
                       EmptyState(
                         icon: Icons.flag_outlined,
-                        title: 'No battles scheduled today',
+                        title: 'Nothing scheduled today',
                         subtitle:
-                            'Add a battle below and it will show up here with its time.',
-                        actionLabel: 'Add a battle',
+                            'Add a habit below and it will show up here with its time.',
+                        actionLabel: 'Add a habit',
                         onAction: _addHabit,
                       )
                     else

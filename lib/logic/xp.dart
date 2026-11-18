@@ -3,24 +3,22 @@
 // These functions are deliberately free of any backend dependency so they
 // can be unit-tested (see test/xp_test.dart).
 //
-// Rules (agreed with the user, 14 Nov 2026; untick rule changed
-// 18 Nov 2026):
-// - +2 XP for every habit/task completion, and -1 XP when a completed
-//   item is unticked again (never below 0). No daily-complete bonus.
+// Rules (agreed with the user, 14 Nov 2026; final rule 18 Nov 2026):
+// - XP is DERIVED, not accumulated: a habit/task is worth +2 XP while it
+//   is ticked, and 0 while it is blank. Ticking grants +2; unticking
+//   fully reverses that +2 (back to 0 for that item); re-ticking grants
+//   +2 again. So repeated tick/untick nets 0 and can never farm XP.
+//   There is NO -1 penalty, NO negative marking, and NO streak or
+//   first-completion bonus — XP comes only from completed habits.
 // - Streak = consecutive days (local calendar dates, Asia/Kolkata on the
 //   user's device) with at least 1 habit completed.
 // - Level = floor(total XP / 100) + 1. At 2 XP per task a level takes
 //   50 completions. Progress to the next level is (XP % 100) / 100.
-// - Warrior rank: a named title for each level band, shown on profiles
+// - Rank: a named title for each level band, shown on profiles
 //   and the leaderboard (18 Nov 2026).
 
 /// XP granted for completing one habit or task.
 const int xpPerTask = 2;
-
-/// XP removed when a completed item is unticked again (18 Nov 2026:
-/// the untick penalty is 1, not 2 — unticking is forgiven more than
-/// completing is rewarded).
-const int xpPerUntick = 1;
 const int xpPerLevel = 100;
 
 /// Warrior rank names, by level band. A warrior's title is how the
@@ -38,12 +36,14 @@ String rankNameForLevel(int level) {
 String rankNameForXp(int xp) => rankNameForLevel(levelForXp(xp));
 
 /// XP delta for toggling an item: +2 on completing a pending item,
-/// -1 on unticking a done item, 0 when nothing actually changes.
-/// Single source of truth for the plus/minus rule — repositories and
-/// UI both use it so the stored XP can never drift from the log.
+/// -2 on unticking a done item (the full reversal — the item is worth
+/// 0 while blank, so unticking takes back exactly the +2 it granted),
+/// 0 when nothing actually changes. Single source of truth for the
+/// plus/minus rule — repositories and UI both use it so the stored XP
+/// can never drift from the log. Repeated tick/untick nets 0.
 int xpDeltaForToggle({required bool completing, required bool wasDone}) {
   if (completing && !wasDone) return xpPerTask;
-  if (!completing && wasDone) return -xpPerUntick;
+  if (!completing && wasDone) return -xpPerTask;
   return 0;
 }
 
@@ -119,3 +119,37 @@ String monthKey([DateTime? date]) {
   final d = date ?? DateTime.now();
   return '${d.year}-${_twoDigits(d.month)}';
 }
+
+// Day of the year, 1-based (Jan 1 = 1).
+int dayOfYear([DateTime? date]) {
+  final d = date ?? DateTime.now();
+  return d.difference(DateTime(d.year, 1, 1)).inDays + 1;
+}
+
+// Days left in the year after today (365/366 - day of year).
+int daysLeftInYear([DateTime? date]) {
+  final d = date ?? DateTime.now();
+  final daysInYear = DateTime(d.year + 1, 1, 1)
+      .difference(DateTime(d.year, 1, 1))
+      .inDays;
+  return daysInYear - dayOfYear(d);
+}
+
+const _monthNames = [
+  '',
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+// "November 2026" — the month header on the Dashboard calendar.
+String monthName(DateTime date) => '${_monthNames[date.month]} ${date.year}';

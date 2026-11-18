@@ -9,10 +9,8 @@ import 'data/repositories.dart';
 import 'screens/auth_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/home_screen.dart';
-import 'screens/leaderboard_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/schedule_screen.dart';
-import 'screens/search_screen.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 
@@ -152,7 +150,7 @@ class _AuthGateState extends State<AuthGate> {
       future: profileRepo.fetchMyProfile(),
       builder: (context, profileSnapshot) {
         if (profileSnapshot.connectionState == ConnectionState.waiting) {
-          return const WarriorSplash(message: 'Loading your war room…');
+          return const WarriorSplash(message: 'Loading…');
         }
         if (profileSnapshot.data == null) {
           return ProfileSetupScreen(
@@ -166,7 +164,10 @@ class _AuthGateState extends State<AuthGate> {
   }
 }
 
-/// Bottom-navigation shell: Home, Dashboard, Leaderboard, Search, Profile.
+/// Bottom-navigation shell: Home, Dashboard, Profile (3 tabs, 18 Nov
+/// 2026). Leaderboard and Search are NOT tabs any more — the
+/// leaderboard opens by tapping the XP pill on Home, and Search opens
+/// from the search icon in the top header of each screen.
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
@@ -192,6 +193,10 @@ class _MainShellState extends State<MainShell> {
     // that the user is signed in, re-check due reminders and
     // re-schedule the Android alarms for this account.
     unawaited(ReminderService.instance.refresh());
+    // Heal any drift between the stored XP and the derived value
+    // (2 XP per actually-completed habit/task) — once per session,
+    // in the background; screens reload through the profile stream.
+    unawaited(ProfileRepository().syncDerivedXpOnce());
   }
 
   @override
@@ -279,8 +284,6 @@ class _MainShellState extends State<MainShell> {
   static const List<Widget> _screens = [
     HomeScreen(),
     DashboardScreen(),
-    LeaderboardScreen(),
-    SearchScreen(),
     ProfileScreen(),
   ];
 
@@ -317,16 +320,6 @@ class _MainShellState extends State<MainShell> {
                   icon: Icon(Icons.dashboard_outlined),
                   selectedIcon: Icon(Icons.dashboard),
                   label: 'Dashboard',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.leaderboard_outlined),
-                  selectedIcon: Icon(Icons.leaderboard),
-                  label: 'Leaderboard',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.search_outlined),
-                  selectedIcon: Icon(Icons.search),
-                  label: 'Search',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.person_outlined),
@@ -375,16 +368,6 @@ class _MainShellState extends State<MainShell> {
                       icon: Icon(Icons.dashboard_outlined),
                       selectedIcon: Icon(Icons.dashboard),
                       label: Text('Dashboard'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.leaderboard_outlined),
-                      selectedIcon: Icon(Icons.leaderboard),
-                      label: Text('Leaderboard'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.search_outlined),
-                      selectedIcon: Icon(Icons.search),
-                      label: Text('Search'),
                     ),
                     NavigationRailDestination(
                       icon: Icon(Icons.person_outlined),

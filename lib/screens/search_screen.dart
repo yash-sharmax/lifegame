@@ -90,21 +90,21 @@ class _SearchScreenState extends State<SearchScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ResponsiveCenter(
-      maxWidth: 980,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
-        children: [
-          const Text(
-            'Find warriors',
-            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
-          ).animate().fadeIn().slideY(begin: -0.1),
-          const SizedBox(height: 6),
-          const Text(
-            'Search by username or name, follow friends and compare ranks on the Friends board.',
-            style: TextStyle(color: AppTheme.inkSoft, fontSize: 14),
-          ),
-          const SizedBox(height: 16),
+    // Push-only now (18 Nov 2026): Search opens from the search icon
+    // in a screen header, so it needs its own Scaffold + AppBar with
+    // a back button instead of the in-body title it had as a tab.
+    return Scaffold(
+      appBar: AppBar(title: const Text('Find people')),
+      body: ResponsiveCenter(
+        maxWidth: 980,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+          children: [
+            const Text(
+              'Search by username or name, follow friends and compare ranks on the Friends board.',
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 14),
+            ),
+            const SizedBox(height: 16),
           TextField(
             controller: _query,
             textInputAction: TextInputAction.search,
@@ -144,7 +144,7 @@ class _SearchScreenState extends State<SearchScreen> {
           else if (_results.isEmpty && !_searching)
             EmptyState(
               icon: Icons.search_off_outlined,
-              title: 'No players found',
+              title: 'No people found',
               subtitle: 'Try a different username or name.',
             )
           else
@@ -172,6 +172,7 @@ class _SearchScreenState extends State<SearchScreen> {
             }),
         ],
       ),
+    ),
     );
   }
 }
@@ -235,7 +236,7 @@ class _SearchRow extends StatelessWidget {
                   backgroundColor: following
                       ? AppTheme.cardBorder
                       : AppTheme.ember,
-                  foregroundColor: following ? AppTheme.ink : const Color(0xFF1A1206),
+                  foregroundColor: AppTheme.ink,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 10,

@@ -54,11 +54,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
-    expect(find.text('Your first battle awaits'), findsOneWidget);
-    expect(find.text('Add your first battle'), findsOneWidget);
+    expect(find.text('No habits yet'), findsOneWidget);
+    expect(find.text('Add your first habit'), findsOneWidget);
   });
 
-  testWidgets('home no longer shows the level bar (it lives on Profile)', (
+  testWidgets('home shows the XP pill, not the level bar (it lives on Profile)', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -73,10 +73,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // The level bar moved off Home to Profile (18 Nov 2026): Home
-    // shows no XP or level at all.
+    // The level bar moved off Home to Profile (18 Nov 2026), but
+    // Home now shows the XP pill next to the streak (tap it to open
+    // the leaderboard) — so '42 XP' IS here, while the level bar's
+    // own strings are not.
     expect(find.text('LEVEL 1'), findsNothing);
-    expect(find.text('42 XP'), findsNothing);
+    expect(find.text('42 XP'), findsOneWidget);
     expect(find.text('42 / 100 XP to Level 2'), findsNothing);
   });
 
@@ -129,6 +131,13 @@ void main() {
   testWidgets('done weekly task stays visible without a strikethrough', (
     tester,
   ) async {
+    // Tall viewport so the tab bar is on screen (like the other
+    // Profile tests).
+    tester.view.physicalSize = const Size(800, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -143,8 +152,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Task sections sit below the fold: scroll until visible.
-    await tester.scrollUntilVisible(find.text('Buy groceries'), 300);
+    // Weekly tasks live behind the "Weekly" tab now (18 Nov 2026):
+    // tap it first, then the task is visible.
+    await tester.tap(find.text('Weekly (1)'));
     await tester.pumpAndSettle();
 
     expect(find.text('Buy groceries'), findsOneWidget);
@@ -191,12 +201,14 @@ void main() {
     expect(find.text('Read 10 pages'), findsOneWidget);
   });
 
-  testWidgets('a rapid second tap does not start a second toggle', (
+  testWidgets('a rapid second tap is accepted and toggles back', (
     tester,
   ) async {
-    // The toggle takes 100ms in this fake; a second tap 10ms later
-    // must be ignored while the first toggle is still saving, so two
-    // toggles can never run against the same stale state.
+    // The toggle takes 100ms in this fake. A second tap 10ms later
+    // must NOT be ignored any more (18 Nov 2026: the old guard that
+    // blocked rapid taps is what made taps feel stuck): it flips the
+    // tile back, queues its own server write, and the repo's serialised
+    // queue runs them in order — so the tile ends undone and XP nets 0.
     final repo = _CountingHabitRepo();
     await tester.pumpWidget(
       MaterialApp(
@@ -209,10 +221,16 @@ void main() {
 
     await tester.tap(find.text('Read 10 pages'));
     await tester.pump(const Duration(milliseconds: 10));
+    // The first tap already painted the tile done.
+    expect(find.text('Done • +2 XP'), findsOneWidget);
     await tester.tap(find.text('Read 10 pages'));
+    await tester.pump(const Duration(milliseconds: 10));
+    // The second tap paints it undone immediately — no waiting.
+    expect(find.text('Tap to complete • +2 XP'), findsOneWidget);
     await tester.pumpAndSettle();
 
-    expect(repo.toggleCalls, 1);
+    expect(repo.toggleCalls, 2);
+    expect(find.text('Tap to complete • +2 XP'), findsOneWidget);
   });
 
   testWidgets(
@@ -365,7 +383,7 @@ void main() {
     expect(find.text('Send feedback'), findsOneWidget);
     expect(find.text('Delete account'), findsOneWidget);
     expect(find.text('Log out'), findsOneWidget);
-    expect(find.text('Version 2.4.0+9 • Flutter • Appwrite'), findsOneWidget);
+    expect(find.text('Version 2.5.0+10 • Flutter • Appwrite'), findsOneWidget);
   });
 
   testWidgets('feedback form sends a message and shows a thank-you', (

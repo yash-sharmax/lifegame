@@ -187,7 +187,7 @@ class _AuthScreenState extends State<AuthScreen> {
                       ).animate().fadeIn().slideY(begin: -0.2),
                       const SizedBox(height: 8),
                       const Text(
-                        'Every day is a battle. Win it.',
+                        'Small steps, every day.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: AppTheme.ink,
