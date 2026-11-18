@@ -99,7 +99,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   ProfileRepository get _profiles =>
       widget.profileRepo ?? ProfileRepository();
 
-  _DashboardPeriod _period = _DashboardPeriod.monthly;
+  // v2.8.1 (18 Nov 2026): the Dashboard opens on DAILY — the
+  // user's phone screenshot showed it defaulting to Monthly.
+  _DashboardPeriod _period = _DashboardPeriod.daily;
   DateTime _anchor = DateTime(
     DateTime.now().year,
     DateTime.now().month,
@@ -232,6 +234,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
         dateKey(weekStart),
         dateKey(todayDate),
       );
+      // The Daily list needs the anchor day's sub-task completions
+      // too: when the anchor is a past day outside this week, the
+      // week fetch above does not cover it. Merge the period's range
+      // in (daily: anchor-6..anchor; weekly/monthly: the period) so
+      // the Daily list's statuses are never stale.
+      final rangeSubtaskDone = await _habits.completedSubtaskIdsInRange(
+        dateKey(rangeStart),
+        dateKey(rangeEnd),
+      );
+      for (final entry in rangeSubtaskDone.entries) {
+        (subtaskDoneByDate[entry.key] ??= <String>{}).addAll(entry.value);
+      }
       final profile = await _profiles.fetchMyProfile();
       // The ledger is derived from the same source as the XP rule:
       // every completed habit log + every done weekly/monthly task
@@ -582,18 +596,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             'Add a habit from Home and the table will fill in here.',
                       )
                     else ...[
-                      _HabitTable(
-                        dates: tableDates,
-                        todayKey: today,
-                        todayDate: todayDate,
-                        habits: _habitsList,
-                        logsByDate: _logsByDate,
-                        habitsFor: _habitsFor,
-                        perDayDone: [
-                          for (final d in tableDates)
-                            doneByDate[dateKey(d)] ?? 0,
-                        ],
-                      ).animate().fadeIn().slideY(begin: 0.05),
+                      // Daily gets a proper single-day list (v2.8.1):
+                      // the 1-day Excel table was a cramped squeeze —
+                      // truncated names, a tiny date header. Weekly /
+                      // Monthly keep the multi-day Excel table.
+                      if (_period == _DashboardPeriod.daily)
+                        _DailyHabitList(
+                          date: _anchor,
+                          habits: _habitsFor(_anchor),
+                          doneIds:
+                              _logsByDate[dateKey(_anchor)] ??
+                              const <String>{},
+                          subtasksByHabit: _subtasksByHabit,
+                          doneSubtaskIds:
+                              _subtaskDoneByDate[dateKey(_anchor)] ??
+                              const <String>{},
+                        ).animate().fadeIn().slideY(begin: 0.05)
+                      else
+                        _HabitTable(
+                          dates: tableDates,
+                          todayKey: today,
+                          todayDate: todayDate,
+                          habits: _habitsList,
+                          logsByDate: _logsByDate,
+                          habitsFor: _habitsFor,
+                          perDayDone: [
+                            for (final d in tableDates)
+                              doneByDate[dateKey(d)] ?? 0,
+                          ],
+                        ).animate().fadeIn().slideY(begin: 0.05),
                       const SizedBox(height: 14),
                       _ChartsCard(
                         period: _period,
@@ -876,6 +907,274 @@ class _TodayScoreCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The Daily view's habit list: a proper single-day interface, NOT a
+/// squeezed one-column Excel table (v2.8.1, 18 Nov 2026 — the user's
+/// phone screenshot showed the 1-day table cramped: habit names
+/// truncated to "Verify Challen…", the date header a tiny "18" with a
+/// small "w" under it, and the whole thing looking like a squeezed
+/// monthly table).
+///
+/// One day only: the date is shown big (day number + full weekday),
+/// habit names use the full width and wrap to two lines, each row
+/// shows a clear Done / Pending status plus sub-task progress, and
+/// the footer sums the day up. Still READ-ONLY (view only): ticking
+/// happens on Home, never from here.
+class _DailyHabitList extends StatelessWidget {
+  const _DailyHabitList({
+    required this.date,
+    required this.habits,
+    required this.doneIds,
+    required this.subtasksByHabit,
+    required this.doneSubtaskIds,
+  });
+
+  /// The single day shown.
+  final DateTime date;
+
+  /// Habits applicable that day.
+  final List<Habit> habits;
+
+  /// Habit ids ticked that day.
+  final Set<String> doneIds;
+
+  /// Sub-tasks per habit id.
+  final Map<String, List<HabitSubtask>> subtasksByHabit;
+
+  /// Sub-task ids done that day.
+  final Set<String> doneSubtaskIds;
+
+  static const List<String> _weekdayFull = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final key = dateKey(date);
+    final isToday = key == dateKey(DateTime.now());
+    var doneCount = 0;
+    for (final habit in habits) {
+      if (_isDone(habit, key)) doneCount++;
+    }
+    return Container(
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Habit table',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                const Icon(
+                  Icons.visibility_outlined,
+                  color: AppTheme.inkSoft,
+                  size: 15,
+                ),
+                const SizedBox(width: 4),
+                const Text(
+                  'View only — tick from Home',
+                  style: TextStyle(color: AppTheme.inkSoft, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          // The day, shown big: day number + full weekday + date.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 6, 14, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Text(
+                  '${date.day}',
+                  style: TextStyle(
+                    fontSize: 30,
+                    fontWeight: FontWeight.w900,
+                    color: isToday ? AppTheme.ember : AppTheme.ink,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _weekdayFull[date.weekday - 1],
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      _prettyDate(key),
+                      style: const TextStyle(
+                        color: AppTheme.inkSoft,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          if (habits.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(14, 14, 14, 14),
+              child: Text(
+                'No habits due this day.',
+                style: TextStyle(color: AppTheme.inkSoft, fontSize: 13),
+              ),
+            )
+          else
+            for (final habit in habits) _habitRow(habit, key),
+          const Divider(height: 1),
+          // Footer: the day summed up, clearly.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+            child: Row(
+              children: [
+                const Text(
+                  'Done',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    color: AppTheme.inkSoft,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  '$doneCount of ${habits.length} done',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: isToday ? AppTheme.ember : AppTheme.ink,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Derived done state for one habit on [key]: all due sub-tasks
+  /// done, or the habit's own tick when it has no sub-tasks due
+  /// (same rule as the score card and the XP).
+  bool _isDone(Habit habit, String key) => habitIsDone(
+    due: dueSubtasks(subtasksByHabit[habit.id] ?? const <HabitSubtask>[], key),
+    doneSubtaskIds: doneSubtaskIds,
+    habitTicked: doneIds.contains(habit.id),
+  );
+
+  Widget _habitRow(Habit habit, String key) {
+    final gradient =
+        AppTheme.habitGradients[habit.color % AppTheme.habitGradients.length];
+    final due = dueSubtasks(
+      subtasksByHabit[habit.id] ?? const <HabitSubtask>[],
+      key,
+    );
+    final done = _isDone(habit, key);
+    final doneSubs = due.where((s) => doneSubtaskIds.contains(s.id)).length;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppTheme.cardBorder)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  gradient: gradient,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    habit.title,
+                    maxLines: 2,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (due.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      '$doneSubs/${due.length} sub-tasks done',
+                      style: const TextStyle(
+                        color: AppTheme.inkSoft,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              children: [
+                Container(
+                  width: 26,
+                  height: 26,
+                  decoration: BoxDecoration(
+                    color: done ? null : Colors.transparent,
+                    gradient: done ? AppTheme.emberGradient : null,
+                    borderRadius: BorderRadius.circular(8),
+                    border: done
+                        ? null
+                        : Border.all(color: AppTheme.cardBorder, width: 1.5),
+                  ),
+                  child: done
+                      ? const Icon(Icons.check, color: AppTheme.ink, size: 16)
+                      : null,
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  done ? 'Done' : 'Pending',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: done ? AppTheme.ember : AppTheme.inkSoft,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

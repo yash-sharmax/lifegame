@@ -492,7 +492,7 @@ void main() {
     expect(auth.deleteCalled, isTrue);
   });
 
-  testWidgets('dashboard shows the Excel table, charts and XP ledger', (
+  testWidgets('dashboard shows the habit table, charts and XP ledger', (
     tester,
   ) async {
     // Tall viewport so the whole scrollable Dashboard (score card +
@@ -516,13 +516,14 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // The Excel-style table: habits in one column, dates as columns,
-    // view-only (ticking happens on Home).
+    // The habit table (Daily single-day list by default, v2.8.1):
+    // habits shown, view-only (ticking happens on Home).
     expect(find.text('Habit table'), findsOneWidget);
-    // The habit appears twice: once in the table row, once in the ledger.
+    // The habit appears in the table row, the score card and the
+    // ledger.
     expect(find.text('Read 10 pages'), findsWidgets);
     expect(find.text('View only — tick from Home'), findsOneWidget);
-    // Pie chart (done vs missed) and bar graph (per-day completions).
+    // Pie chart (done vs missed) and bar graph (per-habit, daily).
     expect(find.byType(PieChart), findsOneWidget);
     expect(find.byType(BarChart), findsOneWidget);
     // The ledger: 1 completed habit log = 1 entry × 2 XP = 2 XP,
@@ -531,6 +532,12 @@ void main() {
     expect(find.text('Total 2 XP'), findsOneWidget);
     expect(find.text('1 entries × 2 XP = 2 XP'), findsOneWidget);
     expect(find.textContaining('will match after the next sync'), findsNothing);
+
+    // Switch to Monthly: the multi-day Excel table renders instead.
+    await tester.tap(find.text('Monthly'));
+    await tester.pumpAndSettle();
+    expect(find.text('Habit'), findsOneWidget);
+    expect(find.text('View only — tick from Home'), findsOneWidget);
   });
 
   test('chartDayLabel spaces monthly labels every 5 days', () {
@@ -571,11 +578,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Monthly is the default (the v2.6.0 view).
+    // Daily is the default (v2.8.1: the Dashboard opens on Daily).
     expect(find.text('Daily'), findsOneWidget);
     expect(find.text('Weekly'), findsOneWidget);
     expect(find.text('Monthly'), findsOneWidget);
-    expect(find.text('Daily completions — this month'), findsOneWidget);
+    expect(find.textContaining('Today,'), findsOneWidget);
+    expect(find.text("Today's habits"), findsOneWidget);
+    expect(find.text('Daily completions — last 7 days'), findsOneWidget);
 
     await tester.tap(find.text('Weekly'));
     await tester.pumpAndSettle();
@@ -593,6 +602,10 @@ void main() {
     await tester.tap(find.text('Monthly'));
     await tester.pumpAndSettle();
     expect(find.text('Daily completions — this month'), findsOneWidget);
+    // The multi-day Excel table still renders in Monthly (the
+    // 'Habit' column header exists only there, not in the Daily
+    // single-day list).
+    expect(find.text('Habit'), findsOneWidget);
   });
 
   testWidgets('dashboard shows today\'s score with done and pending', (
@@ -618,9 +631,12 @@ void main() {
     await tester.pumpAndSettle();
 
     // 1 of 2 habits done today: the score is 50%, and both lists
-    // are shown so the percent can be checked by hand.
+    // are shown so the percent can be checked by hand. '50%' shows
+    // twice now (v2.8.1: Daily is the default, so the pie chart
+    // shows today's 50% too — in Monthly it showed the month's
+    // percent instead).
     expect(find.text("Today's score"), findsOneWidget);
-    expect(find.text('50%'), findsOneWidget);
+    expect(find.text('50%'), findsWidgets);
     expect(find.textContaining('Today: 1 of 2 done'), findsOneWidget);
     expect(find.text('Done (1)'), findsOneWidget);
     expect(find.text('Still to do (1)'), findsOneWidget);
@@ -723,6 +739,59 @@ void main() {
     expect(find.byType(PieChart), findsOneWidget);
     expect(find.text('0%'), findsWidgets);
     expect(find.textContaining('Not started yet'), findsOneWidget);
+  });
+
+  testWidgets('dashboard daily list shows full names, a readable date and sub-task progress', (
+    tester,
+  ) async {
+    // Phone-width viewport (390): the old 1-day table truncated
+    // 'Verify Challenge Habit' to 'Verify Challen…' at this width
+    // (v2.8.1, user's screenshot). The tall viewport builds the
+    // whole scrollable Dashboard.
+    tester.view.physicalSize = const Size(390, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: DashboardScreen(
+            habitRepo: _DailyListHabitRepo(),
+            taskRepo: _LedgerTaskRepo(),
+            profileRepo: _TwoXpProfileRepo(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Daily is the default period now.
+    expect(find.text('Daily completions — last 7 days'), findsOneWidget);
+    // The long habit name shows in FULL, on a row wide enough for
+    // it: the old 128px column gave the title ~94px; the new list
+    // gives it the full card width.
+    final nameFinder = find.text('Verify Challenge Habit');
+    expect(nameFinder, findsOneWidget);
+    expect(tester.getSize(nameFinder).width, greaterThan(150));
+    // The date header spells the weekday out in full (the old table
+    // showed a tiny day number + one weekday letter).
+    const weekdays = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    expect(find.text(weekdays[DateTime.now().weekday - 1]), findsOneWidget);
+    // Sub-task progress on the habit row.
+    expect(find.text('1/2 sub-tasks done'), findsOneWidget);
+    // Clear Done / Pending status per row: the habit with an undone
+    // sub-task is Pending, the plain done habit is Done.
+    expect(find.text('Pending'), findsOneWidget);
+    expect(find.text('Done'), findsWidgets);
   });
 
   testWidgets('followers list opens with profiles, empty state otherwise', (
@@ -1176,6 +1245,96 @@ class _ScoreSubtaskHabitRepo extends HabitRepository {
       ),
     ];
   }
+
+  @override
+  Future<List<HabitLog>> listLogsInRange(String start, String end) async {
+    final today = dateKey(DateTime.now());
+    if (today.compareTo(start) >= 0 && today.compareTo(end) <= 0) {
+      return [
+        HabitLog(
+          id: 'h2_$today',
+          habitId: 'h2',
+          userId: 'test-user',
+          logDate: today,
+        ),
+      ];
+    }
+    return [];
+  }
+
+  @override
+  Future<List<HabitLog>> listAllCompletedLogs() async {
+    final today = dateKey(DateTime.now());
+    return [
+      HabitLog(
+        id: 'h2_$today',
+        habitId: 'h2',
+        userId: 'test-user',
+        logDate: today,
+      ),
+    ];
+  }
+
+  @override
+  Future<Map<String, List<HabitSubtask>>> listSubtasksByHabit(
+    Iterable<String> habitIds,
+  ) async => {'h1': _subs};
+
+  @override
+  Future<Set<String>> completedSubtaskIdsForDate(String date) async {
+    if (date != dateKey(DateTime.now())) return {};
+    return {'s1'};
+  }
+
+  @override
+  Future<Map<String, Set<String>>> completedSubtaskIdsInRange(
+    String start,
+    String end,
+  ) async {
+    final today = dateKey(DateTime.now());
+    if (today.compareTo(start) >= 0 && today.compareTo(end) <= 0) {
+      return {today: {'s1'}};
+    }
+    return {};
+  }
+}
+
+/// Long habit name + sub-tasks: feeds the Daily-list layout test
+/// (v2.8.1). 'Verify Challenge Habit' must show in FULL — the old
+/// 1-day table truncated it to 'Verify Challen…' at phone width.
+class _DailyListHabitRepo extends HabitRepository {
+  List<HabitSubtask> get _subs {
+    final today = dateKey(DateTime.now());
+    return [
+      HabitSubtask(
+        id: 's1',
+        habitId: 'h1',
+        title: 'Warm up',
+        kind: HabitSubtask.kindDaily,
+        date: today,
+      ),
+      HabitSubtask(
+        id: 's2',
+        habitId: 'h1',
+        title: 'Run 2 km',
+        kind: HabitSubtask.kindDaily,
+        date: today,
+      ),
+    ];
+  }
+
+  @override
+  Future<List<Habit>> listMyHabits() async => [
+    const Habit(
+      id: 'h1',
+      userId: 'test-user',
+      title: 'Verify Challenge Habit',
+    ),
+    const Habit(id: 'h2', userId: 'test-user', title: 'Read'),
+  ];
+
+  @override
+  Future<List<HabitLog>> listLogsForDate(String date) async => [];
 
   @override
   Future<List<HabitLog>> listLogsInRange(String start, String end) async {
