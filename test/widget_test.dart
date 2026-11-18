@@ -394,10 +394,10 @@ void main() {
     expect(find.text('Log out'), findsOneWidget);
     // About is clean: plain version only, no build suffix, no tech mentions.
     expect(
-      find.text('Version 2.8.3'),
+      find.text('Version 2.8.4'),
       findsOneWidget,
     );
-    expect(find.textContaining('+17'), findsNothing);
+    expect(find.textContaining('+18'), findsNothing);
     expect(find.textContaining('Flutter'), findsNothing);
     expect(find.textContaining('Appwrite'), findsNothing);
 
@@ -415,10 +415,10 @@ void main() {
     );
     expect(find.textContaining('Recruit to Legend'), findsOneWidget);
     expect(
-      find.text('Version 2.8.3'),
+      find.text('Version 2.8.4'),
       findsWidgets,
     );
-    expect(find.textContaining('+17'), findsNothing);
+    expect(find.textContaining('+18'), findsNothing);
     expect(find.textContaining('Flutter'), findsNothing);
     expect(find.textContaining('Appwrite'), findsNothing);
   });
