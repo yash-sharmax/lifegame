@@ -66,6 +66,8 @@ void main() {
         app(
           DashboardScreen(
             habitRepo: _GoldenHabitRepo(),
+            taskRepo: _GoldenTaskRepo(),
+            profileRepo: _GoldenProfileRepo(),
           ),
         ),
       );
@@ -82,6 +84,8 @@ void main() {
         app(
           DashboardScreen(
             habitRepo: _GoldenHabitRepo(),
+            taskRepo: _GoldenTaskRepo(),
+            profileRepo: _GoldenProfileRepo(),
           ),
         ),
       );
@@ -95,15 +99,26 @@ void main() {
 }
 
 class _GoldenProfileRepo extends ProfileRepository {
+  // XP 30 matches the ledger: 15 completed habit logs × 2 XP
+  // (10 days of h1 + 5 days of h2), so no mismatch note shows.
   @override
   Future<Profile?> fetchMyProfile() async => const Profile(
     id: 'test-user',
     username: 'tester',
     displayName: 'Tester',
-    xp: 46,
+    xp: 30,
     currentStreak: 3,
     longestStreak: 5,
   );
+}
+
+/// No done tasks in the golden data: the ledger counts habits only.
+class _GoldenTaskRepo extends TaskRepository {
+  @override
+  Future<List<WeeklyTask>> listAllDoneWeeklyTasks() async => [];
+
+  @override
+  Future<List<MonthlyTask>> listAllDoneMonthlyTasks() async => [];
 }
 
 /// Three habits; two done today; logs for the last 10 days so the
@@ -126,12 +141,23 @@ class _GoldenHabitRepo extends HabitRepository {
 
   @override
   Future<List<HabitLog>> listLogsInRange(String start, String end) async {
+    return _logs().where((log) {
+      final key = log.logDate;
+      return key.compareTo(start) >= 0 && key.compareTo(end) <= 0;
+    }).toList();
+  }
+
+  @override
+  Future<List<HabitLog>> listAllCompletedLogs() async => _logs();
+
+  /// 10 days of h1 + 5 days of h2 = 15 completed logs = 30 XP, which
+  /// is what the golden profile reports (see _GoldenProfileRepo).
+  List<HabitLog> _logs() {
     final logs = <HabitLog>[];
     final now = DateTime.now();
     for (var i = 0; i < 10; i++) {
       final day = now.subtract(Duration(days: i));
       final key = dateKey(day);
-      if (key.compareTo(start) < 0 || key.compareTo(end) > 0) continue;
       logs.add(
         HabitLog(
           id: 'h1_$key',
