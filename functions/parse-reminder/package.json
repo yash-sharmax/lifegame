@@ -1,0 +1,1 @@
+{"description":"Life Game reminder parser (v2.10.0): turns a plain-words reminder message into a structured {due, task} using Gemini. The AI is a silent parser only — it never chats, never answers, never returns anything but JSON.","engines":{"node":">=18"},"main":"index.js","name":"parse-reminder","type":"module","version":"1.0.0"}

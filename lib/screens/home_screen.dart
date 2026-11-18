@@ -8,6 +8,7 @@ import '../data/models.dart';
 import '../data/reminder_repository.dart';
 import '../data/reminder_service.dart';
 import '../data/repositories.dart';
+import '../data/update_check.dart';
 import '../logic/quotes.dart';
 import '../logic/reminders.dart';
 import '../logic/subtasks.dart';
@@ -60,6 +61,9 @@ class _HomeScreenState extends State<HomeScreen> {
   // Pending follow requests (v2.9.0): the bell badge in the header.
   // Best-effort — a failure just leaves the badge empty.
   int _pendingRequests = 0;
+  // App update available (v2.10.0): a dot on the bell. Best-effort.
+  bool _updateAvailable = false;
+  VoidCallback? _updateListener;
   late final ConfettiController _confetti;
   // Strike counter per habit: bumped on every completion so the slash
   // sweep (StrikeOverlay) replays for that tile.
@@ -99,6 +103,18 @@ class _HomeScreenState extends State<HomeScreen> {
     _profileChanges = ProfileRepository.onChanged.listen((_) {
       if (mounted) _load();
     });
+    // App update dot (v2.10.0): the checker (MainShell) raises the
+    // notice; the bell just reflects it.
+    _updateAvailable = AppUpdateChecker.instance.update.value != null;
+    _updateListener = () {
+      if (mounted) {
+        setState(
+          () => _updateAvailable =
+              AppUpdateChecker.instance.update.value != null,
+        );
+      }
+    };
+    AppUpdateChecker.instance.update.addListener(_updateListener!);
     _load();
   }
 
@@ -107,6 +123,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _habitChanges?.cancel();
     _reminderChanges?.cancel();
     _profileChanges?.cancel();
+    if (_updateListener != null) {
+      AppUpdateChecker.instance.update.removeListener(_updateListener!);
+    }
     _confetti.dispose();
     super.dispose();
   }
@@ -444,6 +463,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   streak: streak,
                   xp: xp,
                   pendingRequests: _pendingRequests,
+                  updateAvailable: _updateAvailable,
                   onXpTap: _openLeaderboard,
                   onSearchTap: _openSearch,
                   onBellTap: _openNotifications,
@@ -689,13 +709,15 @@ class _HomeScreenState extends State<HomeScreen> {
 /// The XP pill is the way into the leaderboard now that it is no
 /// longer a bottom tab (18 Nov 2026): tapping the XP number opens the
 /// leaderboard screen. The bell (v2.9.0) opens Notifications; its
-/// badge is the count of pending follow requests.
+/// badge is the count of pending follow requests. The bell also shows
+/// an amber dot (v2.10.0) when an app update is available.
 class _Header extends StatelessWidget {
   const _Header({
     required this.displayName,
     required this.streak,
     required this.xp,
     required this.pendingRequests,
+    required this.updateAvailable,
     required this.onXpTap,
     required this.onSearchTap,
     required this.onBellTap,
@@ -705,6 +727,7 @@ class _Header extends StatelessWidget {
   final int streak;
   final int xp;
   final int pendingRequests;
+  final bool updateAvailable;
   final VoidCallback onXpTap;
   final VoidCallback onSearchTap;
   final VoidCallback onBellTap;
@@ -878,6 +901,26 @@ class _Header extends StatelessWidget {
                               color: AppTheme.onAccent,
                               fontSize: 10,
                               fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                    // App update dot (v2.10.0): amber, top-left of
+                    // the bell — opposite the request count badge,
+                    // so both can show at once.
+                    if (updateAvailable)
+                      Positioned(
+                        left: 2,
+                        top: 2,
+                        child: Container(
+                          width: 9,
+                          height: 9,
+                          decoration: BoxDecoration(
+                            color: AppTheme.ember,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: AppTheme.ink,
+                              width: 1,
                             ),
                           ),
                         ),

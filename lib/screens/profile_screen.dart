@@ -9,6 +9,7 @@ import '../data/repositories.dart';
 import '../logic/xp.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/follow_back_button.dart';
 import '../widgets/habit_dialog.dart';
 import 'auth_screen.dart';
 import 'search_screen.dart';
@@ -967,7 +968,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        CircularProgressIndicator(),
+                        LoadingIcon(size: 28),
                         SizedBox(width: 16),
                         Text('Deleting your account…'),
                       ],
@@ -1077,14 +1078,7 @@ class _FeedbackSectionState extends State<_FeedbackSection> {
           child: FilledButton.icon(
             onPressed: _sending ? null : _send,
             icon: _sending
-                ? SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      color: AppTheme.ink,
-                      strokeWidth: 2,
-                    ),
-                  )
+                ? const LoadingIcon(size: 16)
                 : const Icon(Icons.send, size: 18),
             label: Text(_sending ? 'Sending…' : 'Send feedback'),
           ),
@@ -1118,7 +1112,7 @@ class _FeedbackSectionState extends State<_FeedbackSection> {
         if (_loading)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 16),
-            child: Center(child: CircularProgressIndicator()),
+            child: Center(child: LoadingIcon()),
           )
         else if (_sent.isNotEmpty) ...[
           const SizedBox(height: 14),
@@ -2199,12 +2193,26 @@ class _FollowListScreenState extends State<FollowListScreen> {
                                     ),
                                   ),
                                 ),
-                                const SizedBox(width: 4),
-                                Icon(
-                                  Icons.chevron_right,
-                                  color: AppTheme.inkSoft,
-                                  size: 20,
-                                ),
+                                // Follow Back (v2.10.0): only on the
+                                // Followers list — a follower I don't
+                                // follow back gets a clearly visible
+                                // button (mutual = Friend Circle).
+                                // Tapping it does not open the profile
+                                // (the button claims the tap).
+                                if (widget.followers && !widget.friends) ...[
+                                  const SizedBox(width: 8),
+                                  FollowBackButton(
+                                    profile: person,
+                                    socialRepo: _social,
+                                  ),
+                                ] else ...[
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    Icons.chevron_right,
+                                    color: AppTheme.inkSoft,
+                                    size: 20,
+                                  ),
+                                ],
                               ],
                             ),
                           ),

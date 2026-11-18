@@ -639,11 +639,12 @@ class Challenge {
 // v2.9.0: chat reminders (the Reminders tab).
 //
 // A chat-style reminder is a plain-language message the user typed
-// ("Adrak aur kaali mirch lana hai at 6pm") that the app parsed into
-// a scheduled time (see logic/chat_reminders.dart). Both the chat
-// history and the scheduled reminders live in LOCAL storage
-// (SharedPreferences) — the source of truth; they never block on the
-// network, and the Android exact alarm fires even with the app closed.
+// ("Buy milk at 6pm") that the app parsed into a scheduled time
+// (see logic/chat_reminders.dart and, when online, the AI parser in
+// data/ai_reminder_parser.dart). Both the chat history and the
+// scheduled reminders live in LOCAL storage (SharedPreferences) —
+// the source of truth; they never block on the network, and the
+// Android exact alarm fires even with the app closed.
 // ---------------------------------------------------------------------------
 
 /// One bubble in the Reminders chat: the user's message or the bot's

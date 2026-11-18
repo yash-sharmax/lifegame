@@ -408,6 +408,26 @@ class LocalStore {
     );
   }
 
+  // -- App update notices (v2.10.0) --------------------------------------
+  // The version the user dismissed an update for (do not show it
+  // again) and the latest update version already shown (dedupe).
+
+  static const _updateDismissedKey = 'lifegame_update_dismissed_v1';
+  static const _updateSeenKey = 'lifegame_update_seen_v1';
+
+  String? get updateDismissedVersion =>
+      _prefs.getString(_updateDismissedKey);
+
+  Future<void> setUpdateDismissedVersion(String version) async {
+    await _prefs.setString(_updateDismissedKey, version);
+  }
+
+  String? get lastSeenUpdateVersion => _prefs.getString(_updateSeenKey);
+
+  Future<void> setLastSeenUpdateVersion(String version) async {
+    await _prefs.setString(_updateSeenKey, version);
+  }
+
   /// Raw locally stored sub-task rows (any owner). Each map carries
   /// its owner id under 'ownerId'.
   List<Map<String, dynamic>> loadSubtaskMaps() {

@@ -50,6 +50,16 @@ class AppwriteService {
     return _databases!;
   }
 
+  /// Appwrite Functions. Throws [AppwriteNotConfigured] when
+  /// unconfigured. Used by the AI reminder parser (v2.10.0) to call
+  /// the "parse-reminder" function — the app never holds a Gemini key.
+  static Functions get functions {
+    if (!AppConfig.isConfigured || _client == null) {
+      throw AppwriteNotConfigured();
+    }
+    return Functions(_client!);
+  }
+
   /// Null-safe accessors used by repositories that must degrade gracefully.
   static Account? get accountOrNull => AppConfig.isConfigured ? _account : null;
 

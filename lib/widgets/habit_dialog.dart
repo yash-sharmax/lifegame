@@ -6,6 +6,7 @@ import '../logic/subtasks.dart';
 import '../logic/xp.dart';
 import '../screens/auth_screen.dart';
 import '../theme.dart';
+import 'common.dart';
 
 /// What the user chose in the habit edit dialog.
 enum HabitEditAction { save, delete }
@@ -619,7 +620,7 @@ class _HabitEditDialogState extends State<_HabitEditDialog> {
             if (_loadingSubtasks)
               const Padding(
                 padding: EdgeInsets.only(top: 12),
-                child: LinearProgressIndicator(),
+                child: Center(child: LoadingIcon(size: 36)),
               )
             else ...[
               const SizedBox(height: 10),

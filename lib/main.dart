@@ -7,6 +7,7 @@ import 'data/appwrite_service.dart';
 import 'data/reminder_service.dart';
 import 'data/repositories.dart';
 import 'data/sync_service.dart';
+import 'data/update_check.dart';
 import 'screens/auth_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/home_screen.dart';
@@ -191,7 +192,8 @@ class MainShell extends StatefulWidget {
   State<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class _MainShellState extends State<MainShell>
+    with WidgetsBindingObserver {
   int _index = 0;
 
   // The latest due reminder (in-app banner). Cleared when dismissed
@@ -232,10 +234,24 @@ class _MainShellState extends State<MainShell> {
     unawaited(ProfileRepository().syncDerivedXpOnce());
     // Push any changes made while offline (v2.9.0).
     unawaited(SyncService.instance.syncNow());
+    // App update check (v2.10.0): compare the live version.json
+    // against this build; a newer release raises a notice on the
+    // Notifications screen (bell dot). Silent when offline.
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(AppUpdateChecker.instance.check());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Re-check when the app comes back to the foreground.
+    if (state == AppLifecycleState.resumed) {
+      unawaited(AppUpdateChecker.instance.check());
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _alertSub?.cancel();
     _chatAlertSub?.cancel();
     _onlineSub?.cancel();

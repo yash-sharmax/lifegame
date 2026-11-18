@@ -1,11 +1,13 @@
 // Natural-language reminder parser for the Reminders chat tab
 // (v2.9.0, 18 Nov 2026).
 //
-// The user types a reminder in plain words — e.g. "Adrak aur kaali
-// mirch lana hai at 6pm" or "Kal subah 7 baje mithai lane ka yaad
-// dilao" — and this parser pulls the date + time out of the message
-// locally (no server, no AI call), returning the reminder text with
-// the time/date part removed and the scheduled DateTime.
+// The user types a reminder in plain words — e.g. "Buy milk at 6pm"
+// or "Call mom tomorrow at 7am" — and this parser pulls the date +
+// time out of the message locally (no server, no AI call), returning
+// the reminder text with the time/date part removed and the scheduled
+// DateTime. v2.10.0: this parser is the OFFLINE fallback — when the
+// app is online the AI parser (data/ai_reminder_parser.dart) runs
+// first and this one is only used if it fails.
 //
 // Supported (Hinglish + English, deliberately forgiving):
 // - Time: "at 6pm", "6pm", "at 6:00 pm", "6 baje", "18:00", "at 7 am".

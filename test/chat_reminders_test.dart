@@ -7,24 +7,23 @@ void main() {
     // Reference moment: Tue 18 Nov 2026, 12:00 (noon).
     final now = DateTime(2026, 11, 18, 12, 0);
 
-    test('example 1: "Adrak aur kaali mirch lana hai at 6pm"', () {
-      final parsed = parseChatReminder(
-        'Adrak aur kaali mirch lana hai at 6pm',
-        now,
-      );
+    // v2.10.0: the examples are generic now — the user's own sentences
+    // must not appear in the Reminders UI (or its tests).
+    test('example 1: "Buy milk at 6pm"', () {
+      final parsed = parseChatReminder('Buy milk at 6pm', now);
       expect(parsed, isNotNull);
-      expect(parsed!.text, 'Adrak aur kaali mirch lana hai');
+      expect(parsed!.text, 'Buy milk');
       // 6pm today is still ahead of noon → today.
       expect(parsed.when, DateTime(2026, 11, 18, 18, 0));
     });
 
-    test('example 2: "Kal subah 7 baje mithai lane ka yaad dilao"', () {
+    test('example 2: "Kal subah 7 baje gym jana hai"', () {
       final parsed = parseChatReminder(
-        'Kal subah 7 baje mithai lane ka yaad dilao',
+        'Kal subah 7 baje gym jana hai',
         now,
       );
       expect(parsed, isNotNull);
-      expect(parsed!.text, 'Mithai lane ka');
+      expect(parsed!.text, 'Gym jana hai');
       // Kal = tomorrow, subah = AM.
       expect(parsed.when, DateTime(2026, 11, 19, 7, 0));
     });
@@ -69,12 +68,11 @@ void main() {
     test('confirmation line reads like the Nevermiss bot', () {
       final line = formatReminderConfirmation(
         DateTime(2026, 8, 24, 18, 0),
-        'Adrak aur kaali mirch lana hai',
+        'Buy milk',
       );
       expect(
         line,
-        'Reminder set for Mon, Aug 24, 2026 at 6:00 PM: '
-        'Adrak aur kaali mirch lana hai',
+        'Reminder set for Mon, Aug 24, 2026 at 6:00 PM: Buy milk',
       );
     });
   });

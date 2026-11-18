@@ -406,15 +406,7 @@ class GradientButton extends StatelessWidget {
             ),
             child: Center(
               child: loading
-                  ? SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(
-                        // On the gradient — always white.
-                        color: AppTheme.onAccent,
-                        strokeWidth: 2.5,
-                      ),
-                    )
+                  ? const LoadingIcon(size: 22)
                   : Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -440,11 +432,92 @@ class GradientButton extends StatelessWidget {
   }
 }
 
-/// Branded loading screen: logo, app name and a progress bar on the
-/// dark background. Used while the session/profile is being checked so
-/// the user never sees a blank page or a bare spinner (fast-load work,
-/// 18 Nov 2026). The web page (web/index.html) shows the same screen
-/// instantly, before Flutter even starts.
+/// The app's own icon (hourglass + rising sun) used for loading
+/// states (v2.10.0): wherever the app shows a generic "loading"
+/// spinner, it shows this icon instead, with a gentle pulse so
+/// something is visibly happening. NOT used for determinate progress
+/// bars (level / challenge / day progress keep their bars). If the
+/// asset cannot load (e.g. a test without the bundle), it falls back
+/// to the shield mark instead of an error box.
+/// The app's own icon as a loading visual (v2.10.0): wherever the app
+/// shows a loading state, the hourglass + rising-sun icon is the
+/// visual — not a generic Flutter spinner. It pulses gently (scale
+/// 1.00 → 1.06, 900 ms, ease in-out, reversing) so the user can see
+/// something is happening. A plain [AnimationController] (not
+/// flutter_animate): flutter_animate schedules a `Future.delayed`
+/// timer on init that is not cancelled on dispose, which leaves a
+/// pending timer in widget tests when the icon is shown only briefly
+/// (e.g. the "Deleting your account…" dialog). If the icon asset is
+/// missing, the shield mark on the violet gradient is the fallback.
+class LoadingIcon extends StatefulWidget {
+  const LoadingIcon({super.key, this.size = 64});
+
+  /// The icon's side in logical pixels.
+  final double size;
+
+  @override
+  State<LoadingIcon> createState() => _LoadingIconState();
+}
+
+class _LoadingIconState extends State<LoadingIcon>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+    _scale = Tween<double>(begin: 1.0, end: 1.06).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = widget.size;
+    return ScaleTransition(
+      scale: _scale,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(size * 0.22),
+        child: Image.asset(
+          'assets/app-icon-source.jpg',
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorBuilder: (context, _, _) => Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(gradient: AppTheme.heroGradient),
+            child: Icon(
+              Icons.shield,
+              color: AppTheme.onAccent,
+              size: size * 0.55,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Branded loading screen: the app icon, app name and the loading
+/// message on the dark background. Used while the session/profile is
+/// being checked so the user never sees a blank page or a bare
+/// spinner (fast-load work, 18 Nov 2026). The web page
+/// (web/index.html) shows the same screen instantly, before Flutter
+/// even starts. v2.10.0: the shield mark is replaced by the app's
+/// own icon (with its gentle pulse); the indeterminate bar is gone —
+/// the pulsing icon is the loading visual.
 class WarriorSplash extends StatelessWidget {
   const WarriorSplash({super.key, this.message});
 
@@ -459,10 +532,7 @@ class WarriorSplash extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 84,
-              height: 84,
               decoration: BoxDecoration(
-                gradient: AppTheme.heroGradient,
                 borderRadius: BorderRadius.circular(24),
                 boxShadow: [
                   BoxShadow(
@@ -472,14 +542,8 @@ class WarriorSplash extends StatelessWidget {
                   ),
                 ],
               ),
-              child: Icon(Icons.shield, color: AppTheme.onAccent, size: 46),
-            )
-                .animate(onPlay: (c) => c.repeat(reverse: true))
-                .scale(
-                  begin: const Offset(1, 1),
-                  end: const Offset(1.06, 1.06),
-                  duration: 900.ms,
-                ),
+              child: const LoadingIcon(size: 84),
+            ),
             const SizedBox(height: 20),
             Text(
               'LIFE GAME',
@@ -494,15 +558,6 @@ class WarriorSplash extends StatelessWidget {
             Text(
               message ?? 'Loading…',
               style: TextStyle(color: AppTheme.inkSoft, fontSize: 15),
-            ),
-            const SizedBox(height: 28),
-            SizedBox(
-              width: 160,
-              child: LinearProgressIndicator(
-                minHeight: 4,
-                backgroundColor: AppTheme.cardBorder,
-                valueColor: AlwaysStoppedAnimation<Color>(AppTheme.ember),
-              ),
             ),
           ],
         ),
