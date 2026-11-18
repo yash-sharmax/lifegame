@@ -20,9 +20,13 @@
 //
 // Runtime: Node.js (>= 18, for global fetch). Entrypoint: index.js.
 // Function ID (in the Appwrite console): "parse-reminder".
-// Model: gemini-2.0-flash (fast + cheap; responseMimeType forces JSON).
+// Model: gemini-3.5-flash-lite (fast + cheap; responseMimeType forces JSON).
+// NOTE (18 Nov 2026): gemini-2.0-flash returns 404 (retired) and
+// gemini-2.5-flash returns 404 ("no longer available to new users");
+// gemini-3.8-flash returns 503 (high demand). gemini-3.5-flash-lite
+// was verified live to return the exact expected JSON.
 
-const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_MODEL = 'gemini-3.5-flash-lite';
 const GEMINI_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/' +
   GEMINI_MODEL +
