@@ -18,6 +18,18 @@ import 'search_screen.dart';
 /// to the clipboard on tap (no extra dependency needed for a mail link).
 const String _supportEmail = 'yashsharmaup2008@gmail.com';
 
+/// Display version: the plain version without the build-number suffix
+/// (e.g. '2.8.2' from '2.8.2+16') — the About screen shows this only.
+String get _displayVersion => AppConfig.appVersion.split('+').first;
+
+/// Short description shown in the About dialog — plain words about
+/// what the app does, no tech-stack mentions.
+const String _aboutDescription =
+    'Life Game turns your everyday habits into a game. Tick off a habit '
+    'to earn XP, build your streak, and climb from Recruit to Legend. '
+    'Take on challenges, track your daily score, and see your progress '
+    'across the day, week, and month — one small win at a time.';
+
 /// The user's own profile, redesigned 18 Nov 2026: a horizontal
 /// identity card, the level card, a stats strip, and three tabs —
 /// Habits | Weekly | Monthly — switching the list below. The old
@@ -446,6 +458,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  /// About dialog: app name, a plain description, and the version —
+  /// clean, with no tech-stack mentions.
+  void _showAbout() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Text('About Life Game'),
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(_aboutDescription),
+            const SizedBox(height: 16),
+            Text(
+              'Version $_displayVersion',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _copySupportEmail() async {
     await Clipboard.setData(const ClipboardData(text: _supportEmail));
     if (mounted) showInfo(context, 'Support email copied.');
@@ -719,8 +761,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             leading: const Icon(Icons.info_outline),
                             title: const Text('About Life Game'),
                             subtitle: Text(
-                              'Version ${AppConfig.appVersion} • Flutter • Appwrite',
+                              'Version $_displayVersion',
                             ),
+                            onTap: _showAbout,
                           ),
                           const Divider(height: 1),
                           ListTile(

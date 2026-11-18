@@ -2,7 +2,6 @@ import 'package:appwrite/appwrite.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lifegame/config.dart';
 import 'package:lifegame/data/models.dart';
 import 'package:lifegame/data/repositories.dart';
 import 'package:lifegame/logic/xp.dart';
@@ -393,10 +392,35 @@ void main() {
     expect(find.text('Send feedback'), findsOneWidget);
     expect(find.text('Delete account'), findsOneWidget);
     expect(find.text('Log out'), findsOneWidget);
+    // About is clean: plain version only, no build suffix, no tech mentions.
     expect(
-      find.text('Version ${AppConfig.appVersion} • Flutter • Appwrite'),
+      find.text('Version 2.8.2'),
       findsOneWidget,
     );
+    expect(find.textContaining('+16'), findsNothing);
+    expect(find.textContaining('Flutter'), findsNothing);
+    expect(find.textContaining('Appwrite'), findsNothing);
+
+    // Tapping About opens the dialog with the app description.
+    await tester.scrollUntilVisible(
+      find.text('About Life Game'),
+      400,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('About Life Game'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('Life Game turns your everyday habits into a game'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Recruit to Legend'), findsOneWidget);
+    expect(
+      find.text('Version 2.8.2'),
+      findsWidgets,
+    );
+    expect(find.textContaining('+16'), findsNothing);
+    expect(find.textContaining('Flutter'), findsNothing);
+    expect(find.textContaining('Appwrite'), findsNothing);
   });
 
   testWidgets('feedback form sends a message and shows a thank-you', (
