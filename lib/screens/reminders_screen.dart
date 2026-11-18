@@ -54,6 +54,17 @@ class _RemindersScreenState extends State<RemindersScreen> {
   List<ChatReminder> _reminders = [];
   bool _sending = false;
 
+  // v2.10.1: the "couldn't find a time" banner is an inline row in
+  // the layout (between the message list and the composer), NOT a
+  // SnackBar. A SnackBar overlays the bottom of the screen and hid
+  // the composer after a failed parse — the composer could only be
+  // reached by reloading. The inline banner takes a fixed row of
+  // space, the message list shrinks to make room, and the composer
+  // stays pinned at the bottom, always visible and usable.
+  // [_noTimeText] is the message to pre-fill the manual form with.
+  bool _showNoTimeBanner = false;
+  String _noTimeText = '';
+
   String get _ownerId => AuthRepository.cachedUser?.uid ?? '';
 
   @override
@@ -166,7 +177,11 @@ class _RemindersScreenState extends State<RemindersScreen> {
     if (text.isEmpty || _sending) return;
     final ownerId = _ownerId;
     if (ownerId.isEmpty) return;
-    setState(() => _sending = true);
+    setState(() {
+      _sending = true;
+      // A new message dismisses the previous no-time banner.
+      _showNoTimeBanner = false;
+    });
     _inputController.clear();
     final now = DateTime.now();
     final userMessage = ChatMessage(
@@ -194,8 +209,10 @@ class _RemindersScreenState extends State<RemindersScreen> {
     }
     parsed ??= parseChatReminder(text, now);
     if (parsed == null) {
-      // No time found — say so, set nothing, and offer the manual
-      // form (pre-filled with what was typed).
+      // No time found — say so, set nothing, and show the inline
+      // banner offering the manual form (pre-filled with what was
+      // typed). The banner is part of the layout, so the composer
+      // stays visible (v2.10.1).
       final reply = ChatMessage(
         id: ID.unique(),
         ownerId: ownerId,
@@ -206,20 +223,11 @@ class _RemindersScreenState extends State<RemindersScreen> {
       setState(() {
         _messages.add(reply);
         _sending = false;
+        _showNoTimeBanner = true;
+        _noTimeText = text;
       });
       await _save();
       _scrollToBottom();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text("Couldn't find a time — set it manually?"),
-            action: SnackBarAction(
-              label: 'Set manually',
-              onPressed: () => _openManualForm(initialText: text),
-            ),
-          ),
-        );
-      }
       return;
     }
 
@@ -529,6 +537,54 @@ class _RemindersScreenState extends State<RemindersScreen> {
                     },
                   ),
           ),
+          // v2.10.1: the no-time banner is an inline row here, above
+          // the composer. It reserves its own space, so the message
+          // list above shrinks and the composer below never moves.
+          // Same text and the same "Set manually" action the old
+          // SnackBar had.
+          if (_showNoTimeBanner)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 8, 4, 8),
+              decoration: BoxDecoration(
+                color: AppTheme.card,
+                border: Border(top: BorderSide(color: AppTheme.cardBorder)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      "Couldn't find a time — set it manually?",
+                      style: TextStyle(color: AppTheme.ink, fontSize: 13),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() => _showNoTimeBanner = false);
+                      _openManualForm(initialText: _noTimeText);
+                    },
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      minimumSize: const Size(0, 36),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Set manually'),
+                  ),
+                  IconButton(
+                    onPressed: () =>
+                        setState(() => _showNoTimeBanner = false),
+                    tooltip: 'Dismiss',
+                    icon: const Icon(Icons.close, size: 18),
+                    color: AppTheme.inkSoft,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 36,
+                      minHeight: 36,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Container(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
             decoration: BoxDecoration(

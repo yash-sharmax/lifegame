@@ -1,4 +1,4 @@
-// AI reminder parsing (v2.10.0).
+// AI reminder parsing (v2.10.0; v2.10.1 roll-forward fix).
 //
 // The Reminders tab's local parser (logic/chat_reminders.dart) is
 // brittle on real messages ("remind me at 12.26am 19nov", "12:26am"
@@ -10,10 +10,19 @@
 //
 // This file is the app side of that call. It NEVER throws: any
 // failure (function not deployed yet, offline, timeout, bad JSON,
-// a past due time) returns null and the caller falls back to the
-// local parser. The AI never produces a chat reply — the app's own
-// confirmation / "couldn't find a time" bubbles stay exactly as they
-// are.
+// a due time more than a day old) returns null and the caller falls
+// back to the local parser. The AI never produces a chat reply —
+// the app's own confirmation / "couldn't find a time" bubbles stay
+// exactly as they are.
+//
+// v2.10.1: a due time that is already in the past is NOT discarded
+// any more — it is rolled forward 24h (the same rule the local
+// parser applies: a bare time that has already passed today means
+// tomorrow at that time). Only a due time still in the past after
+// rolling (more than a day old) is discarded. Before this fix the
+// app threw away the AI's correct parse (e.g. 12.26am on 19 Nov,
+// checked at 01:11 IST) and the local parser then failed on the
+// same message, so the user got "I couldn't find a time".
 library;
 
 import 'dart:async';
@@ -44,8 +53,8 @@ const String kParseReminderFunctionId = 'parse-reminder';
 /// Calls the "parse-reminder" function with [message] and returns
 /// its {due, task}, or null on ANY failure (so the caller falls back
 /// to the local parser). [now] is the reference moment; a due time
-/// more than a minute in the past is treated as unusable (the local
-/// parser rolls a passed time to tomorrow instead).
+/// more than a minute in the past is rolled forward 24h (see
+/// [aiResultFromResponse]) instead of being discarded.
 Future<AiParseResult?> parseReminderWithAi(
   String message,
   DateTime now,
@@ -66,23 +75,7 @@ Future<AiParseResult?> parseReminderWithAi(
     if (body.isEmpty) return null;
     final decoded = jsonDecode(body);
     if (decoded is! Map<String, dynamic>) return null;
-    DateTime? due;
-    final dueRaw = decoded['due'];
-    if (dueRaw is String && dueRaw.trim().isNotEmpty) {
-      due = DateTime.tryParse(dueRaw.trim());
-      // A due time already in the past is not usable — the local
-      // parser's job is to roll it to tomorrow.
-      if (due != null &&
-          due.isBefore(now.subtract(const Duration(minutes: 1)))) {
-        due = null;
-      }
-    }
-    final taskRaw = decoded['task'];
-    final task = taskRaw is String && taskRaw.trim().isNotEmpty
-        ? taskRaw.trim()
-        : null;
-    if (due == null && task == null) return null;
-    return AiParseResult(due: due, task: task);
+    return aiResultFromResponse(decoded, now);
   } on AppwriteException {
     return null;
   } on TimeoutException {
@@ -90,4 +83,39 @@ Future<AiParseResult?> parseReminderWithAi(
   } catch (_) {
     return null;
   }
+}
+
+/// Turns the Function's decoded {due, task} JSON into an
+/// [AiParseResult], or null when neither field is usable. Pure and
+/// unit-testable: [now] is the reference moment.
+///
+/// A due time more than a minute in the past is rolled forward 24h
+/// — the same rule the local parser applies (a bare time that has
+/// already passed today means tomorrow at that time) — so the AI's
+/// correct parse and task text are preserved. Only a due time that
+/// is STILL in the past after rolling (more than a day old) is
+/// discarded (due = null); the caller then falls back to the local
+/// parser. A future due time is returned unchanged.
+AiParseResult? aiResultFromResponse(
+  Map<String, dynamic> decoded,
+  DateTime now,
+) {
+  DateTime? due;
+  final dueRaw = decoded['due'];
+  if (dueRaw is String && dueRaw.trim().isNotEmpty) {
+    due = DateTime.tryParse(dueRaw.trim());
+    if (due != null &&
+        due.isBefore(now.subtract(const Duration(minutes: 1)))) {
+      due = due.add(const Duration(hours: 24));
+      if (due.isBefore(now.subtract(const Duration(minutes: 1)))) {
+        due = null;
+      }
+    }
+  }
+  final taskRaw = decoded['task'];
+  final task = taskRaw is String && taskRaw.trim().isNotEmpty
+      ? taskRaw.trim()
+      : null;
+  if (due == null && task == null) return null;
+  return AiParseResult(due: due, task: task);
 }
