@@ -26,20 +26,28 @@ import 'saved_messages_screen.dart';
 
 /// Short relative time for chat rows ("10:24 AM", "Yesterday",
 /// "Mon", "12 Nov"). Shared by the chat screens.
+///
+/// v2.11.2 FIX 4: times are rendered DEVICE-LOCAL. Stored chat
+/// instants arrive as UTC (server $createdAt, and UTC strings
+/// since v2.11.2); the old code read `.hour` straight off the
+/// stored value, so the same message showed "3:02 PM" from a
+/// local-time-no-offset field and "9:32 AM" from the server's
+/// true-UTC field. `toLocal()` first makes every source agree.
 String formatChatTime(DateTime time) {
+  final local = time.toLocal();
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
-  final day = DateTime(time.year, time.month, time.day);
+  final day = DateTime(local.year, local.month, local.day);
   final diff = today.difference(day).inDays;
-  final hour = time.hour % 12 == 0 ? 12 : time.hour % 12;
-  final amPm = time.hour < 12 ? 'AM' : 'PM';
+  final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
+  final amPm = local.hour < 12 ? 'AM' : 'PM';
   final clock =
-      '$hour:${time.minute.toString().padLeft(2, '0')} $amPm';
+      '$hour:${local.minute.toString().padLeft(2, '0')} $amPm';
   if (diff == 0) return clock;
   if (diff == 1) return 'Yesterday';
   if (diff < 7) {
     const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    return weekdays[time.weekday - 1];
+    return weekdays[local.weekday - 1];
   }
   const months = [
     'Jan',
@@ -55,7 +63,28 @@ String formatChatTime(DateTime time) {
     'Nov',
     'Dec',
   ];
-  return '${time.day} ${months[time.month - 1]}';
+  return '${local.day} ${months[local.month - 1]}';
+}
+
+/// The rows to show for a search query (v2.11.2 FIX 2, pure and
+/// unit-tested). A plain name search filters by name; a hidden-chat
+/// REVEAL (secret keyword or lock PIN — [revealActive]) shows the
+/// revealed rows as-is. The keyword/PIN is not a name, so running
+/// the name filter on it would hide everything the reveal just
+/// loaded ("No chats yet" for the exact keyword "pineapple").
+List<ConversationItem> visibleChatItems({
+  required List<ConversationItem> items,
+  required String query,
+  required bool revealActive,
+  required String Function(ConversationItem) nameFor,
+}) {
+  final q = query.trim();
+  if (q.isEmpty) return items;
+  if (revealActive) return items;
+  final lower = q.toLowerCase();
+  return items
+      .where((item) => nameFor(item).toLowerCase().contains(lower))
+      .toList();
 }
 
 class ChatsScreen extends StatefulWidget {
@@ -75,9 +104,17 @@ class _ChatsScreenState extends State<ChatsScreen> {
   // Display names for DM rows, keyed by the other user's id.
   final Map<String, String> _names = {};
   final Map<String, Profile> _profilesById = {};
+  // Decrypted previews, keyed by conversation id (v2.11.2 FIX 5):
+  // the stored lastMessagePreview goes stale, so after loading we
+  // resolve the real latest message per chat and show its text.
+  final Map<String, String> _previewOverrides = {};
   bool _loading = true;
   bool _notSetUp = false;
   bool _showingHidden = false;
+  // True while the search box holds a hidden-chat reveal (secret
+  // keyword or lock PIN) — the revealed rows show as-is, not
+  // name-filtered (v2.11.2 FIX 2).
+  bool _revealActive = false;
   // Hidden chats, loaded only when the search looks like a keyword
   // or a PIN — the verifyLock check runs over this small list.
   List<ConversationItem>? _hiddenItems;
@@ -105,11 +142,13 @@ class _ChatsScreenState extends State<ChatsScreen> {
       setState(() {
         _items = items;
         _requests = requests;
+        _previewOverrides.clear();
         _loading = false;
         _notSetUp = false;
         _showingHidden = includeHidden;
       });
       await _resolveNames(items);
+      await _resolvePreviews(items);
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -117,6 +156,33 @@ class _ChatsScreenState extends State<ChatsScreen> {
         _notSetUp = true;
       });
     }
+  }
+
+  /// Resolves the real preview per chat (v2.11.2 FIX 5): the stored
+  /// `lastMessagePreview` goes stale — a group row read "No
+  /// messages yet" after a message was sent, and "Encrypted
+  /// message" instead of the actual text. The decrypted latest
+  /// message is the truth; when a chat has no visible message the
+  /// stored preview stays.
+  Future<void> _resolvePreviews(List<ConversationItem> items) async {
+    var changed = false;
+    for (final item in items) {
+      final c = item.conversation;
+      if (c.isRequest) continue;
+      final stored = c.lastMessagePreview;
+      if (stored != null && stored != 'Encrypted message') continue;
+      try {
+        final latest = await _service.latestVisibleMessage(c.id);
+        if (latest == null) continue;
+        final preview = chatPreviewForMessage(latest);
+        if (preview.isEmpty) continue;
+        if (_previewOverrides[c.id] != preview) {
+          _previewOverrides[c.id] = preview;
+          changed = true;
+        }
+      } catch (_) {}
+    }
+    if (changed && mounted) setState(() {});
   }
 
   /// Resolves the display name for each DM row (the other person's
@@ -149,15 +215,12 @@ class _ChatsScreenState extends State<ChatsScreen> {
   }
 
   /// The rows to show for the current search text.
-  List<ConversationItem> get _visibleItems {
-    final query = _searchController.text.trim();
-    if (query.isEmpty) return _items;
-    final lower = query.toLowerCase();
-    return _items.where((item) {
-      final name = _nameFor(item).toLowerCase();
-      return name.contains(lower);
-    }).toList();
-  }
+  List<ConversationItem> get _visibleItems => visibleChatItems(
+    items: _items,
+    query: _searchController.text,
+    revealActive: _revealActive,
+    nameFor: _nameFor,
+  );
 
   Future<void> _onSearchChanged(String query) async {
     final trimmed = query.trim();
@@ -167,6 +230,9 @@ class _ChatsScreenState extends State<ChatsScreen> {
       keyword = (await ChatPrefs.instance()).hiddenKeyword;
     } catch (_) {}
     if (matchesHiddenKeyword(trimmed, keyword)) {
+      // v2.11.2 FIX 2: the keyword is a reveal, not a name — the
+      // revealed rows must show as-is, not be name-filtered out.
+      _revealActive = true;
       await _load(includeHidden: true);
       return;
     }
@@ -184,6 +250,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
           setState(() {
             _items = unlocked;
             _showingHidden = true;
+            _revealActive = true;
           });
           await _resolveNames(unlocked);
           return;
@@ -192,6 +259,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
     }
     // Plain name search — back to the normal list if we were showing
     // hidden chats for a previous query.
+    _revealActive = false;
     if (_showingHidden && !matchesHiddenKeyword(trimmed, keyword)) {
       await _load();
       return;
@@ -546,6 +614,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
                       _ChatRow(
                         item: item,
                         name: _nameFor(item),
+                        previewOverride:
+                            _previewOverrides[item.conversation.id],
                         profile: item.otherUserId == null
                             ? null
                             : _profilesById[item.otherUserId],
@@ -624,6 +694,7 @@ class _ChatRow extends StatelessWidget {
     required this.name,
     required this.profile,
     required this.onTap,
+    this.previewOverride,
   });
 
   final ConversationItem item;
@@ -631,12 +702,17 @@ class _ChatRow extends StatelessWidget {
   final Profile? profile;
   final VoidCallback onTap;
 
+  /// Decrypted latest-message text (v2.11.2 FIX 5) — wins over the
+  /// stored preview, which goes stale.
+  final String? previewOverride;
+
   @override
   Widget build(BuildContext context) {
     final c = item.conversation;
     final preview = c.isRequest
         ? 'Message request — tap to view'
-        : (c.lastMessagePreview ?? 'No messages yet');
+        : (previewOverride ??
+              (c.lastMessagePreview ?? 'No messages yet'));
     return Card(
       child: ListTile(
         leading: Stack(

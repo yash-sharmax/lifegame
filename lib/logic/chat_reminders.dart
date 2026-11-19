@@ -11,6 +11,10 @@
 //
 // Supported (Hinglish + English, deliberately forgiving):
 // - Time: "at 6pm", "6pm", "at 6:00 pm", "6 baje", "18:00", "at 7 am".
+//   v2.11.2: dot separators too ("3.08pm", "3.08"), and a bare time
+//   with no am/pm infers AM/PM from the local time (afternoon +
+//   hour 1–11 → PM); a past inferred time rolls to tomorrow
+//   keeping the SAME period.
 // - Day words: "kal" / "tomorrow" = tomorrow; "aaj" / "today" = today;
 //   "parso" / "day after tomorrow" = day after tomorrow.
 // - Part of day: "subah" / "morning" = AM; "shaam" / "sham" /
@@ -49,12 +53,26 @@ ParsedReminder? parseChatReminder(String message, [DateTime? now]) {
   // Part-of-day words adjust an ambiguous 12-hour time: "subah" /
   // "morning" force AM; evening/afternoon/night force PM. An explicit
   // am/pm in the time itself always wins.
+  //
+  // v2.11.2: a bare time (no am/pm, no part-of-day word) infers its
+  // period from the user's local time — in the afternoon an hour
+  // 1–11 means PM ("remind me to drink water at 3:09" at 3:09 PM
+  // means 3:09 PM, not 3:09 AM). In the morning it means AM. The
+  // inferred time then follows the usual rule below: today when it
+  // is still ahead, otherwise tomorrow — keeping the SAME period
+  // (PM stays PM, never silently becomes AM).
   if (!time.hasMeridiem) {
     if (_containsAny(lower, _morningWords)) {
       if (hour == 12) hour = 0;
       if (hour > 12) hour = hour % 12;
     } else if (_containsAny(lower, _eveningWords)) {
       if (hour < 12) hour += 12;
+    } else if (current.hour >= 12) {
+      // Afternoon / evening here: a bare 1–11 is PM.
+      if (hour >= 1 && hour < 12) hour += 12;
+    } else {
+      // Morning here: a bare 1–11 is AM; bare 12 is midnight.
+      if (hour == 12) hour = 0;
     }
   }
 
@@ -114,18 +132,23 @@ bool _containsAny(String text, List<String> words) {
 }
 
 /// Finds a time in [lower]: "at 6pm", "6:00 pm", "6 baje", "18:00",
-/// "at 7 am". Returns the hour in 24h form plus whether an explicit
-/// am/pm was present.
+/// "at 7 am", "3.08pm" (dot separator, v2.11.2). Returns the hour in
+/// 24h form plus whether the period is already determined — either
+/// by an explicit am/pm or because the time is 24-hour (hour > 12).
+/// A 12-hour time with no am/pm has [hasMeridiem] false, so the
+/// caller infers the period from the local time.
 _Time? _parseTime(String lower) {
-  // "6:30 pm" / "6:30pm" / "at 6:30 pm" — explicit am/pm.
-  final colonMeridiem =
-      RegExp(r'(\d{1,2}):(\d{2})\s*(am|pm)\b').firstMatch(lower);
-  if (colonMeridiem != null) {
-    var hour = int.parse(colonMeridiem.group(1)!);
-    final minute = int.parse(colonMeridiem.group(2)!);
+  // "6:30 pm" / "6:30pm" / "3.08pm" / "3.08 pm" / "at 6:30 pm" —
+  // explicit am/pm, colon OR dot separator (v2.11.2: the dot form
+  // used to match the bare-meridiem rule as "08pm" — hour 8).
+  final dotMeridiem =
+      RegExp(r'(\d{1,2})[.:](\d{2})\s*(am|pm)\b').firstMatch(lower);
+  if (dotMeridiem != null) {
+    var hour = int.parse(dotMeridiem.group(1)!);
+    final minute = int.parse(dotMeridiem.group(2)!);
     if (hour < 1 || hour > 12 || minute > 59) return null;
-    if (colonMeridiem.group(3) == 'pm' && hour != 12) hour += 12;
-    if (colonMeridiem.group(3) == 'am' && hour == 12) hour = 0;
+    if (dotMeridiem.group(3) == 'pm' && hour != 12) hour += 12;
+    if (dotMeridiem.group(3) == 'am' && hour == 12) hour = 0;
     return _Time(hour: hour, minute: minute, hasMeridiem: true);
   }
   // "6pm" / "6 pm" / "at 6pm".
@@ -137,13 +160,14 @@ _Time? _parseTime(String lower) {
     if (meridiem.group(2) == 'am' && hour == 12) hour = 0;
     return _Time(hour: hour, minute: 0, hasMeridiem: true);
   }
-  // "18:00" / "6:30" (24-hour).
-  final colon = RegExp(r'(\d{1,2}):(\d{2})\b').firstMatch(lower);
+  // "18:00" / "6:30" / "3.08" (24-hour, or a bare 12-hour time —
+  // the caller infers AM/PM from the local time when hour <= 12).
+  final colon = RegExp(r'(\d{1,2})[.:](\d{2})\b').firstMatch(lower);
   if (colon != null) {
     final hour = int.parse(colon.group(1)!);
     final minute = int.parse(colon.group(2)!);
     if (hour > 23 || minute > 59) return null;
-    return _Time(hour: hour, minute: minute);
+    return _Time(hour: hour, minute: minute, hasMeridiem: hour > 12);
   }
   // "6 baje" / "7 baje" — Hinglish.
   final baje = RegExp(r'(\d{1,2})\s*baje\b').firstMatch(lower);
@@ -292,9 +316,11 @@ DateTime? _parseWeekday(String lower, DateTime now) {
 /// tidied away.
 String _stripTimeAndDate(String message) {
   var text = message;
-  // Time expressions (with their "at").
+  // Time expressions (with their "at"). Dot separators too
+  // (v2.11.2): "at 3.08pm" used to leave "at 3." behind, which
+  // truncated the task to "To drink water at 3."
   text = text.replaceAll(
-    RegExp(r'\bat\s+\d{1,2}:\d{2}\s*(am|pm)?\b', caseSensitive: false),
+    RegExp(r'\bat\s+\d{1,2}[.:]\d{2}\s*(am|pm)?\b', caseSensitive: false),
     ' ',
   );
   text = text.replaceAll(
@@ -302,7 +328,7 @@ String _stripTimeAndDate(String message) {
     ' ',
   );
   text = text.replaceAll(
-    RegExp(r'\b\d{1,2}:\d{2}\s*(am|pm)?\b', caseSensitive: false),
+    RegExp(r'\b\d{1,2}[.:]\d{2}\s*(am|pm)?\b', caseSensitive: false),
     ' ',
   );
   text = text.replaceAll(
@@ -349,8 +375,11 @@ String _stripTimeAndDate(String message) {
     ' ',
   );
   text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-  // Drop a trailing "at" / "ko" / "pe" left behind by the removals.
+  // Drop a trailing "at" / "ko" / "pe" left behind by the removals,
+  // and a leading "to" ("remind me to drink water" → "Drink water",
+  // not "To drink water").
   text = text.replaceAll(RegExp(r'\s+(at|ko|pe|par)\s*$'), '').trim();
+  text = text.replaceFirst(RegExp(r'^to\s+', caseSensitive: false), '');
   // Capitalise the first letter for display.
   if (text.isEmpty) return text;
   return text[0].toUpperCase() + text.substring(1);
@@ -390,4 +419,112 @@ String formatReminderConfirmation(DateTime when, String text) {
   return 'Reminder set for ${weekdays[when.weekday]}, '
       '${months[when.month]} ${when.day}, ${when.year} '
       'at $hour12:$minute $suffix: $text';
+}
+
+// ---------------------------------------------------------------------------
+// v2.11.2 — corrections, ambiguity, and "no clear task".
+// ---------------------------------------------------------------------------
+
+/// Correction openers: the user is fixing the reminder that was
+/// just set, not asking for a new one ("not 8 it's 3:08pm", "no,
+/// I meant 4pm", "actually tomorrow at 9").
+const _correctionOpeners = [
+  'not ',
+  'not,',
+  'no ',
+  'no,',
+  'nope',
+  'nope,',
+  'i meant',
+  'i mean ',
+  'actually',
+  'correction',
+  'wrong ',
+  'sorry ',
+];
+
+/// True when [message] reads like a correction of the reminder
+/// that was just created (v2.11.2). The caller then EDITS the last
+/// reminder instead of creating a new one. A correction opener on
+/// its own ("not now") is not a correction — it must also carry a
+/// time (a digit), or there is nothing to correct the reminder to.
+bool looksLikeCorrection(String message) {
+  final lower = message.trim().toLowerCase();
+  if (!RegExp(r'\d').hasMatch(lower)) return false;
+  for (final opener in _correctionOpeners) {
+    if (lower.startsWith(opener)) return true;
+  }
+  // "it's 3:08pm" / "it is 4pm" on its own also corrects the time.
+  if (RegExp(r"^it'?s\s+\d").hasMatch(lower)) return true;
+  if (RegExp(r'^it is\s+\d').hasMatch(lower)) return true;
+  return false;
+}
+
+/// The task text a correction carries, if any: the message with the
+/// correction opener, the wrong time reference, and the new time
+/// removed. Empty when the correction only fixes the time ("not 8
+/// it's 3:08pm" → "" — the old task stays).
+String correctionTaskText(String message) {
+  var text = message.trim();
+  // Repeatedly drop leading correction openers and stray
+  // punctuation ("no, I meant call mom at 4pm" → "call mom at
+  // 4pm"; "not 8 it's 3:08pm" → "it's 3:08pm").
+  var changed = true;
+  while (changed) {
+    changed = false;
+    final lower = text.toLowerCase();
+    for (final opener in _correctionOpeners) {
+      if (lower.startsWith(opener)) {
+        text = text.substring(opener.length).trim();
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) {
+      final stripped = text.replaceFirst(RegExp(r'^[,\s:;]+'), '').trim();
+      if (stripped != text) {
+        text = stripped;
+        changed = true;
+      }
+    }
+  }
+  // A bare number left over is the WRONG hour ("not 8 it's 3:08pm"
+  // → "8 it's 3:08pm" → "it's 3:08pm") — drop it first.
+  text = text.replaceFirst(RegExp(r'^\d{1,2}[,\s:]*'), '');
+  // "it's 3:08pm" / "it is 4pm" — drop the "it's" too.
+  text = text.replaceFirst(
+    RegExp(r"^it'?s\s+", caseSensitive: false),
+    '',
+  );
+  text = text.replaceFirst(
+    RegExp(r'^it is\s+', caseSensitive: false),
+    '',
+  );
+  final stripped = _stripTimeAndDate(text);
+  return stripped.trim();
+}
+
+/// True when the parse had to GUESS something: the message gave no
+/// explicit date/day word AND no explicit am/pm, so the period was
+/// inferred from the local time (v2.11.2). The confirmation bubble
+/// shows the "include a date/day" tip only then — never on a
+/// successful, unambiguous set.
+bool reminderParseWasAmbiguous(String message) {
+  final lower = message.toLowerCase();
+  final now = DateTime.now();
+  final hasDateOrDay =
+      _parseDate(lower, now) != null ||
+      _parseDayWord(lower, now) != null ||
+      _parseWeekday(lower, now) != null;
+  if (hasDateOrDay) return false;
+  final hasMeridiem = RegExp(r'\d\s*(am|pm)\b').hasMatch(lower);
+  return !hasMeridiem;
+}
+
+/// True when [text] (already stripped of its time/date part) names
+/// an actual task: at least one word with letters in it. "5" or
+/// "" is not a task — the caller asks for clarification instead of
+/// creating a garbage reminder (v2.11.2).
+bool hasClearTask(String text) {
+  return RegExp(r'[A-Za-z]{2,}').hasMatch(text.trim());
 }

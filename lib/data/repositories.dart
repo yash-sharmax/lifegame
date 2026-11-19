@@ -1049,27 +1049,74 @@ class ProfileRepository {
     return list.total + 1;
   }
 
+  /// Find people by username or display name (v2.11.2 rewrite).
+  ///
+  /// The old code ONLY queried the `usernames` table with a
+  /// username-prefix match — and live it returned nothing for
+  /// every term ("yashsharma", "Yash", "muse", "a"), even though
+  /// users exist. Two things were wrong with relying on that table
+  /// alone: (1) it never searched display names, so "Yash" or
+  /// "Sharma" could never match "Yash Sharma"; (2) any user whose
+  /// `usernames` row is missing (or any prefix-index hiccup on
+  /// that table) is invisible to search forever. The Leaderboard
+  /// proves the `users` table itself lists fine — so search now
+  /// ALSO scans it and filters client-side (username OR display
+  /// name, substring, case-insensitive). The usernames prefix
+  /// query is kept as a fast path; the scan is the safety net, and
+  /// both results merge (deduped by user id, prefix matches
+  /// first). Hidden accounts (`discoverable == false`) stay out.
   Future<List<Profile>> searchProfiles(String query) async {
     final q = query.trim().toLowerCase();
     if (q.isEmpty) return [];
-    // Username prefix search. Appwrite has no LIKE/ILIKE; only username
-    // prefixes match (display names are not searched — see APPWRITE.md).
-    // Usernames are stored lowercase.
-    final list = await _d.listRows(
-      databaseId: _dbId,
-      tableId: 'usernames',
-      queries: [Query.startsWith('username', q), Query.limit(20)],
-    );
-    final profiles = <Profile>[];
-    for (final doc in list.rows) {
-      final ownerUid = doc.data['ownerUid'] as String?;
-      if (ownerUid == null) continue;
-      final profile = await fetchProfile(ownerUid);
-      // v2.9.0: hidden accounts never appear in Search (same
-      // client-side filter as the Leaderboard — null = shown).
-      if (profile != null && profile.discoverable) profiles.add(profile);
+    final found = <String, Profile>{};
+    // 1) Username prefix matches (fast path, usernames table).
+    try {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'usernames',
+        queries: [Query.startsWith('username', q), Query.limit(20)],
+      );
+      for (final doc in list.rows) {
+        final ownerUid = doc.data['ownerUid'] as String?;
+        if (ownerUid == null) continue;
+        final profile = await fetchProfile(ownerUid);
+        if (profile != null && profile.discoverable) {
+          found[profile.id] = profile;
+        }
+      }
+    } catch (_) {
+      // The scan below still finds people without this table.
     }
-    return profiles;
+    // 2) Users-table scan: substring match on username OR display
+    // name. This is what makes "Sharma" find "Yash Sharma" and
+    // what keeps search working when the usernames table is empty
+    // or its prefix query misbehaves.
+    try {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'users',
+        queries: [Query.orderDesc('xp'), Query.limit(100)],
+      );
+      for (final doc in list.rows) {
+        final profile = Profile.fromJson(_docJson(doc));
+        if (!profile.discoverable) continue;
+        final username = profile.username.toLowerCase();
+        final display = profile.displayName.toLowerCase();
+        if (username.contains(q) || display.contains(q)) {
+          found[profile.id] = profile;
+        }
+      }
+    } catch (_) {}
+    final profiles = found.values.toList();
+    profiles.sort((a, b) {
+      final aPrefix = a.username.toLowerCase().startsWith(q) ? 0 : 1;
+      final bPrefix = b.username.toLowerCase().startsWith(q) ? 0 : 1;
+      if (aPrefix != bPrefix) return aPrefix.compareTo(bPrefix);
+      return a.displayName.toLowerCase().compareTo(
+        b.displayName.toLowerCase(),
+      );
+    });
+    return profiles.take(20).toList();
   }
 }
 

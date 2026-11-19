@@ -208,6 +208,9 @@ class _MainShellState extends State<MainShell>
   ChatReminderAlert? _chatAlert;
   StreamSubscription<ChatReminderAlert>? _chatAlertSub;
 
+  // v2.11.2: the app was opened from a reminder notification.
+  StreamSubscription<void>? _notificationOpenedSub;
+
   // Offline (v2.9.0): the small "you're offline" line. Starts with
   // the sync service's current state.
   bool _online = true;
@@ -223,6 +226,13 @@ class _MainShellState extends State<MainShell>
     _chatAlertSub = ReminderService.instance.chatAlerts.listen((alert) {
       if (mounted) setState(() => _chatAlert = alert);
     });
+    // v2.11.2: opened from a reminder notification (Android) — land
+    // on the Reminders tab, where the fired reminder's chat message
+    // is waiting.
+    _notificationOpenedSub =
+        ReminderService.instance.notificationOpened.listen((_) {
+          if (mounted) _openReminders();
+        });
     _onlineSub = SyncService.instance.online.listen((online) {
       if (mounted) setState(() => _online = online);
     });
@@ -255,6 +265,10 @@ class _MainShellState extends State<MainShell>
     // Re-check when the app comes back to the foreground.
     if (state == AppLifecycleState.resumed) {
       unawaited(AppUpdateChecker.instance.check());
+      // v2.11.2: fire any reminders that became due while the app
+      // was closed (chat message + banner, and out of Active) —
+      // the same due-check that runs on start.
+      unawaited(ReminderService.instance.refresh());
     }
   }
 
@@ -263,6 +277,7 @@ class _MainShellState extends State<MainShell>
     WidgetsBinding.instance.removeObserver(this);
     _alertSub?.cancel();
     _chatAlertSub?.cancel();
+    _notificationOpenedSub?.cancel();
     _onlineSub?.cancel();
     super.dispose();
   }

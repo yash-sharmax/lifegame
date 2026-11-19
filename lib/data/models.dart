@@ -726,14 +726,15 @@ class ChatReminder {
     'fired': fired,
   };
 
-  ChatReminder copyWith({bool? fired}) => ChatReminder(
-    id: id,
-    ownerId: ownerId,
-    text: text,
-    scheduledAt: scheduledAt,
-    createdAt: createdAt,
-    fired: fired ?? this.fired,
-  );
+  ChatReminder copyWith({bool? fired, String? text, DateTime? scheduledAt}) =>
+      ChatReminder(
+        id: id,
+        ownerId: ownerId,
+        text: text ?? this.text,
+        scheduledAt: scheduledAt ?? this.scheduledAt,
+        createdAt: createdAt,
+        fired: fired ?? this.fired,
+      );
 
   final String id;
   final String ownerId;

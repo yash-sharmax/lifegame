@@ -59,6 +59,10 @@ class _ChatScreenState extends State<ChatScreen> {
   String _subtitle = '';
   Profile? _otherProfile;
 
+  // v2.11.2 FIX 6: true once this request was accepted in this
+  // screen — the banner goes away without leaving the chat.
+  bool _requestResolved = false;
+
   // Sender display names (groups), keyed by user id.
   final Map<String, String> _senderNames = {};
   // Reply targets, keyed by the replied-to message id.
@@ -281,6 +285,93 @@ class _ChatScreenState extends State<ChatScreen> {
         await _service.clearConversationHistory(widget.conversation.id);
       }
     } catch (_) {}
+  }
+
+  // --- Request banner (v2.11.2 FIX 6) ----------------------------------
+
+  /// The request state inside this chat: null when it is not a
+  /// pending request (or it was just resolved here).
+  RequestBanner? get _requestBanner {
+    if (_requestResolved) return null;
+    return requestBannerFor(
+      conversation: widget.conversation,
+      myId: _myId,
+    );
+  }
+
+  Future<void> _respondToRequest(bool accept) async {
+    try {
+      if (accept) {
+        await _service.acceptRequest(widget.conversation.id);
+        if (!mounted) return;
+        setState(() => _requestResolved = true);
+        await _loadMessages(silent: true);
+      } else {
+        await _service.declineRequest(widget.conversation.id);
+        if (!mounted) return;
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      _snack('Could not update the request. $e');
+    }
+  }
+
+  Widget _buildRequestBanner(RequestBanner banner) {
+    final waiting = banner == RequestBanner.waiting;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        border: Border(bottom: BorderSide(color: AppTheme.cardBorder)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.mark_email_unread_outlined,
+            size: 20,
+            color: AppTheme.ember,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              waiting
+                  ? 'Requested — waiting for accept'
+                  : '${_title.isEmpty ? 'This person' : _title} wants to message you',
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+            ),
+          ),
+          if (waiting)
+            Text(
+              'Pending',
+              style: TextStyle(color: AppTheme.inkSoft, fontSize: 12),
+            )
+          else ...[
+            TextButton(
+              onPressed: () => _respondToRequest(false),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                minimumSize: const Size(0, 32),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('Decline'),
+            ),
+            FilledButton(
+              onPressed: () => _respondToRequest(true),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                minimumSize: const Size(0, 32),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('Accept'),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   void _snack(String message) {
@@ -540,9 +631,12 @@ class _ChatScreenState extends State<ChatScreen> {
             _InfoRow(label: 'From', value: senderName),
             _InfoRow(
               label: 'Sent',
+              // v2.11.2 FIX 4: the date parts are device-local too
+              // (formatChatTime already converts; the raw fields
+              // would show the UTC day after a late-night message).
               value:
                   '${formatChatTime(message.createdAt)} • '
-                  '${message.createdAt.day}/${message.createdAt.month}/${message.createdAt.year}',
+                  '${message.createdAt.toLocal().day}/${message.createdAt.toLocal().month}/${message.createdAt.toLocal().year}',
             ),
             if (message.editedAt != null)
               const _InfoRow(label: 'Edited', value: 'Yes'),
@@ -786,6 +880,10 @@ class _ChatScreenState extends State<ChatScreen> {
             )
           : Column(
               children: [
+                // v2.11.2 FIX 6: the request state, inside the chat —
+                // the list used to be the only place that showed it.
+                if (_requestBanner != null)
+                  _buildRequestBanner(_requestBanner!),
                 Expanded(
                   child: _messages.isEmpty
                       ? const Center(
@@ -1173,17 +1271,11 @@ class _ChatScreenState extends State<ChatScreen> {
                         : AppTheme.gold,
                   ),
                 ),
-              if (message.encrypted)
-                Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: Icon(
-                    Icons.lock,
-                    size: 13,
-                    color: isMine
-                        ? AppTheme.onAccent.withValues(alpha: 0.9)
-                        : AppTheme.inkSoft,
-                  ),
-                ),
+              // v2.11.2 FIX B: no lock icon on message bubbles — the
+              // user asked for it off. E2EE itself is unchanged;
+              // the "End-to-end encrypted" line still shows in
+              // Message info, and the Secure Chat indicator stays
+              // on the chat info screen.
               Text(
                 formatChatTime(message.createdAt),
                 style: TextStyle(

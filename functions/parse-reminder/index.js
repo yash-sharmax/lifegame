@@ -25,6 +25,13 @@
 // gemini-2.5-flash returns 404 ("no longer available to new users");
 // gemini-3.8-flash returns 503 (high demand). gemini-3.5-flash-lite
 // was verified live to return the exact expected JSON.
+// NOTE (19 Nov 2026, v2.11.2): the prompt now infers AM/PM for bare
+// times from the user's local time (afternoon + hour 1–11 → PM,
+// keeping the period on the +24h roll) and strips the whole time
+// fragment from the task. After editing this file, rebuild the
+// deploy tarball (~/workspace/code.tar.gz) and redeploy it in the
+// Appwrite console the same way as before (entrypoint index.js,
+// Node.js 22) — the GEMINI_API_KEY env var is never touched.
 
 const GEMINI_MODEL = 'gemini-3.5-flash-lite';
 const GEMINI_URL =
@@ -75,13 +82,23 @@ export default async ({ req, res, log, error }) => {
       'time (' +
       nowISO +
       ') as the reference: "today" means the current date, ' +
-      '"tomorrow" / "kal" means the next day, a bare time that has ' +
-      'already passed today means tomorrow at that time, and a weekday ' +
-      'name means the next occurrence of that weekday. If the message ' +
-      'has NO date or time, "due" is null.\n' +
+      '"tomorrow" / "kal" means the next day, a weekday name means ' +
+      'the next occurrence of that weekday. Times may use a dot ' +
+      'separator ("3.08pm" means 3:08 PM, "12.26am" means 12:26 AM). ' +
+      'A bare time with NO am/pm is the tricky case — infer AM/PM ' +
+      'from the current local time: when the current time is in the ' +
+      'afternoon or evening (12:00–23:59) and the hour is 1–11, the ' +
+      'bare time means PM (e.g. "at 3:09" at 3:09 PM means 3:09 PM ' +
+      'today, never 3:09 AM); when the current time is in the ' +
+      'morning, it means AM. If the inferred time today has already ' +
+      'passed, use tomorrow at the SAME period (PM stays PM — never ' +
+      'silently switch a PM time to AM). If the message has NO date ' +
+      'or time, "due" is null.\n' +
       '- "task": the reminder text — the message with the date/time ' +
-      'part removed (e.g. "Buy milk"). If there is no task text, ' +
-      '"task" is null.\n' +
+      'part FULLY removed, including any "at 3:09" / "at 3.08pm" ' +
+      'fragment and any leading "remind me to" (e.g. "remind me to ' +
+      'drink water at 3:09" gives "drink water", never "to drink ' +
+      'water at 3"). If there is no task text, "task" is null.\n' +
       'Do NOT chat. Do NOT answer questions. Do NOT explain anything. ' +
       'Do NOT return markdown, code fences, or any text outside the ' +
       'single JSON object. The message is:\n' +

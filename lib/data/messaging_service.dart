@@ -394,7 +394,12 @@ class MessagingService {
       }
     }
     final items = <ConversationItem>[];
+    // v2.11.2 FIX 1: one row per conversation, even if member rows
+    // ever duplicate — a duplicated DM row in the list is what the
+    // user saw live.
+    final seenConversationIds = <String>{};
     for (final m in myMemberships) {
+      if (!seenConversationIds.add(m.conversationId)) continue;
       if (!includeHidden && (settings[m.conversationId]?.hidden ?? false)) {
         continue;
       }
@@ -463,11 +468,34 @@ class MessagingService {
   /// Starts (or reopens) a DM. Requires that I follow the other
   /// person (point 1). Mutual follows chat directly; a one-sided
   /// follow creates a REQUEST the other side must accept.
+  ///
+  /// Race-safe (v2.11.2 FIX 1): two rapid concurrent calls for the
+  /// same person share one creation — the live duplicate DM was two
+  /// `startDm` calls 2 seconds apart, both seeing "no DM yet" and
+  /// both creating one. The in-flight map is static, so it holds
+  /// across service instances in this isolate.
+  static final Map<String, Future<Conversation>> _dmCreationInFlight = {};
+
   Future<Conversation> startDm(String otherUserId) async {
     final myId = _myId();
     if (otherUserId == myId) {
       throw const CannotMessageException('You cannot message yourself.');
     }
+    final key = '$myId|$otherUserId';
+    final inFlight = _dmCreationInFlight[key];
+    if (inFlight != null) return inFlight;
+    final future = _startDmInner(myId, otherUserId);
+    _dmCreationInFlight[key] = future;
+    try {
+      return await future;
+    } finally {
+      if (_dmCreationInFlight[key] == future) {
+        _dmCreationInFlight.remove(key);
+      }
+    }
+  }
+
+  Future<Conversation> _startDmInner(String myId, String otherUserId) async {
     final existing = await findDm(otherUserId);
     if (existing != null) return existing;
     final social = SocialRepository(db: _db);
@@ -477,7 +505,11 @@ class MessagingService {
       );
     }
     final mutual = await social.isMutual(otherUserId);
-    final now = DateTime.now();
+    // Re-check immediately before creating: a concurrent call may
+    // have created the DM while the follow checks were running.
+    final rechecked = await findDm(otherUserId);
+    if (rechecked != null) return rechecked;
+    final now = DateTime.now().toUtc();
     final doc = await _d.createRow(
       databaseId: _dbId,
       tableId: 'conversations',
@@ -535,7 +567,7 @@ class MessagingService {
         );
       }
     }
-    final now = DateTime.now();
+    final now = DateTime.now().toUtc();
     final doc = await _d.createRow(
       databaseId: _dbId,
       tableId: 'conversations',
@@ -641,7 +673,9 @@ class MessagingService {
         databaseId: _dbId,
         tableId: 'conversation_members',
         rowId: rowId,
-        data: {'lastReadAt': DateTime.now().toIso8601String()},
+        // v2.11.2 FIX 4: store UTC instants (see _touchConversation)
+        // so every device renders the same local time.
+        data: {'lastReadAt': DateTime.now().toUtc().toIso8601String()},
       );
     } catch (_) {}
   }
@@ -708,10 +742,37 @@ class MessagingService {
     final out = <DmMessage>[];
     for (final m in rows) {
       if (hidden.contains(m.id)) continue;
-      out.add(await _decryptForMe(m));
+      final decrypted = await _decryptForMe(m);
+      // v2.11.2 FIX 3: an epoch establishment carrier this device
+      // cannot read is key transport, not a user message — it must
+      // not render as a phantom "Encrypted message" bubble in a
+      // fresh DM. It stays stored (and _establishEpochs above
+      // already unwrapped its key), and a carrier this device CAN
+      // read renders normally as the user's message.
+      if (decrypted.isEstablishment && decrypted.decryptedText == null) {
+        continue;
+      }
+      out.add(decrypted);
     }
     return out;
   }
+
+  /// The newest message that would render in the chat (v2.11.2
+  /// FIX 5) — for the list preview. Null when the chat has no
+  /// visible message yet (e.g. its only message is an unreadable
+  /// establishment carrier); the caller then keeps the stored
+  /// preview instead of inventing one.
+  Future<DmMessage?> latestVisibleMessage(String conversationId) async {
+    final messages = await listMessages(conversationId);
+    if (messages.isEmpty) return null;
+    return messages.last;
+  }
+
+  /// One conversation by id (v2.11.2 FIX 6: the chat screen
+  /// re-reads the conversation after accepting a request, so the
+  /// banner goes away without leaving and reopening the chat).
+  Future<Conversation?> getConversation(String conversationId) =>
+      _getConversation(conversationId);
 
   Future<DmMessage?> getMessage(String messageId) async {
     try {
@@ -736,7 +797,12 @@ class MessagingService {
         tableId: 'conversations',
         rowId: conversationId,
         data: {
-          'lastMessageAt': DateTime.now().toIso8601String(),
+          // v2.11.2 FIX 4: write a UTC instant. The old code wrote
+          // local time with no offset ("15:02"), which Appwrite
+          // reads back as 15:02 UTC — 5:30 ahead of IST — so the
+          // same message showed "3:02 PM" from this field and
+          // "9:32 AM" from the server's true-UTC $createdAt.
+          'lastMessageAt': DateTime.now().toUtc().toIso8601String(),
           'lastMessagePreview': preview.length > 120
               ? '${preview.substring(0, 120)}…'
               : preview,
@@ -914,7 +980,7 @@ class MessagingService {
     String? encryptedKeys,
   }) async {
     final myId = _myId();
-    final now = DateTime.now();
+    final now = DateTime.now().toUtc();
     final doc = await _d.createRow(
       databaseId: _dbId,
       tableId: 'messages',
@@ -955,7 +1021,7 @@ class MessagingService {
     }
     final encrypted = await _encryptTextForConversation(conversationId, clean);
     final myId = _myId();
-    final now = DateTime.now();
+    final now = DateTime.now().toUtc();
     final doc = await _d.createRow(
       databaseId: _dbId,
       tableId: 'messages',
@@ -1066,7 +1132,7 @@ class MessagingService {
       throw const CannotMessageException('Write something first.');
     }
     final data = <String, dynamic>{
-      'editedAt': DateTime.now().toIso8601String(),
+      'editedAt': DateTime.now().toUtc().toIso8601String(),
     };
     if (message.encrypted) {
       final encrypted = await _encryptTextForConversation(
@@ -1252,7 +1318,7 @@ class MessagingService {
         'userId': myId,
         'messageId': message.id,
         'conversationId': message.conversationId,
-        'createdAt': DateTime.now().toIso8601String(),
+        'createdAt': DateTime.now().toUtc().toIso8601String(),
       },
     );
   }

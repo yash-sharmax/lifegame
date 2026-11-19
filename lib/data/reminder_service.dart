@@ -13,12 +13,32 @@
 //   Permissions are requested best-effort; a denial only disables the
 //   Android channel — in-app reminders still work.
 //
+// v2.11.2 firing (all three paths, so a reminder fires whether the
+// app is open or closed):
+// 1. In-app timer while open (every 30s) — posts a "Reminder:
+//    <task>" message into the Reminders chat, shows the banner /
+//    web notification, and removes the reminder from Active.
+// 2. On start AND on resume ([refresh], called by MainShell) — any
+//    reminder that became due while the app was closed fires the
+//    same way the moment the app runs again, instead of silently
+//    staying in Active.
+// 3. Android exact alarms — the one-shot alarm fires the system
+//    notification even with the app closed; tapping it opens the
+//    Reminders tab ([notificationOpened]) and the start/resume
+//    check from (2) posts the chat message. When exact alarms are
+//    not permitted, the alarm is scheduled inexact instead of
+//    failing silently.
+// Web has no push server, so a fully-closed browser tab cannot wake
+// itself — web relies on (1) + (2); the closed-app guarantee is
+// the Android APK path via (3).
+//
 // All failures are swallowed: a reminder that cannot be delivered
 // must never crash the app.
 library;
 
 import 'dart:async';
 
+import 'package:appwrite/appwrite.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
@@ -61,6 +81,15 @@ class ReminderService {
 
   /// Fires once per due CHAT reminder (v2.9.0; MainShell listens).
   Stream<ChatReminderAlert> get chatAlerts => _chatAlerts.stream;
+
+  // v2.11.2: a reminder notification was tapped (or the app was
+  // cold-started from one). MainShell listens and opens the
+  // Reminders tab, so the user lands on the fired reminder's chat
+  // message; the start/resume due-check runs anyway.
+  final _notificationOpened = StreamController<void>.broadcast();
+
+  /// Fires when the app is opened from a reminder notification.
+  Stream<void> get notificationOpened => _notificationOpened.stream;
 
   Timer? _timer;
   FlutterLocalNotificationsPlugin? _notifications;
@@ -121,8 +150,25 @@ class ReminderService {
         settings: const InitializationSettings(
           android: AndroidInitializationSettings('@mipmap/ic_launcher'),
         ),
+        // v2.11.2: tapping the notification opens the Reminders tab
+        // (MainShell listens to [notificationOpened]).
+        onDidReceiveNotificationResponse: (_) {
+          if (!_notificationOpened.isClosed) {
+            _notificationOpened.add(null);
+          }
+        },
       );
       _notifications = plugin;
+      // Cold start from a notification tap (v2.11.2): the due-check
+      // in refresh() runs on start anyway; this also opens the tab.
+      try {
+        final launch = await plugin.getNotificationAppLaunchDetails();
+        if (launch?.didNotificationLaunchApp == true) {
+          if (!_notificationOpened.isClosed) {
+            _notificationOpened.add(null);
+          }
+        }
+      } catch (_) {}
       final android = plugin
           .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin
@@ -132,6 +178,27 @@ class ReminderService {
       await _rescheduleAllAndroid();
     } catch (_) {
       _notifications = null;
+    }
+  }
+
+  /// Exact alarms need the Android 12+ SCHEDULE_EXACT_ALARM grant.
+  /// When it is not granted (user turned it off, or the system
+  /// revoked it), schedule INEXACT instead of failing silently —
+  /// an approximate notification still beats none at all
+  /// (v2.11.2). The grant is requested once at init; this only
+  /// reads the current state, never yanks the user to Settings.
+  Future<AndroidScheduleMode> _exactOrInexact() async {
+    try {
+      final android = _notifications
+          ?.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
+      if (android == null) return AndroidScheduleMode.exactAllowWhileIdle;
+      final canExact = await android.canScheduleExactNotifications();
+      if (canExact == true) return AndroidScheduleMode.exactAllowWhileIdle;
+      return AndroidScheduleMode.inexactAllowWhileIdle;
+    } catch (_) {
+      return AndroidScheduleMode.inexactAllowWhileIdle;
     }
   }
 
@@ -168,7 +235,7 @@ class ReminderService {
             priority: Priority.high,
           ),
         ),
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        androidScheduleMode: await _exactOrInexact(),
         matchDateTimeComponents: DateTimeComponents.time,
       );
     } catch (_) {
@@ -238,7 +305,7 @@ class ReminderService {
             priority: Priority.high,
           ),
         ),
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        androidScheduleMode: await _exactOrInexact(),
         // No matchDateTimeComponents: this fires ONCE, at the date
         // + time above — not every day.
       );
@@ -291,8 +358,16 @@ class ReminderService {
       // they have not fired yet. Marking them fired here is what
       // stops the in-app banner repeating; the Android alarm fires
       // on its own even with the app closed.
+      //
+      // v2.11.2: firing also posts a "Reminder: <task>" message into
+      // the Reminders chat (so the user sees what fired when they
+      // open the tab) and removes the reminder from Active (fired:
+      // true). This runs on the 30-second timer while the app is
+      // open AND on start/resume (refresh), so reminders that came
+      // due while the app was closed fire the moment it runs again.
       final chatReminders = store.loadChatReminders(user.uid);
       var changed = false;
+      final firedMessages = <ChatMessage>[];
       for (final reminder in chatReminders) {
         if (reminder.fired) continue;
         if (reminder.scheduledAt.isAfter(now)) continue;
@@ -300,6 +375,15 @@ class ReminderService {
         final index = chatReminders.indexWhere((r) => r.id == reminder.id);
         chatReminders[index] = fired;
         changed = true;
+        firedMessages.add(
+          ChatMessage(
+            id: ID.unique(),
+            ownerId: user.uid,
+            role: 'assistant',
+            text: 'Reminder: ${reminder.text}',
+            createdAt: now,
+          ),
+        );
         if (!_chatAlerts.isClosed) {
           _chatAlerts.add(ChatReminderAlert(reminder: fired));
         }
@@ -311,6 +395,11 @@ class ReminderService {
       }
       if (changed) {
         await store.saveChatReminders(chatReminders);
+        if (firedMessages.isNotEmpty) {
+          final messages = store.loadChatMessages(user.uid)
+            ..addAll(firedMessages);
+          await store.saveChatMessages(user.uid, messages);
+        }
       }
     } catch (_) {}
   }

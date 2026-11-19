@@ -69,6 +69,40 @@ bool canSaveMore(int savedCount) => savedCount < kMaxSavedMessagesPerUser;
 /// follow starts as a REQUEST the other side must accept (point 1).
 String dmStatus({required bool mutual}) => mutual ? 'active' : 'requested';
 
+/// The request banner inside a chat (v2.11.2 FIX 6): null when the
+/// chat is not a pending request; [RequestBanner.waiting] when I
+/// sent the request and the other side has not accepted yet;
+/// [RequestBanner.decision] when the other side sent it and I must
+/// accept or decline.
+enum RequestBanner { waiting, decision }
+
+RequestBanner? requestBannerFor({
+  required Conversation conversation,
+  required String myId,
+}) {
+  if (!conversation.isRequest) return null;
+  return conversation.createdBy == myId
+      ? RequestBanner.waiting
+      : RequestBanner.decision;
+}
+
+/// The one-line preview for a chat row (v2.11.2 FIX 5): the actual
+/// decrypted text when this device can read the message, an honest
+/// label when it cannot — never the raw stored preview, which goes
+/// stale ("No messages yet" after a message was sent, or
+/// "Encrypted message" instead of the text). View Once photos
+/// never leak their content into a preview.
+String chatPreviewForMessage(DmMessage message) {
+  if (message.deletedForAll) return 'This message was deleted';
+  if (message.isImage) {
+    return message.isViewOnce ? 'View once photo' : 'Photo';
+  }
+  if (message.encrypted && message.decryptedText == null) {
+    return 'Encrypted message';
+  }
+  return message.displayText;
+}
+
 /// You can message anyone you follow; following them from your side
 /// is REQUIRED (point 1).
 bool canMessage({required bool iFollowThem}) => iFollowThem;
@@ -403,6 +437,20 @@ class DmMessage {
 
   bool get isImage => type == 'image';
   bool get isExpiredAtNow => DateTime.now().isAfter(expiresAt);
+
+  /// True when this row exists to carry an epoch key (v2.11.1): an
+  /// epoch-format ciphertext with a wrapped key. The row's user
+  /// text lives inside the ciphertext; when this device cannot
+  /// decrypt it, the row carries no readable content — it is key
+  /// transport, not a user message, and must not render as a
+  /// bubble (v2.11.2 FIX 3). It stays stored either way, so the
+  /// epoch key can still be unwrapped later.
+  bool get isEstablishment =>
+      encrypted &&
+      ciphertext != null &&
+      ciphertext!.startsWith('v2:') &&
+      encryptedKeys != null &&
+      encryptedKeys!.isNotEmpty;
 
   /// What the bubble shows. Encrypted messages the device cannot
   /// decrypt say so honestly instead of showing garbage.

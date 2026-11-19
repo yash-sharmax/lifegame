@@ -18,6 +18,8 @@
 // whole chat (app-bar menu, confirmed), an "Active reminders"
 // section with a Stop button per reminder, and a manual set form
 // (date + time + message) that works offline.
+import 'dart:async';
+
 import 'package:appwrite/appwrite.dart';
 import 'package:flutter/material.dart';
 
@@ -54,6 +56,18 @@ class _RemindersScreenState extends State<RemindersScreen> {
   List<ChatReminder> _reminders = [];
   bool _sending = false;
 
+  // v2.11.2: Active reminders is COLLAPSIBLE — collapsed by
+  // default, tapping the header expands it. (It used to be always
+  // expanded, pushing the chat down.)
+  bool _activeExpanded = false;
+
+  // v2.11.2: the service fires due reminders in the background
+  // (timer + start/resume) and posts the "Reminder: <task>" chat
+  // message itself — reload the list when one fires while this
+  // screen is open, so the message appears and the reminder
+  // leaves Active without a manual reload.
+  StreamSubscription<ChatReminderAlert>? _firedSub;
+
   // v2.10.1: the "couldn't find a time" banner is an inline row in
   // the layout (between the message list and the composer), NOT a
   // SnackBar. A SnackBar overlays the bottom of the screen and hid
@@ -71,10 +85,14 @@ class _RemindersScreenState extends State<RemindersScreen> {
   void initState() {
     super.initState();
     _load();
+    _firedSub = ReminderService.instance.chatAlerts.listen((_) {
+      if (mounted) _load();
+    });
   }
 
   @override
   void dispose() {
+    _firedSub?.cancel();
     _inputController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -137,9 +155,13 @@ class _RemindersScreenState extends State<RemindersScreen> {
 
   /// Creates the reminder + confirmation bubble + alarm for a parsed
   /// (or manually set) time. Shared by [_send] and the manual form.
+  /// [showTip] adds the "include a date/day" hint — only when the
+  /// parse was ambiguous (v2.11.2); a clean, successful set shows
+  /// just the confirmation, never the tip.
   Future<void> _createReminder({
     required String text,
     required DateTime when,
+    bool showTip = false,
   }) async {
     final ownerId = _ownerId;
     if (ownerId.isEmpty) return;
@@ -155,9 +177,11 @@ class _RemindersScreenState extends State<RemindersScreen> {
       id: ID.unique(),
       ownerId: ownerId,
       role: 'assistant',
-      text: '${formatReminderConfirmation(when, text)}\n\n'
-          "Tip: include a date, day, 'today' or 'tomorrow' with the "
-          "time. Example: Call mom tomorrow at 7 am.",
+      text: showTip
+          ? '${formatReminderConfirmation(when, text)}\n\n'
+                "Tip: include a date, day, 'today' or 'tomorrow' with the "
+                "time. Example: Call mom tomorrow at 7 am."
+          : formatReminderConfirmation(when, text),
       createdAt: DateTime.now(),
     );
     setState(() {
@@ -169,6 +193,50 @@ class _RemindersScreenState extends State<RemindersScreen> {
     // The one-shot Android alarm (fires even with the app closed) +
     // the in-app timer re-check.
     await ReminderService.instance.scheduleAndroidChatReminder(reminder);
+    await ReminderService.instance.refresh();
+  }
+
+  /// The most recent reminder that has not fired yet (v2.11.2) —
+  /// the one a correction ("not 8 it's 3:08pm") edits.
+  ChatReminder? _lastUnfiredReminder() {
+    final open = _reminders.where((r) => !r.fired).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return open.isEmpty ? null : open.first;
+  }
+
+  /// Edits the last reminder in place (v2.11.2 correction flow):
+  /// new time, and a new task when the correction carries one
+  /// (otherwise the old task stays). The Android alarm is
+  /// re-scheduled for the new time; the confirmation bubble says
+  /// the reminder was UPDATED, so the user sees the fix.
+  Future<void> _editReminder(
+    ChatReminder reminder, {
+    required DateTime when,
+    String? text,
+  }) async {
+    final ownerId = _ownerId;
+    if (ownerId.isEmpty) return;
+    final updated = reminder.copyWith(
+      scheduledAt: when,
+      text: text,
+    );
+    final confirmation = ChatMessage(
+      id: ID.unique(),
+      ownerId: ownerId,
+      role: 'assistant',
+      text:
+          'Updated: ${formatReminderConfirmation(when, updated.text)}',
+      createdAt: DateTime.now(),
+    );
+    setState(() {
+      final index = _reminders.indexWhere((r) => r.id == reminder.id);
+      if (index >= 0) _reminders[index] = updated;
+      _messages.add(confirmation);
+    });
+    await _save();
+    _scrollToBottom();
+    await ReminderService.instance.cancelAndroidChatReminder(reminder);
+    await ReminderService.instance.scheduleAndroidChatReminder(updated);
     await ReminderService.instance.refresh();
   }
 
@@ -193,6 +261,48 @@ class _RemindersScreenState extends State<RemindersScreen> {
     );
     setState(() => _messages.add(userMessage));
     _scrollToBottom();
+
+    // v2.11.2: a correction ("not 8 it's 3:08pm") EDITS the last
+    // reminder instead of creating a new one. The time is parsed
+    // from the correction; the task stays unless the correction
+    // carries a new one.
+    if (looksLikeCorrection(text)) {
+      final last = _lastUnfiredReminder();
+      final timeParsed = parseChatReminder(text, now);
+      if (last != null && timeParsed != null) {
+        final newTask = correctionTaskText(text);
+        await _editReminder(
+          last,
+          when: timeParsed.when,
+          text: newTask.isEmpty ? null : newTask,
+        );
+        if (mounted) setState(() => _sending = false);
+        return;
+      }
+      // A correction with no recent reminder, or no usable time in
+      // it — ask what was meant instead of creating a garbage
+      // reminder.
+      final reply = ChatMessage(
+        id: ID.unique(),
+        ownerId: ownerId,
+        role: 'assistant',
+        text: last == null
+            ? 'There is no recent reminder to correct. Tell me the '
+                  'reminder and the time, e.g. "Buy milk at 6pm".'
+            : 'I could not tell which time you meant. Tell me the '
+                  'time again, e.g. "3:08pm".',
+        createdAt: DateTime.now(),
+      );
+      setState(() {
+        _messages.add(reply);
+        _sending = false;
+        _showNoTimeBanner = true;
+        _noTimeText = text;
+      });
+      await _save();
+      _scrollToBottom();
+      return;
+    }
 
     // v2.10.0: try the AI parser first when online — it understands
     // natural phrasing the local parser misses ("remind me at
@@ -231,7 +341,37 @@ class _RemindersScreenState extends State<RemindersScreen> {
       return;
     }
 
-    await _createReminder(text: parsed.text, when: parsed.when);
+    // v2.11.2: never create a reminder from a message with no clear
+    // task ("remind me at 3pm" with nothing to do) — ask for
+    // clarification instead of a garbage reminder.
+    if (!hasClearTask(parsed.text)) {
+      final reply = ChatMessage(
+        id: ID.unique(),
+        ownerId: ownerId,
+        role: 'assistant',
+        text: 'What should I remind you about? Tell me the task '
+            'with the time, e.g. "Buy milk at 6pm".',
+        createdAt: DateTime.now(),
+      );
+      setState(() {
+        _messages.add(reply);
+        _sending = false;
+        _showNoTimeBanner = true;
+        _noTimeText = text;
+      });
+      await _save();
+      _scrollToBottom();
+      return;
+    }
+
+    // v2.11.2: the tip shows ONLY when the parse was ambiguous
+    // (bare time, no date/day — the period was inferred), never on
+    // a successful, unambiguous set.
+    await _createReminder(
+      text: parsed.text,
+      when: parsed.when,
+      showTip: reminderParseWasAmbiguous(text),
+    );
     if (mounted) setState(() => _sending = false);
   }
 
@@ -454,12 +594,13 @@ class _RemindersScreenState extends State<RemindersScreen> {
       ),
       body: Column(
         children: [
-          // Active reminders (v2.10.0): always visible — the list of
-          // upcoming reminders with a Stop button each, or a subtle
-          // line when there are none.
+          // Active reminders (v2.10.0; v2.11.2 collapsible): the
+          // header always shows, with the count — collapsed by
+          // default, tapping it expands the list. A fired reminder
+          // leaves this list (it is marked fired by the service
+          // when it fires); Stop cancels one.
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
             decoration: BoxDecoration(
               color: AppTheme.card,
               border: Border(bottom: BorderSide(color: AppTheme.cardBorder)),
@@ -467,54 +608,83 @@ class _RemindersScreenState extends State<RemindersScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Active reminders',
-                  style: TextStyle(
-                    color: AppTheme.inkSoft,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                if (upcoming.isEmpty)
-                  Text(
-                    'No active reminders',
-                    style: TextStyle(
-                      color: AppTheme.inkSoft,
-                      fontSize: 13,
-                    ),
-                  ),
-                for (final reminder in upcoming)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
+                InkWell(
+                  onTap: () =>
+                      setState(() => _activeExpanded = !_activeExpanded),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
                     child: Row(
                       children: [
+                        Text(
+                          'Active reminders'
+                          '${upcoming.isEmpty ? '' : ' (${upcoming.length})'}',
+                          style: TextStyle(
+                            color: AppTheme.inkSoft,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const Spacer(),
                         Icon(
-                          Icons.alarm,
-                          size: 16,
-                          color: AppTheme.ember,
+                          _activeExpanded
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
+                          size: 20,
+                          color: AppTheme.inkSoft,
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '${_shortWhen(reminder.scheduledAt)} — ${reminder.text}',
-                            style: const TextStyle(fontSize: 13),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        TextButton(
-                          onPressed: () => _cancelReminder(reminder),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 0,
+                      ],
+                    ),
+                  ),
+                ),
+                if (_activeExpanded)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (upcoming.isEmpty)
+                          Text(
+                            'No active reminders',
+                            style: TextStyle(
+                              color: AppTheme.inkSoft,
+                              fontSize: 13,
                             ),
-                            minimumSize: const Size(0, 30),
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
-                          child: const Text('Stop'),
-                        ),
+                        for (final reminder in upcoming)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.alarm,
+                                  size: 16,
+                                  color: AppTheme.ember,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '${_shortWhen(reminder.scheduledAt)} — ${reminder.text}',
+                                    style: const TextStyle(fontSize: 13),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: () => _cancelReminder(reminder),
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 0,
+                                    ),
+                                    minimumSize: const Size(0, 30),
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  child: const Text('Stop'),
+                                ),
+                              ],
+                            ),
+                          ),
                       ],
                     ),
                   ),
