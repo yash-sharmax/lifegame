@@ -103,6 +103,34 @@ String chatPreviewForMessage(DmMessage message) {
   return message.displayText;
 }
 
+/// Merges a fresh server message list with the locally cached one
+/// (v2.11.5, offline chats): the server is the truth, so every
+/// cached message is dropped — EXCEPT a pending (offline-queued)
+/// message with no server match, which stays visible as "sending"
+/// until its outbox op is replayed and the real row arrives. A
+/// pending message matches a server row when it is from the same
+/// sender, shows the same text, and was created within
+/// [matchWindow] of it (the replayed send happens seconds after
+/// the offline tap). Pure and unit-tested.
+List<DmMessage> mergeCachedMessages({
+  required List<DmMessage> server,
+  required List<DmMessage> cached,
+  Duration matchWindow = const Duration(seconds: 120),
+}) {
+  final out = List<DmMessage>.from(server);
+  for (final pending in cached.where((m) => m.pending)) {
+    final matched = server.any(
+      (s) =>
+          s.senderId == pending.senderId &&
+          s.displayText == pending.displayText &&
+          s.createdAt.difference(pending.createdAt).abs() <= matchWindow,
+    );
+    if (!matched) out.add(pending);
+  }
+  out.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  return out;
+}
+
 /// You can message anyone you follow; following them from your side
 /// is REQUIRED (point 1).
 bool canMessage({required bool iFollowThem}) => iFollowThem;
@@ -334,6 +362,10 @@ class DmMessage {
     this.forwarded = false,
     this.decryptedText,
     this.decryptedImageBytes,
+    // v2.11.5, offline chats: true while this message is queued in
+    // the outbox (typed offline, not on the server yet). Local-only
+    // — never written to the server row (see [toCacheJson]).
+    this.pending = false,
   });
 
   factory DmMessage.fromJson(Map<String, dynamic> json) {
@@ -435,6 +467,32 @@ class DmMessage {
   /// [imageUrl]) and when this device cannot decrypt the photo.
   final List<int>? decryptedImageBytes;
 
+  /// Local only (v2.11.5): typed offline and still in the outbox.
+  /// The bubble shows a "sending" clock instead of a tick until
+  /// the server row arrives and [mergeCachedMessages] drops it.
+  final bool pending;
+
+  /// Cache JSON (v2.11.5, offline chats): the server row shape
+  /// plus the local-only fields the cache must keep — the
+  /// decrypted text (re-decrypting every cached message on every
+  /// open is what made the list slow) and [pending]. Photo bytes
+  /// are NOT cached (too big); they re-download on open.
+  Map<String, dynamic> toCacheJson() => {
+    ...toMap(),
+    'id': id,
+    r'$createdAt': createdAt.toIso8601String(),
+    'decryptedText': decryptedText,
+    'pending': pending,
+  };
+
+  factory DmMessage.fromCacheJson(Map<String, dynamic> json) {
+    final message = DmMessage.fromJson(json);
+    return message.copyWith(
+      decryptedText: json['decryptedText'] as String?,
+      pending: json['pending'] as bool? ?? false,
+    );
+  }
+
   bool get isImage => type == 'image';
   bool get isExpiredAtNow => DateTime.now().isAfter(expiresAt);
 
@@ -471,6 +529,7 @@ class DmMessage {
     DateTime? editedAt,
     bool? deletedForAll,
     bool? viewOnceViewed,
+    bool? pending,
   }) => DmMessage(
     id: id,
     conversationId: conversationId,
@@ -492,6 +551,7 @@ class DmMessage {
     forwarded: forwarded,
     decryptedText: decryptedText ?? this.decryptedText,
     decryptedImageBytes: decryptedImageBytes ?? this.decryptedImageBytes,
+    pending: pending ?? this.pending,
   );
 }
 

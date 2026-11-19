@@ -21,6 +21,7 @@ import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 
 import 'local_store.dart';
+import 'messaging_service.dart';
 import 'repositories.dart';
 
 /// The app is local-first (v2.9.0, offline-first): habits, logs, tasks
@@ -234,6 +235,41 @@ class SyncService {
         await profiles.replayProfileUpdate(
           Map<String, dynamic>.from(op['data'] as Map? ?? {}),
         );
+      case 'chat_send':
+        await _replayChatSend(op);
+    }
+  }
+
+  /// Test seam: a MessagingService with an injected (fake)
+  /// database, so the chat outbox drain can be tested without a
+  /// live session. Production always uses the real service.
+  static MessagingService? debugMessagingService;
+
+  /// Replays one offline-queued chat message (v2.11.5). A network
+  /// failure rethrows, so the loop stops and the op stays queued;
+  /// an unrecoverable failure (e.g. the group got too big to
+  /// encrypt) drops the "sending" bubble from the cache before
+  /// rethrowing, so it does not linger forever.
+  Future<void> _replayChatSend(Map<String, dynamic> op) async {
+    final service = debugMessagingService ?? MessagingService();
+    try {
+      await service.sendText(
+        op['conversationId'] as String? ?? '',
+        op['text'] as String? ?? '',
+        replyToId: op['replyToId'] as String?,
+      );
+    } on Object catch (e) {
+      if (!isNetworkError(e)) {
+        try {
+          final store = await LocalStore.getInstance();
+          await store.dropPendingChatMessage(
+            op['ownerUid'] as String? ?? '',
+            op['conversationId'] as String? ?? '',
+            op['localId'] as String? ?? '',
+          );
+        } catch (_) {}
+      }
+      rethrow;
     }
   }
 }

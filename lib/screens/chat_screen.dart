@@ -26,8 +26,10 @@ import '../data/messaging_service.dart';
 import '../data/models.dart';
 import '../data/repositories.dart';
 import '../data/secure_chat.dart';
+import '../data/typing_service.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/typing_indicator.dart';
 import 'chat_info_screen.dart';
 import 'chats_screen.dart';
 import 'forward_picker_screen.dart';
@@ -44,6 +46,7 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final MessagingService _service = MessagingService();
   final ProfileRepository _profiles = ProfileRepository();
+  final TypingService _typingService = TypingService();
   final _composerController = TextEditingController();
   final _scrollController = ScrollController();
 
@@ -52,6 +55,11 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _notSetUp = false;
   bool _sending = false;
   Timer? _refreshTimer;
+  // v2.11.5: typing indicator — polled every 3s while the chat is
+  // open; the idle timer clears my row ~5s after my last keystroke.
+  Timer? _typingTimer;
+  Timer? _typingIdleTimer;
+  List<String> _typingNames = [];
 
   ChatSettings? _settings;
   String _myId = '';
@@ -107,6 +115,13 @@ class _ChatScreenState extends State<ChatScreen> {
       const Duration(seconds: 15),
       (_) => _loadMessages(silent: true),
     );
+    // v2.11.5: typing indicator — fetch who is typing every 3s
+    // while this chat is open.
+    _typingTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _refreshTyping(),
+    );
+    unawaited(_refreshTyping());
   }
 
   Future<void> _loadSettings() async {
@@ -164,12 +179,35 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _loadMessages({bool silent = false}) async {
-    if (!silent && mounted) setState(() => _loading = true);
+    // v2.11.5 FIX 1: render from the cache instantly on first
+    // open, then refresh from the server in the background. The
+    // old code awaited the server (with decryption) behind a
+    // full-screen spinner on every navigation.
+    if (!silent && _messages.isEmpty) {
+      try {
+        final cached = await _service.listMessagesCached(
+          widget.conversation.id,
+        );
+        if (mounted && cached.isNotEmpty) {
+          setState(() {
+            _messages = cached;
+            _loading = false;
+          });
+          _scrollToBottom();
+          unawaited(_resolveSenders(cached));
+        }
+      } catch (_) {}
+    }
+    if (!silent && mounted && _messages.isEmpty) {
+      setState(() => _loading = true);
+    }
     try {
       final messages = await _service.listMessages(widget.conversation.id);
       if (!mounted) return;
       setState(() {
-        _messages = messages;
+        // Keep unmatched pending (offline-queued) messages visible
+        // — the server list does not have them yet.
+        _messages = mergeCachedMessages(server: messages, cached: _messages);
         _loading = false;
         _notSetUp = false;
       });
@@ -182,9 +220,63 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _notSetUp = true;
+        // With cached messages on screen, a failed refresh just
+        // means offline — keep reading the cache.
+        if (_messages.isEmpty) _notSetUp = true;
       });
     }
+  }
+
+  // --- Typing indicator (v2.11.5) ------------------------------------
+
+  /// Who is typing in this chat right now (names, fresh rows
+  /// only, never me). Names resolve from the sender cache first,
+  /// then a profile fetch — a DM typer with no messages yet still
+  /// gets a name.
+  Future<void> _refreshTyping() async {
+    try {
+      final rows = await _typingService.fetchTyping(widget.conversation.id);
+      if (!mounted) return;
+      final ids = freshTypingUserIds(
+        rows: rows,
+        myId: _myId,
+        now: DateTime.now().toUtc(),
+      );
+      final names = <String>[];
+      for (final id in ids) {
+        var name = _senderNames[id];
+        if (name == null) {
+          try {
+            final profile = await _profiles.fetchProfile(id);
+            if (profile != null) {
+              name = profile.displayName;
+              _senderNames[id] = name;
+            }
+          } catch (_) {}
+        }
+        if (name != null) names.add(name);
+      }
+      if (!mounted) return;
+      if (names.join('|') != _typingNames.join('|')) {
+        setState(() => _typingNames = names);
+      }
+    } catch (_) {}
+  }
+
+  /// A keystroke: publish "I am typing" (throttled inside the
+  /// service) and restart the idle timer that clears my row ~5s
+  /// after I stop typing. Empty composer = stop typing now.
+  void _onComposerChanged(String value) {
+    if (value.isEmpty) {
+      _typingIdleTimer?.cancel();
+      unawaited(_typingService.clearTyping(widget.conversation.id));
+      return;
+    }
+    unawaited(_typingService.publishTyping(widget.conversation.id));
+    _typingIdleTimer?.cancel();
+    _typingIdleTimer = Timer(kTypingIdleClearAfter, () {
+      unawaited(_typingService.clearTyping(widget.conversation.id));
+    });
   }
 
   Future<void> _resolveSenders(List<DmMessage> messages) async {
@@ -269,6 +361,10 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _typingTimer?.cancel();
+    _typingIdleTimer?.cancel();
+    // v2.11.5: I am not typing once I leave the chat.
+    unawaited(_typingService.clearTyping(widget.conversation.id));
     _composerController.dispose();
     _scrollController.dispose();
     // Secure Chat off again, and Private Chat OFF = this session's
@@ -393,14 +489,36 @@ class _ChatScreenState extends State<ChatScreen> {
         await _service.editMessage(editing, text);
         setState(() => _editing = null);
       } else {
-        await _service.sendText(
-          widget.conversation.id,
-          text,
-          replyToId: _replyTo?.id,
-        );
+        try {
+          await _service.sendText(
+            widget.conversation.id,
+            text,
+            replyToId: _replyTo?.id,
+          );
+        } on Object catch (e) {
+          if (!isNetworkError(e)) rethrow;
+          // v2.11.5: offline — queue it, show it as "sending",
+          // and let the outbox replay it when the network returns.
+          final pending = await _service.queueOfflineText(
+            widget.conversation.id,
+            text,
+            replyToId: _replyTo?.id,
+          );
+          if (mounted) {
+            setState(() {
+              _messages = [..._messages, pending];
+              _replyTo = null;
+            });
+          }
+          _composerController.clear();
+          unawaited(_typingService.clearTyping(widget.conversation.id));
+          _scrollToBottom();
+          return;
+        }
         setState(() => _replyTo = null);
       }
       _composerController.clear();
+      unawaited(_typingService.clearTyping(widget.conversation.id));
       await _loadMessages(silent: true);
       try {
         await _service.markRead(widget.conversation.id);
@@ -908,6 +1026,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 if (_replyTo != null) _buildReplyBar(),
                 if (_editing != null) _buildEditingBar(),
+                // v2.11.5: animated "X is typing…" row above the
+                // composer (group chats name the typer).
+                if (_typingNames.isNotEmpty) _buildTypingRow(),
                 _buildComposer(),
               ],
             ),
@@ -1024,6 +1145,32 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Widget _buildTypingRow() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        border: Border(top: BorderSide(color: AppTheme.cardBorder)),
+      ),
+      child: Row(
+        children: [
+          const TypingDots(),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              typingLabel(_typingNames),
+              style: TextStyle(
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+                color: AppTheme.inkSoft,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildComposer() {
     return SafeArea(
       top: false,
@@ -1054,6 +1201,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     borderRadius: BorderRadius.circular(24),
                   ),
                 ),
+                // v2.11.5: typing indicator — publish while typing.
+                onChanged: _onComposerChanged,
                 onSubmitted: (_) => _sendText(),
               ),
             ),
@@ -1301,15 +1450,25 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               if (isMine && !message.deletedForAll) ...[
                 const SizedBox(width: 5),
-                Icon(
-                  _readByAll[message.id] == true
-                      ? Icons.done_all
-                      : Icons.done,
-                  size: 15,
-                  color: _readByAll[message.id] == true
-                      ? const Color(0xFF7DD3FC)
-                      : AppTheme.onAccent.withValues(alpha: 0.75),
-                ),
+                // v2.11.5: an offline-queued message shows a
+                // "sending" clock instead of a tick until its
+                // outbox op is replayed and the server row arrives.
+                if (message.pending)
+                  Icon(
+                    Icons.access_time,
+                    size: 15,
+                    color: AppTheme.onAccent.withValues(alpha: 0.75),
+                  )
+                else
+                  Icon(
+                    _readByAll[message.id] == true
+                        ? Icons.done_all
+                        : Icons.done,
+                    size: 15,
+                    color: _readByAll[message.id] == true
+                        ? const Color(0xFF7DD3FC)
+                        : AppTheme.onAccent.withValues(alpha: 0.75),
+                  ),
               ],
             ],
           ),

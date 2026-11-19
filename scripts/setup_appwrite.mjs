@@ -512,6 +512,32 @@ const TABLES = [
       },
     ],
   },
+  {
+    // Added 19 Nov 2026 (v2.11.5): typing indicator state — one
+    // row per (conversation, user), refreshed while typing and
+    // deleted when idle/sent/left. The app ignores rows older
+    // than ~6s, so a stale row is harmless.
+    //
+    // NOTE: this definition is code only — the table must be
+    // created via the Appwrite console (same columns, same
+    // permissions, row security ON) before the indicator shows.
+    // Until then TypingService is a silent no-op.
+    id: 'typing_status',
+    name: 'Typing status',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('conversationId', 64, true),
+      str('userId', 64, true),
+      str('updatedAt', 32, true),
+    ],
+    indexes: [
+      {
+        key: 'idx_conversation',
+        type: 'key',
+        columns: ['conversationId'],
+      },
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

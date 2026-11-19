@@ -1014,9 +1014,14 @@ class ProfileRepository {
         .map((doc) => Profile.fromJson(_docJson(doc)))
         .where((p) => p.discoverable)
         .toList();
+    // v2.11.5 FIX 3: competition ranks ("1224") — tied XP shares a
+    // rank. The old code numbered rows sequentially (i + 1), so a
+    // 0 XP tie showed #3 on the Profile (fetchGlobalRank counts
+    // users with strictly greater XP) and 4th here.
+    final ranks = competitionRanks(profiles.map((p) => p.xp).toList());
     return [
       for (var i = 0; i < profiles.length; i++)
-        LeaderboardEntry(profile: profiles[i], rank: i + 1),
+        LeaderboardEntry(profile: profiles[i], rank: ranks[i]),
     ];
   }
 
@@ -1031,22 +1036,34 @@ class ProfileRepository {
       if (profile != null) profiles.add(profile);
     }
     profiles.sort((a, b) => b.xp.compareTo(a.xp));
+    // v2.11.5 FIX 3: same competition ranks as the global board.
+    final ranks = competitionRanks(profiles.map((p) => p.xp).toList());
     return [
       for (var i = 0; i < profiles.length; i++)
-        LeaderboardEntry(profile: profiles[i], rank: i + 1),
+        LeaderboardEntry(profile: profiles[i], rank: ranks[i]),
     ];
   }
 
-  /// 1-based global rank by XP.
+  /// 1-based global rank by XP — competition ranking ("1224"),
+  /// the same rule the Leaderboard uses (v2.11.5 FIX 3): my rank
+  /// is 1 + the number of users ahead of me. Hidden accounts
+  /// (discoverable == false) never appear on the board, so they
+  /// must not count here either — counted client-side, like the
+  /// board's own filter. Rows beyond the fetched page (only when
+  /// more than 100 users are ahead of me) fall back to the
+  /// server total, as before.
   Future<int> fetchGlobalRank() async {
     final me = await fetchMyProfile();
     if (me == null) return 0;
     final list = await _d.listRows(
       databaseId: _dbId,
       tableId: 'users',
-      queries: [Query.greaterThan('xp', me.xp), Query.limit(1)],
+      queries: [Query.greaterThan('xp', me.xp), Query.limit(100)],
     );
-    return list.total + 1;
+    final rows = list.rows.map((doc) => Profile.fromJson(_docJson(doc)));
+    final visibleAhead = rows.where((p) => p.discoverable).length;
+    final beyondPage = list.total - rows.length;
+    return visibleAhead + beyondPage + 1;
   }
 
   /// Find people by username or display name (v2.11.2 rewrite).

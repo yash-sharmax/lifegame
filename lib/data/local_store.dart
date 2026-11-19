@@ -408,6 +408,175 @@ class LocalStore {
     );
   }
 
+  // -- Messaging cache (v2.11.5, fast + offline chats) ---------------
+  //
+  // The Chats list and DM screens render INSTANTLY from this cache
+  // and refresh from the server in the background — the old code
+  // awaited a chain of Appwrite calls (member rows, settings per
+  // chat, conversation per chat, profile per person, latest message
+  // per chat) behind a full-screen spinner, which took seconds on
+  // every navigation. Rows are JSON maps (see MessagingService for
+  // the shape); the cache is per-account, like every other cache
+  // here, and best-effort — a corrupt entry just reads as empty.
+
+  static const _chatConversationsKey = 'lifegame_chat_conversations_v1';
+  // NOTE: _chatMessagesKey ('lifegame_chat_messages_v1') is the
+  // v2.10.0 reminder-chat store — the messaging cache needs its
+  // own key, or the two would overwrite each other.
+  static const _cachedChatMessagesKey = 'lifegame_cached_chat_messages_v1';
+  static const _chatProfilesKey = 'lifegame_chat_profiles_v1';
+
+  /// Cached chat-conversation rows for [ownerId]. Each row is
+  /// `{'ownerId', 'conversation': {...}, 'unread', 'otherUserId'}`.
+  List<Map<String, dynamic>> loadCachedChatConversations(String ownerId) {
+    final raw = _prefs.getString(_chatConversationsKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .where((r) => r['ownerId'] == ownerId)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveCachedChatConversations(
+    String ownerId,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final kept = <Map<String, dynamic>>[];
+    try {
+      final raw = _prefs.getString(_chatConversationsKey);
+      if (raw != null && raw.isNotEmpty) {
+        final list = jsonDecode(raw) as List<dynamic>;
+        for (final e in list) {
+          final map = Map<String, dynamic>.from(e as Map);
+          if (map['ownerId'] != ownerId) kept.add(map);
+        }
+      }
+    } catch (_) {}
+    for (final row in rows) {
+      kept.add({'ownerId': ownerId, ...row});
+    }
+    await _prefs.setString(_chatConversationsKey, jsonEncode(kept));
+  }
+
+  /// Cached message entries for [ownerId]. Each entry is
+  /// `{'ownerId', 'conversationId', 'messages': [cache JSON...]}`.
+  List<Map<String, dynamic>> loadCachedChatMessageEntries(String ownerId) {
+    final raw = _prefs.getString(_cachedChatMessagesKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .where((r) => r['ownerId'] == ownerId)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Saves [messages] (cache JSON) for one conversation, keeping
+  /// only the newest 50 — SharedPreferences is not a database, and
+  /// encrypted rows are ~4KB each.
+  Future<void> saveCachedChatMessages(
+    String ownerId,
+    String conversationId,
+    List<Map<String, dynamic>> messages,
+  ) async {
+    // Keep other accounts' entries (a shared device).
+    final kept = <Map<String, dynamic>>[];
+    try {
+      final raw = _prefs.getString(_cachedChatMessagesKey);
+      if (raw != null && raw.isNotEmpty) {
+        final list = jsonDecode(raw) as List<dynamic>;
+        for (final e in list) {
+          final map = Map<String, dynamic>.from(e as Map);
+          if (map['ownerId'] != ownerId ||
+              map['conversationId'] != conversationId) {
+            kept.add(map);
+          }
+        }
+      }
+    } catch (_) {}
+    final trimmed = messages.length > 50
+        ? messages.sublist(messages.length - 50)
+        : messages;
+    kept.add({
+      'ownerId': ownerId,
+      'conversationId': conversationId,
+      'messages': trimmed,
+    });
+    await _prefs.setString(_cachedChatMessagesKey, jsonEncode(kept));
+  }
+
+  /// Drops one pending (offline-queued) message from the cache —
+  /// used when its outbox op fails unrecoverably, so the "sending"
+  /// bubble does not linger forever.
+  Future<void> dropPendingChatMessage(
+    String ownerId,
+    String conversationId,
+    String localId,
+  ) async {
+    final raw = _prefs.getString(_cachedChatMessagesKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final entries = (jsonDecode(raw) as List<dynamic>)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      var changed = false;
+      for (final entry in entries) {
+        if (entry['ownerId'] != ownerId ||
+            entry['conversationId'] != conversationId) {
+          continue;
+        }
+        final messages = (entry['messages'] as List<dynamic>? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        final before = messages.length;
+        messages.removeWhere((m) => m['id'] == localId);
+        if (messages.length != before) {
+          entry['messages'] = messages;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await _prefs.setString(_cachedChatMessagesKey, jsonEncode(entries));
+      }
+    } catch (_) {}
+  }
+
+  /// Cached display names / usernames of people I chat with, keyed
+  /// by user id. Public info, shared across accounts on the device
+  /// (a name is a name whoever is signed in).
+  Map<String, Map<String, String>> loadCachedChatProfiles() {
+    final raw = _prefs.getString(_chatProfilesKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return map.map(
+        (k, v) => MapEntry(
+          k,
+          Map<String, String>.from(
+            (v as Map).map((kk, vv) => MapEntry(kk.toString(), vv.toString())),
+          ),
+        ),
+      );
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> saveCachedChatProfiles(
+    Map<String, Map<String, String>> profiles,
+  ) async {
+    final merged = loadCachedChatProfiles()..addAll(profiles);
+    await _prefs.setString(_chatProfilesKey, jsonEncode(merged));
+  }
+
   // -- App update notices (v2.10.0) --------------------------------------
   // The version the user dismissed an update for (do not show it
   // again) and the latest update version already shown (dedupe).
@@ -640,5 +809,19 @@ class LocalStore {
         .where((r) => r.ownerId != ownerId)
         .toList();
     await saveChatReminders(chatReminders);
+    // v2.11.5 messaging cache: drop this account's conversation
+    // rows + message entries. Cached chat profiles are other
+    // people's public names — they stay (shared across accounts).
+    await saveCachedChatConversations(ownerId, []);
+    final rawChatMessages = _prefs.getString(_cachedChatMessagesKey);
+    if (rawChatMessages != null && rawChatMessages.isNotEmpty) {
+      try {
+        final all = (jsonDecode(rawChatMessages) as List<dynamic>)
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .where((e) => e['ownerId'] != ownerId)
+            .toList();
+        await _prefs.setString(_cachedChatMessagesKey, jsonEncode(all));
+      } catch (_) {}
+    }
   }
 }

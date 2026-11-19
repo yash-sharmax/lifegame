@@ -11,6 +11,8 @@
 /// Accept / Decline.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data/chat_prefs.dart';
@@ -125,6 +127,12 @@ class _ChatsScreenState extends State<ChatsScreen> {
   // re-resolution finished.
   final Map<String, DateTime?> _previewResolvedAt = {};
   bool _loading = true;
+  // v2.11.5: true while a background refresh is running after the
+  // cached list is already on screen — a slim sync line, never a
+  // full-screen spinner. True while the device is offline and the
+  // screen is showing cached chats.
+  bool _syncing = false;
+  bool _offline = false;
   bool _notSetUp = false;
   bool _showingHidden = false;
   // True while the search box holds a hidden-chat reveal (secret
@@ -168,7 +176,32 @@ class _ChatsScreenState extends State<ChatsScreen> {
   }
 
   Future<void> _load({bool includeHidden = false, int? forSearchGen}) async {
-    if (mounted) setState(() => _loading = true);
+    // v2.11.5 FIX 1: render from the cache instantly, then refresh
+    // from the server in the background. The old code awaited a
+    // chain of Appwrite calls (member rows, settings per chat,
+    // conversation per chat, profile per person, latest message
+    // per chat) behind a full-screen spinner on every open — that
+    // is what took seconds. On a first run there is no cache, so
+    // _loading stays true until the server answers, as before.
+    if (_items.isEmpty) {
+      try {
+        final cached = await _service.listMyConversationsCached();
+        final cachedNames = await _service.cachedChatProfiles();
+        if (mounted && cached.isNotEmpty) {
+          setState(() {
+            _items = cached;
+            for (final e in cachedNames.entries) {
+              final name = e.value['displayName'];
+              if (name != null && name.isNotEmpty) {
+                _names[e.key] = name;
+              }
+            }
+            _loading = false;
+          });
+        }
+      } catch (_) {}
+    }
+    if (mounted) setState(() => _syncing = true);
     try {
       final items = await _service.listMyConversations(
         includeHidden: includeHidden,
@@ -197,6 +230,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
           }
         }
         _loading = false;
+        _syncing = false;
+        _offline = false;
         _notSetUp = false;
         _showingHidden = includeHidden;
       });
@@ -205,8 +240,15 @@ class _ChatsScreenState extends State<ChatsScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _loading = false;
-        _notSetUp = true;
+        _syncing = false;
+        // With a cached list on screen, a failed refresh just
+        // means offline — show the small line, not a big error.
+        if (_items.isEmpty) {
+          _loading = false;
+          _notSetUp = true;
+        } else {
+          _offline = true;
+        }
       });
     }
   }
@@ -253,6 +295,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
   /// name) — group rows use their title. Best-effort, cached.
   Future<void> _resolveNames(List<ConversationItem> items) async {
     var changed = false;
+    final fetched = <String, Profile>{};
     for (final item in items) {
       final otherId = item.otherUserId;
       if (otherId == null || _names.containsKey(otherId)) continue;
@@ -261,10 +304,13 @@ class _ChatsScreenState extends State<ChatsScreen> {
         if (profile != null) {
           _names[otherId] = profile.displayName;
           _profilesById[otherId] = profile;
+          fetched[otherId] = profile;
           changed = true;
         }
       } catch (_) {}
     }
+    // v2.11.5: remember names so the next open renders from cache.
+    if (fetched.isNotEmpty) unawaited(_service.cacheChatProfiles(fetched));
     if (changed && mounted) setState(() {});
   }
 
@@ -664,6 +710,43 @@ class _ChatsScreenState extends State<ChatsScreen> {
                     onChanged: _onSearchChanged,
                   ),
                   const SizedBox(height: 12),
+                  // v2.11.5: a slim sync/offline line — the list
+                  // renders from cache instantly, so the refresh
+                  // is a small row, never a full-screen spinner.
+                  if (_syncing || _offline) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: _syncing
+                                ? const CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  )
+                                : const Icon(
+                                    Icons.cloud_off_outlined,
+                                    size: 12,
+                                  ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            _offline
+                                ? 'Offline — showing saved chats'
+                                : 'Syncing…',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   if (_requests.isNotEmpty) ...[
                     Padding(
                       padding: const EdgeInsets.symmetric(

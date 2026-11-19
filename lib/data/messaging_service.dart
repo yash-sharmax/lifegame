@@ -31,6 +31,7 @@ import 'appwrite_service.dart';
 import 'chat_crypto.dart';
 import 'chat_prefs.dart';
 import 'imgbb.dart';
+import 'local_store.dart';
 import 'messaging_models.dart';
 import 'models.dart';
 import 'png_carrier.dart';
@@ -432,7 +433,188 @@ class MessagingService {
       if (bt == null) return -1;
       return bt.compareTo(at);
     });
+    // v2.11.5: refresh the offline cache on every successful load —
+    // the list renders from the cache instantly next time.
+    unawaited(_cacheConversations(items));
     return items;
+  }
+
+  // --- Offline cache (v2.11.5, fast + offline chats) ----------------
+
+  /// My chats from the on-device cache — no network, renders
+  /// instantly. [] when nothing is cached yet.
+  Future<List<ConversationItem>> listMyConversationsCached() async {
+    try {
+      final myId = _myId();
+      final store = await LocalStore.getInstance();
+      final rows = store.loadCachedChatConversations(myId);
+      return rows
+          .map(_conversationItemFromCacheRow)
+          .whereType<ConversationItem>()
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// One chat's messages from the on-device cache — no network.
+  Future<List<DmMessage>> listMessagesCached(String conversationId) async {
+    try {
+      final myId = _myId();
+      final store = await LocalStore.getInstance();
+      final entries = store.loadCachedChatMessageEntries(myId);
+      for (final entry in entries) {
+        if (entry['conversationId'] != conversationId) continue;
+        final list = (entry['messages'] as List<dynamic>? ?? []);
+        return list
+            .map(
+              (e) => DmMessage.fromCacheJson(
+                Map<String, dynamic>.from(e as Map),
+              ),
+            )
+            .toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Cached display names / usernames of people I chat with
+  /// (userId → {'displayName', 'username'}).
+  Future<Map<String, Map<String, String>>> cachedChatProfiles() async {
+    try {
+      final store = await LocalStore.getInstance();
+      return store.loadCachedChatProfiles();
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Remembers freshly fetched profiles in the cache (best-effort).
+  Future<void> cacheChatProfiles(Map<String, Profile> profiles) async {
+    try {
+      final store = await LocalStore.getInstance();
+      await store.saveCachedChatProfiles({
+        for (final e in profiles.entries)
+          e.key: {
+            'displayName': e.value.displayName,
+            'username': e.value.username,
+          },
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _cacheConversations(List<ConversationItem> items) async {
+    try {
+      final myId = _myId();
+      final store = await LocalStore.getInstance();
+      await store.saveCachedChatConversations(
+        myId,
+        items.map(_conversationItemToCacheRow).toList(),
+      );
+    } catch (_) {}
+  }
+
+  /// Refreshes the cached messages for one chat from a fresh
+  /// server list — keeping unmatched pending (offline-queued)
+  /// messages, and skipping the write entirely when nothing
+  /// changed (listMessages runs on every 15-second poll).
+  Future<void> _cacheMessages(
+    String conversationId,
+    List<DmMessage> serverMessages,
+  ) async {
+    try {
+      final myId = _myId();
+      final store = await LocalStore.getInstance();
+      final cached = await listMessagesCached(conversationId);
+      final merged = mergeCachedMessages(
+        server: serverMessages,
+        cached: cached,
+      );
+      final mergedIds = merged.map((m) => m.id).join('|');
+      final cachedIds = cached.map((m) => m.id).join('|');
+      if (mergedIds == cachedIds) return;
+      await store.saveCachedChatMessages(
+        myId,
+        conversationId,
+        merged.map((m) => m.toCacheJson()).toList(),
+      );
+    } catch (_) {}
+  }
+
+  Map<String, dynamic> _conversationItemToCacheRow(ConversationItem item) => {
+    'conversation': {
+      ...item.conversation.toMap(),
+      'id': item.conversation.id,
+    },
+    'unread': item.unread,
+    'otherUserId': item.otherUserId,
+  };
+
+  ConversationItem? _conversationItemFromCacheRow(
+    Map<String, dynamic> row,
+  ) {
+    try {
+      final map = Map<String, dynamic>.from(row['conversation'] as Map);
+      final conversation = Conversation.fromJson(map);
+      if (conversation.id.isEmpty) return null;
+      return ConversationItem(
+        conversation: conversation,
+        unread: row['unread'] as bool? ?? false,
+        otherUserId: row['otherUserId'] as String?,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Queues a text message typed offline (v2.11.5): the message
+  /// shows immediately as pending ("sending") and the outbox
+  /// replays it when the network returns. Returns the pending
+  /// message. Images typed offline are out of scope — they need
+  /// an upload, so they still fail with the imgbb error as today.
+  Future<DmMessage> queueOfflineText(
+    String conversationId,
+    String text, {
+    String? replyToId,
+  }) async {
+    final myId = _myId();
+    final clean = text.trim();
+    if (clean.isEmpty) {
+      throw const CannotMessageException('Write something first.');
+    }
+    final now = DateTime.now().toUtc();
+    final localId =
+        'pending_${now.millisecondsSinceEpoch}_${Random.secure().nextInt(1 << 32)}';
+    final pending = DmMessage(
+      id: localId,
+      conversationId: conversationId,
+      senderId: myId,
+      createdAt: now,
+      expiresAt: messageExpiresAt(now),
+      type: 'text',
+      text: clean,
+      replyToId: replyToId,
+      decryptedText: clean,
+      pending: true,
+    );
+    final store = await LocalStore.getInstance();
+    await store.enqueueOutboxOp({
+      'kind': 'chat_send',
+      'ownerUid': myId,
+      'conversationId': conversationId,
+      'text': clean,
+      'replyToId': replyToId,
+      'localId': localId,
+    });
+    final cached = await listMessagesCached(conversationId);
+    await store.saveCachedChatMessages(
+      myId,
+      conversationId,
+      [...cached, pending].map((m) => m.toCacheJson()).toList(),
+    );
+    return pending;
   }
 
   /// DM requests waiting for ME to accept (point 1).
@@ -754,6 +936,9 @@ class MessagingService {
       }
       out.add(decrypted);
     }
+    // v2.11.5: refresh the offline cache — the chat renders from
+    // the cache instantly next time, even with no network.
+    unawaited(_cacheMessages(conversationId, out));
     return out;
   }
 

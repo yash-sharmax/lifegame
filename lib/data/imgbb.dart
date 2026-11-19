@@ -1,9 +1,9 @@
 /// Attachments via imgbb (v2.11.0, point 5).
 ///
-/// imgbb is free: https://api.imgbb.com — create an account, get a
-/// free API key, and paste it into [imgbbApiKey] below. The key is a
-/// clearly-marked PLACEHOLDER here on purpose: no real key is ever
-/// committed to the repo.
+/// imgbb is free: https://api.imgbb.com — the free API key for the
+/// app's account (lifegame) is pasted into [imgbbApiKey] below
+/// (v2.11.5). It is a free, rate-limited upload key, not a secret
+/// that grants account access.
 ///
 /// Uploads are plain HTTPS multipart POSTs; the returned URL is a
 /// public image link and the delete URL lets View Once (point 10)
@@ -15,13 +15,14 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
-/// >>> PASTE THE FREE IMGBB API KEY HERE <<<
+/// >>> THE FREE IMGBB API KEY (account: lifegame) <<<
 ///
-/// Create it at https://api.imgbb.com (sign up → API key). Free tier.
-/// Until a real key is pasted, image attachments fail with a clear
-/// "imgbb not set up yet" message instead of crashing — text chat
-/// works without it.
-const String imgbbApiKey = 'YOUR_IMGBB_API_KEY';
+/// Created at https://api.imgbb.com (sign up → API key). Free tier.
+/// The key lives here so image attachments work out of the box —
+/// it is a free, rate-limited upload key for this app's account,
+/// not a secret that grants account access. If it ever needs
+/// rotating, replace this value and rebuild.
+const String imgbbApiKey = '2551f296e0f8164c12d49586f7ef9f6b';
 
 bool get isImgbbConfigured =>
     imgbbApiKey != 'YOUR_IMGBB_API_KEY' && imgbbApiKey.isNotEmpty;

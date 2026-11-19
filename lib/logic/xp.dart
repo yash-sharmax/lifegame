@@ -35,6 +35,29 @@ String rankNameForLevel(int level) {
 /// Rank name for a given total XP.
 String rankNameForXp(int xp) => rankNameForLevel(levelForXp(xp));
 
+/// Competition ranks ("1224") for XP values sorted highest first:
+/// tied XP shares a rank, and the next rank skips ahead to the
+/// position after the tie. [4, 2, 0, 0] -> [1, 2, 3, 3];
+/// [10, 10, 5] -> [1, 1, 3]. The Profile rank and the Leaderboard
+/// must use this SAME rule — before v2.11.5 the Profile used this
+/// rule (count of users with strictly greater XP, + 1) while the
+/// Leaderboard numbered rows sequentially (i + 1), so a 0 XP tie
+/// showed #3 on the Profile and 4th on the Leaderboard.
+List<int> competitionRanks(List<int> xpsDesc) {
+  final ranks = <int>[];
+  var rank = 0;
+  var previousXp = -1;
+  for (var i = 0; i < xpsDesc.length; i++) {
+    final xp = xpsDesc[i];
+    if (xp != previousXp) {
+      rank = i + 1;
+      previousXp = xp;
+    }
+    ranks.add(rank);
+  }
+  return ranks;
+}
+
 /// XP delta for toggling an item: +2 on completing a pending item,
 /// -2 on unticking a done item (the full reversal — the item is worth
 /// 0 while blank, so unticking takes back exactly the +2 it granted),
