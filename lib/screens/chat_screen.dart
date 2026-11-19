@@ -35,16 +35,26 @@ import 'chats_screen.dart';
 import 'forward_picker_screen.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.conversation});
+  ChatScreen({
+    super.key,
+    required this.conversation,
+    MessagingService? service,
+  }) : _service = service ?? MessagingService();
 
   final Conversation conversation;
+
+  /// Test-only override for the messaging backend (v2.11.6: the
+  /// open-flow test injects a service whose network calls never
+  /// complete, to prove the cached messages paint without them).
+  /// Production code always uses the real service.
+  final MessagingService _service;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  final MessagingService _service = MessagingService();
+  MessagingService get _service => widget._service;
   final ProfileRepository _profiles = ProfileRepository();
   final TypingService _typingService = TypingService();
   final _composerController = TextEditingController();
@@ -104,13 +114,16 @@ class _ChatScreenState extends State<ChatScreen> {
     _open();
   }
 
-  Future<void> _open() async {
-    try {
-      await _service.markRead(widget.conversation.id);
-    } catch (_) {}
-    await _loadSettings();
-    await _loadTitle();
-    await _loadMessages();
+  void _open() {
+    // v2.11.6 FIX A: paint cached messages FIRST, before any
+    // network call. v2.11.5 put the cache read inside _loadMessages,
+    // but _open() awaited markRead + settings + title first — three
+    // sequential Appwrite round trips (~5s) while the body showed a
+    // full-screen spinner on every open, cache or not. The cache was
+    // never the problem; it was never reached in time. The network
+    // calls now run in the background and update the header/title
+    // when they land; _loadMessages still refreshes from the server
+    // after the cache paints.
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 15),
       (_) => _loadMessages(silent: true),
@@ -121,7 +134,17 @@ class _ChatScreenState extends State<ChatScreen> {
       const Duration(seconds: 3),
       (_) => _refreshTyping(),
     );
+    unawaited(_loadMessages());
+    unawaited(_markReadQuietly());
+    unawaited(_loadSettings());
+    unawaited(_loadTitle());
     unawaited(_refreshTyping());
+  }
+
+  Future<void> _markReadQuietly() async {
+    try {
+      await _service.markRead(widget.conversation.id);
+    } catch (_) {}
   }
 
   Future<void> _loadSettings() async {
@@ -556,7 +579,13 @@ class _ChatScreenState extends State<ChatScreen> {
         if (mounted) setState(() => _sending = false);
       }
     } catch (_) {
-      // Image picker cancelled or unavailable — nothing to do.
+      // v2.11.6: the picker itself failed — not a cancel (cancel
+      // returns null, handled above). Say so instead of swallowing
+      // the tap silently: in the cloud browser the file picker is
+      // unavailable, which is why tapping "Send photo" there only
+      // closes the menu. On a real phone this means the picker
+      // could not open.
+      _snack('Photo picker is not available here');
     }
   }
 

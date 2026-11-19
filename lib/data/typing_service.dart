@@ -122,6 +122,24 @@ class TypingService {
   /// Publishes "I am typing" for [conversationId], throttled to
   /// one write per [kTypingPublishInterval]. Silent when offline
   /// or when the table does not exist yet.
+  ///
+  /// v2.11.6: the write is NOT gated behind a lookup any more. The
+  /// v2.11.5 code listed rows first and only created a row when the
+  /// list came back empty — so a failing read (transient network
+  /// or Appwrite error) silently aborted the publish before any
+  /// write was attempted, and the blanket try/catch hid it; the
+  /// v2.11.5 fake never throws, so its test passed. Now the first
+  /// publish for a typing session writes (createRow) directly and
+  /// the lookup only runs as a fallback, to adopt a row this device
+  /// does not know about yet. There is no accepted-status gate
+  /// anywhere in this path — typing works in a pending-request DM
+  /// exactly like any other chat.
+  ///
+  /// The last publish failure, if any — a failed publish is no
+  /// longer invisible. Null after a successful publish. Readable
+  /// from tests; the UI never shows it (typing is best-effort).
+  String? lastPublishError;
+
   Future<void> publishTyping(String conversationId) async {
     try {
       final myId = _myId();
@@ -144,60 +162,40 @@ class TypingService {
             rowId: rowId,
             data: {'updatedAt': stamp},
           );
+          lastPublishError = null;
           return;
-        } catch (_) {
-          // Row is gone (deleted elsewhere) — fall through and
-          // re-create it below.
+        } catch (e) {
+          // Row is gone (deleted elsewhere) — drop the cached id
+          // and re-create below instead of failing the publish.
           _myRowIds.remove(key);
+          lastPublishError = e.toString();
         }
       }
-      final list = await _d.listRows(
-        databaseId: _dbId,
-        tableId: 'typing_status',
-        queries: [
-          Query.equal('conversationId', conversationId),
-          Query.equal('userId', myId),
-          Query.limit(1),
-        ],
-      );
-      if (list.rows.isNotEmpty) {
-        final id = _docJson(list.rows.first)['id'] as String;
-        _myRowIds[key] = id;
-        await _d.updateRow(
+      // Write FIRST: a fresh typing session almost never has a row
+      // yet (rows are deleted on idle / send / leave), so the
+      // create is the common path — one write, no read gate.
+      try {
+        final doc = await _d.createRow(
           databaseId: _dbId,
           tableId: 'typing_status',
-          rowId: id,
-          data: {'updatedAt': stamp},
+          rowId: ID.unique(),
+          data: {
+            'conversationId': conversationId,
+            'userId': myId,
+            'updatedAt': stamp,
+          },
         );
+        _myRowIds[key] = doc.$id;
+        lastPublishError = null;
         return;
+      } catch (e) {
+        lastPublishError = e.toString();
       }
-      final doc = await _d.createRow(
-        databaseId: _dbId,
-        tableId: 'typing_status',
-        rowId: ID.unique(),
-        data: {
-          'conversationId': conversationId,
-          'userId': myId,
-          'updatedAt': stamp,
-        },
-      );
-      _myRowIds[key] = doc.$id;
-    } catch (_) {
-      // Offline, or the table is not created yet — typing just
-      // does not show. Never crash the chat over it.
-    }
-  }
-
-  /// Clears my typing row for [conversationId] (idle, sent, or
-  /// left the chat). Best-effort.
-  Future<void> clearTyping(String conversationId) async {
-    final myIdForKey = AuthRepository.cachedUser?.uid ?? '';
-    _lastPublished.remove(_keyFor(conversationId, myIdForKey));
-    try {
-      final myId = _myId();
-      final key = _keyFor(conversationId, myId);
-      var rowId = _myRowIds.remove(key);
-      if (rowId == null) {
+      // Create failed — adopt a row this device does not know about
+      // yet (e.g. typed, restarted mid-typing, typed again), if
+      // one exists. When the table itself is missing this fails too
+      // and the publish stays a silent no-op, as before.
+      try {
         final list = await _d.listRows(
           databaseId: _dbId,
           tableId: 'typing_status',
@@ -207,14 +205,59 @@ class TypingService {
             Query.limit(1),
           ],
         );
-        if (list.rows.isEmpty) return;
-        rowId = _docJson(list.rows.first)['id'] as String;
+        if (list.rows.isNotEmpty) {
+          final id = _docJson(list.rows.first)['id'] as String;
+          _myRowIds[key] = id;
+          await _d.updateRow(
+            databaseId: _dbId,
+            tableId: 'typing_status',
+            rowId: id,
+            data: {'updatedAt': stamp},
+          );
+          lastPublishError = null;
+        }
+      } catch (e) {
+        lastPublishError ??= e.toString();
       }
-      await _d.deleteRow(
+    } catch (e) {
+      lastPublishError = e.toString();
+    }
+  }
+
+  /// Clears my typing row for [conversationId] (idle, sent, or
+  /// left the chat). Best-effort.
+  ///
+  /// v2.11.6: deletes EVERY row of mine in this chat, not just the
+  /// one this device knows about — a restart mid-typing can leave a
+  /// row behind that the create-first publish would otherwise
+  /// orphan (fetch dedupes by user, so the indicator still works,
+  /// but the row would linger in the table). A missed delete is
+  /// harmless: rows go stale client-side after ~6 seconds anyway.
+  Future<void> clearTyping(String conversationId) async {
+    final myIdForKey = AuthRepository.cachedUser?.uid ?? '';
+    _lastPublished.remove(_keyFor(conversationId, myIdForKey));
+    try {
+      final myId = _myId();
+      final key = _keyFor(conversationId, myId);
+      _myRowIds.remove(key);
+      final list = await _d.listRows(
         databaseId: _dbId,
         tableId: 'typing_status',
-        rowId: rowId,
+        queries: [
+          Query.equal('conversationId', conversationId),
+          Query.equal('userId', myId),
+          Query.limit(20),
+        ],
       );
+      for (final row in list.rows) {
+        try {
+          await _d.deleteRow(
+            databaseId: _dbId,
+            tableId: 'typing_status',
+            rowId: _docJson(row)['id'] as String,
+          );
+        } catch (_) {}
+      }
     } catch (_) {}
   }
 
