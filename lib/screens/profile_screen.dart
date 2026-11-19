@@ -1649,6 +1649,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   List<Habit> _habits = [];
   bool _mutual = false;
   bool _loadingHabits = true;
+  // v2.11.0: this user's follower / following counts. They are
+  // shown ONLY when the account may be seen (public, mutual friend,
+  // or my own profile) — on a private account I am not mutual with,
+  // nothing is shown here at all (and no list can be opened).
+  int? _followersCount;
+  int? _followingCount;
 
   bool get _isMe {
     final myId = widget.myId ?? AuthRepository.cachedUser?.uid;
@@ -1672,6 +1678,21 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     } catch (_) {}
     if (!mounted) return;
     setState(() => _mutual = mutual);
+    if (_canSeeHabits) {
+      // Follower / following counts (v2.11.0): visible only because
+      // this account may be seen. A private account I am not mutual
+      // with never reaches this branch.
+      try {
+        final followers = await _social.followersCount(widget.profile.id);
+        final following = await _social.followingCount(widget.profile.id);
+        if (mounted) {
+          setState(() {
+            _followersCount = followers;
+            _followingCount = following;
+          });
+        }
+      } catch (_) {}
+    }
     if (!_canSeeHabits) {
       setState(() => _loadingHabits = false);
       return;
@@ -1748,6 +1769,36 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               ),
             ],
           ),
+          // v2.11.0: Followers / Following for THIS user — visible
+          // only when the account may be seen (public, mutual friend
+          // or my own profile). On a private account I am not mutual
+          // with, nothing is shown here. The counts are not tappable:
+          // the follow-list screen only ever shows MY lists, so
+          // opening it here would show the wrong people.
+          if (_canSeeHabits &&
+              _followersCount != null &&
+              _followingCount != null) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _StatBox(
+                    label: 'Followers',
+                    value: '$_followersCount',
+                    gradient: AppTheme.emberGradient,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _StatBox(
+                    label: 'Following',
+                    value: '$_followingCount',
+                    gradient: AppTheme.steelGradient,
+                  ),
+                ),
+              ],
+            ),
+          ],
           if (!_canSeeHabits) ...[
             const SizedBox(height: 16),
             Container(

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Sets up the Appwrite Cloud backend for Life Game.
 //
-// Creates: database `lifegame` + all 13 tables with columns, indexes and
+// Creates: database `lifegame` + all 20 tables with columns, indexes and
 // row-level permissions, plus the Web platform (hostname yashx.xyz).
 //
 // The v2.3.0 tables (reminders, challenges, challenge_habits,
@@ -142,6 +142,11 @@ const TABLES = [
       // existing tables, so add them in the console too.
       str('visibility', 20, false, 'public'),
       boolCol('discoverable', false, true),
+      // v2.11.0 (19 Nov 2026): RSA public key for end-to-end
+      // encrypted messages. Public by design. Re-running this script
+      // skips existing tables, so add it in the console too
+      // (Database → Users → + Attribute, string 4000, not required).
+      str('publicKey', 4000, false),
     ],
     indexes: [{ key: 'idx_xp', type: 'key', columns: ['xp'] }],
   },
@@ -387,6 +392,123 @@ const TABLES = [
         key: 'idx_subtask_date',
         type: 'key',
         columns: ['subtaskId', 'date'],
+      },
+    ],
+  },
+  {
+    // Added 19 Nov 2026 (v2.11.0): messaging. One row per DM or
+    // group chat. `status` is 'active', or 'requested' for a DM
+    // request (one-sided follow) waiting for the other side.
+    id: 'conversations',
+    name: 'Conversations',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('type', 20, false, 'dm'),
+      str('title', 128),
+      str('createdBy', 64, true),
+      str('createdAt', 32, true),
+      str('lastMessageAt', 32),
+      str('lastMessagePreview', 500),
+      str('status', 20, false, 'active'),
+    ],
+    indexes: [
+      { key: 'idx_created_by', type: 'key', columns: ['createdBy'] },
+      { key: 'idx_last_message', type: 'key', columns: ['lastMessageAt'] },
+    ],
+  },
+  {
+    // Added 19 Nov 2026 (v2.11.0): who is in a conversation.
+    // `lastReadAt` drives read receipts.
+    id: 'conversation_members',
+    name: 'Conversation members',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('conversationId', 64, true),
+      str('userId', 64, true),
+      str('role', 20, false, 'member'),
+      str('joinedAt', 32, true),
+      str('lastReadAt', 32),
+    ],
+    indexes: [
+      { key: 'idx_conversation', type: 'key', columns: ['conversationId'] },
+      { key: 'idx_user', type: 'key', columns: ['userId'] },
+    ],
+  },
+  {
+    // Added 19 Nov 2026 (v2.11.0): one message. `expiresAt` is
+    // createdAt + 12h (auto-delete; starred messages survive).
+    // E2EE messages keep `text` empty and store `ciphertext` +
+    // `encryptedKeys` (userId → RSA-wrapped AES key) instead.
+    // `imageDeleteUrl` is imgbb's delete link (View Once cleanup).
+    id: 'messages',
+    name: 'Messages',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('conversationId', 64, true),
+      str('senderId', 64, true),
+      str('type', 20, false, 'text'),
+      str('text', 4000),
+      str('imageUrl', 1000),
+      str('imageDeleteUrl', 1000),
+      str('replyToId', 64),
+      str('createdAt', 32, true),
+      str('editedAt', 32),
+      boolCol('deletedForAll', false, false),
+      boolCol('isViewOnce', false, false),
+      boolCol('viewOnceViewed', false, false),
+      str('expiresAt', 32, true),
+      boolCol('encrypted', false, false),
+      str('ciphertext', 4000),
+      str('encryptedKeys', 8000),
+      boolCol('forwarded', false, false),
+    ],
+    indexes: [
+      {
+        key: 'idx_conversation_created',
+        type: 'key',
+        columns: ['conversationId', 'createdAt'],
+      },
+      { key: 'idx_expires', type: 'key', columns: ['expiresAt'] },
+    ],
+  },
+  {
+    // Added 19 Nov 2026 (v2.11.0): saved (starred) messages.
+    // Starred rows survive auto-delete and the 150-message cap.
+    // Free tier: at most 50 per user (enforced in the app).
+    id: 'starred_messages',
+    name: 'Starred messages',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('userId', 64, true),
+      str('messageId', 64, true),
+      str('conversationId', 64, true),
+      str('createdAt', 32, true),
+    ],
+    indexes: [{ key: 'idx_user', type: 'key', columns: ['userId'] }],
+  },
+  {
+    // Added 19 Nov 2026 (v2.11.0): MY per-chat preferences.
+    // hidden = hidden chat (secret keyword reveals it);
+    // privateChat = ON is normal, OFF deletes the session's history
+    // on leaving and blocks starring; secureChat = screenshots
+    // restricted (Android FLAG_SECURE); safeMode = this chat never
+    // auto-deletes.
+    id: 'chat_settings',
+    name: 'Chat settings',
+    permissions: TABLE_DEFAULT_PERMS,
+    columns: [
+      str('userId', 64, true),
+      str('conversationId', 64, true),
+      boolCol('hidden', false, false),
+      boolCol('privateChat', false, true),
+      boolCol('secureChat', false, false),
+      boolCol('safeMode', false, false),
+    ],
+    indexes: [
+      {
+        key: 'idx_user_conversation',
+        type: 'key',
+        columns: ['userId', 'conversationId'],
       },
     ],
   },

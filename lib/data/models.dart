@@ -31,6 +31,7 @@ class Profile {
     this.createdAt,
     this.visibility = 'public',
     this.discoverable = true,
+    this.publicKey,
   });
 
   factory Profile.fromJson(Map<String, dynamic> json) => Profile(
@@ -49,6 +50,10 @@ class Profile {
     // the default (public + discoverable).
     visibility: json['visibility'] as String? ?? 'public',
     discoverable: json['discoverable'] as bool? ?? true,
+    // v2.11.0: RSA public key for end-to-end encrypted messages.
+    // Null-safe — the attribute is being added to the live table in
+    // parallel; a user without one just cannot receive E2EE yet.
+    publicKey: json['publicKey'] as String?,
   );
 
   /// The document fields for a brand-new profile (XP starts at 0).
@@ -64,6 +69,7 @@ class Profile {
     'lastActiveDate': lastActiveDate,
     'visibility': visibility,
     'discoverable': discoverable,
+    'publicKey': publicKey,
   };
 
   final String id;
@@ -85,6 +91,11 @@ class Profile {
   /// who already follow me, or open my profile directly, can still
   /// see it (subject to [visibility]).
   final bool discoverable;
+
+  /// My RSA public key for end-to-end encrypted messages (v2.11.0).
+  /// Public by design — anyone may use it to encrypt a message to
+  /// me. Null until I open Chats for the first time.
+  final String? publicKey;
 
   /// True when other users may see my habits on my profile.
   bool get isPublic => visibility != 'private';
@@ -115,6 +126,7 @@ class Profile {
     String? bio,
     String? visibility,
     bool? discoverable,
+    String? publicKey,
   }) => Profile(
     id: id,
     username: username,
@@ -128,6 +140,7 @@ class Profile {
     createdAt: createdAt,
     visibility: visibility ?? this.visibility,
     discoverable: discoverable ?? this.discoverable,
+    publicKey: publicKey ?? this.publicKey,
   );
 }
 

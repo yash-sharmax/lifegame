@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 
 import 'config.dart';
 import 'data/appwrite_service.dart';
+import 'data/messaging_service.dart';
 import 'data/reminder_service.dart';
 import 'data/repositories.dart';
 import 'data/sync_service.dart';
 import 'data/update_check.dart';
 import 'screens/auth_screen.dart';
+import 'screens/chats_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/profile_screen.dart';
@@ -234,6 +236,13 @@ class _MainShellState extends State<MainShell>
     unawaited(ProfileRepository().syncDerivedXpOnce());
     // Push any changes made while offline (v2.9.0).
     unawaited(SyncService.instance.syncNow());
+    // Messaging (v2.11.0): make sure my E2EE keypair exists and my
+    // public key is on my profile, so chats can be encrypted. Never
+    // throws — it returns false when anything fails, and text chat
+    // still works unencrypted.
+    try {
+      unawaited(MessagingService().ensureEncryptionReady());
+    } catch (_) {}
     // App update check (v2.10.0): compare the live version.json
     // against this build; a newer release raises a notice on the
     // Notifications screen (bell dot). Silent when offline.
@@ -439,6 +448,7 @@ class _MainShellState extends State<MainShell>
     HomeScreen(),
     DashboardScreen(),
     RemindersScreen(),
+    ChatsScreen(),
     ProfileScreen(),
   ];
 
@@ -515,6 +525,11 @@ class _MainShellState extends State<MainShell>
                       label: Text('Reminders'),
                     ),
                     NavigationRailDestination(
+                      icon: Icon(Icons.chat_outlined),
+                      selectedIcon: Icon(Icons.chat),
+                      label: Text('Chats'),
+                    ),
+                    NavigationRailDestination(
                       icon: Icon(Icons.person_outlined),
                       selectedIcon: Icon(Icons.person),
                       label: Text('Profile'),
@@ -568,6 +583,7 @@ class _CompactBottomNav extends StatelessWidget {
       selectedIcon: Icons.chat_bubble,
       label: 'Reminders',
     ),
+    (icon: Icons.chat_outlined, selectedIcon: Icons.chat, label: 'Chats'),
     (
       icon: Icons.person_outlined,
       selectedIcon: Icons.person,

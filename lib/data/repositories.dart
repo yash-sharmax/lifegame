@@ -736,6 +736,7 @@ class ProfileRepository {
     required String bio,
     String? visibility,
     bool? discoverable,
+    String? publicKey,
   }) async {
     final userId = _requireUserId();
     final data = <String, dynamic>{
@@ -744,6 +745,9 @@ class ProfileRepository {
     };
     if (visibility != null) data['visibility'] = visibility;
     if (discoverable != null) data['discoverable'] = discoverable;
+    // v2.11.0: RSA public key for E2EE messages. Null-safe on the
+    // live table — see the 400 fallback below.
+    if (publicKey != null) data['publicKey'] = publicKey;
     try {
       await _d.updateRow(
         databaseId: _dbId,
@@ -753,9 +757,11 @@ class ProfileRepository {
       );
     } on AppwriteException catch (e) {
       if (e.code == 400 &&
-          (visibility != null || discoverable != null)) {
-        // The v2.9.0 attributes are not on the live table yet — retry
-        // with just the name/bio so the edit still lands.
+          (visibility != null ||
+              discoverable != null ||
+              publicKey != null)) {
+        // The v2.9.0 / v2.11.0 attributes are not on the live table
+        // yet — retry with just the name/bio so the edit still lands.
         await _d.updateRow(
           databaseId: _dbId,
           tableId: 'users',
@@ -778,6 +784,7 @@ class ProfileRepository {
                   bio: bio,
                   visibility: visibility,
                   discoverable: discoverable,
+                  publicKey: publicKey,
                 );
         try {
           final store = await LocalStore.getInstance();
@@ -798,10 +805,11 @@ class ProfileRepository {
     if (updated == null) throw const AuthException('Profile not found.');
     // When the 400 fallback above dropped the settings, keep them in
     // the local cache so the UI still shows the choice.
-    if (visibility != null || discoverable != null) {
+    if (visibility != null || discoverable != null || publicKey != null) {
       final withSettings = updated.copyWith(
         visibility: visibility,
         discoverable: discoverable,
+        publicKey: publicKey,
       );
       try {
         final store = await LocalStore.getInstance();
