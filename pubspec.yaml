@@ -1,7 +1,7 @@
 name: lifegame
 description: "Life Game — habit tracker. Small steps, every day."
 publish_to: 'none'
-version: 2.11.0+23
+version: 2.11.1+24
 
 environment:
   sdk: ^3.13.7
@@ -20,6 +20,7 @@ dependencies:
   flutter_timezone: ^5.1.1
   connectivity_plus: ^7.0.0
   http: ^1.2.0
+  http_parser: ^4.1.2
   url_launcher: ^6.3.0
   crypto: ^3.0.6
   encrypt: ^5.0.3

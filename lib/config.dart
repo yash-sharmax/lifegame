@@ -24,7 +24,7 @@ class AppConfig {
   /// every release. (18 Nov 2026: the v2.5.1 About label was a
   /// hard-coded string and was never bumped, so it kept showing the
   /// old version even though the new build was live.)
-  static const String appVersion = '2.11.0+23';
+  static const String appVersion = '2.11.1+24';
 
   /// Appwrite Cloud endpoint (region-specific for this project).
   static const String endpoint = String.fromEnvironment(

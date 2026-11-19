@@ -19,9 +19,12 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
 
 import 'package:appwrite/appwrite.dart';
 import 'package:appwrite/models.dart' as models;
+import 'package:http/http.dart' as http;
 
 import '../config.dart';
 import 'appwrite_service.dart';
@@ -30,6 +33,7 @@ import 'chat_prefs.dart';
 import 'imgbb.dart';
 import 'messaging_models.dart';
 import 'models.dart';
+import 'png_carrier.dart';
 import 'repositories.dart';
 
 TablesDB _requireDb(TablesDB? injected) {
@@ -88,6 +92,12 @@ class MessagingService {
 
   final TablesDB? _db;
 
+  /// In-memory cache of decrypted photo bytes (v2.11.1, image
+  /// E2EE): downloading + decrypting every photo on every 15-second
+  /// poll would be wasteful. Keyed by message id, capped at 20
+  /// entries — the device already holds the RSA private key, so
+  /// this cache does not widen the trust boundary.
+  final Map<String, List<int>> _decryptedImageCache = {};
   TablesDB get _d => _requireDb(_db);
 
   String _myId() {
@@ -137,27 +147,162 @@ class MessagingService {
     return keys;
   }
 
-  /// Decrypts one message for me, in place (fills decryptedText).
+  /// Decrypts one message for me, in place (fills decryptedText
+  /// for text, decryptedImageBytes for photos). Handles both the
+  /// legacy v2.11.0 per-message envelope and the v2.11.1 epoch
+  /// format. A message this device cannot decrypt is returned
+  /// unchanged — the UI says so honestly instead of showing
+  /// garbage.
   Future<DmMessage> _decryptForMe(DmMessage message) async {
-    if (!message.encrypted ||
-        message.ciphertext == null ||
-        message.encryptedKeys == null) {
-      return message;
-    }
+    if (!message.encrypted) return message;
     try {
       final store = await ChatCryptoStore.instance();
       final privateKey = store.privateKeyJson;
       if (privateKey == null) return message;
+      final myId = _myId();
+      if (message.isImage) {
+        final bytes = await decryptedImageBytesFor(message);
+        if (bytes == null) return message;
+        return message.copyWith(decryptedImageBytes: bytes);
+      }
+      if (message.ciphertext == null) return message;
+      final parsed = parseEpochCiphertext(message.ciphertext);
+      if (parsed != null) {
+        final plain = await _decryptEpochText(message, parsed, privateKey, myId);
+        if (plain == null) return message;
+        return message.copyWith(decryptedText: plain);
+      }
+      // Legacy v2.11.0 envelope: one RSA-wrapped AES key per
+      // message, carried in encryptedKeys.
+      if (message.encryptedKeys == null) return message;
       final plain = decryptEnvelope(
         message.ciphertext!,
         message.encryptedKeys!,
-        _myId(),
+        myId,
         privateKey,
       );
       if (plain == null) return message;
       return message.copyWith(decryptedText: plain);
     } catch (_) {
       return message;
+    }
+  }
+
+  /// Decrypts one epoch-format text message (v2.11.1, FIX 3). The
+  /// epoch key comes from this device's store; when it is missing
+  /// and this message carries the wrapped epoch key (it is the
+  /// establishment message), the key is unwrapped and stored first.
+  Future<String?> _decryptEpochText(
+    DmMessage message,
+    ({int epoch, List<int> nonce, String ivCipher}) parsed,
+    String privateKey,
+    String myId,
+  ) async {
+    final epochs = await ChatEpochStore.instance();
+    var record = epochs.epoch(message.conversationId, parsed.epoch);
+    if (record == null && message.encryptedKeys != null) {
+      final keyBytes = epochs.unwrapEpochKey(
+        message.encryptedKeys!,
+        myId,
+        privateKey,
+      );
+      if (keyBytes == null) return null;
+      record = ChatEpoch(
+        epoch: parsed.epoch,
+        keyBase64: base64Encode(keyBytes),
+        createdAt: message.createdAt,
+        sentCount: 0,
+        lastMessageAt: message.createdAt,
+      );
+      final current = epochs.currentEpoch(message.conversationId);
+      if (current == null || parsed.epoch >= current.epoch) {
+        await epochs.saveEpoch(message.conversationId, record);
+      } else {
+        await epochs.saveEpochRecord(message.conversationId, record);
+      }
+    }
+    if (record == null) return null;
+    return decryptWithEpochKey(message.ciphertext!, record.keyBytes);
+  }
+
+  /// Pre-pass for a freshly fetched message list (v2.11.1, FIX 3):
+  /// unwrap + store every epoch key carried by establishment
+  /// messages BEFORE decrypting anything. A starred message
+  /// re-encrypted under a new epoch sits EARLIER in the list than
+  /// that epoch's establishment message, so without this pass it
+  /// would look undecryptable until the next refresh.
+  Future<void> _establishEpochs(List<DmMessage> rows) async {
+    try {
+      final crypto = await ChatCryptoStore.instance();
+      final privateKey = crypto.privateKeyJson;
+      if (privateKey == null) return;
+      final myId = _myId();
+      final epochs = await ChatEpochStore.instance();
+      for (final m in rows) {
+        if (m.ciphertext == null || m.encryptedKeys == null) continue;
+        final parsed = parseEpochCiphertext(m.ciphertext);
+        if (parsed == null) continue;
+        if (epochs.epoch(m.conversationId, parsed.epoch) != null) continue;
+        final keyBytes = epochs.unwrapEpochKey(
+          m.encryptedKeys!,
+          myId,
+          privateKey,
+        );
+        if (keyBytes == null) continue;
+        final record = ChatEpoch(
+          epoch: parsed.epoch,
+          keyBase64: base64Encode(keyBytes),
+          createdAt: m.createdAt,
+          sentCount: 0,
+          lastMessageAt: m.createdAt,
+        );
+        final current = epochs.currentEpoch(m.conversationId);
+        if (current == null || parsed.epoch >= current.epoch) {
+          await epochs.saveEpoch(m.conversationId, record);
+        } else {
+          await epochs.saveEpochRecord(m.conversationId, record);
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Downloads + decrypts one encrypted photo for me (v2.11.1,
+  /// FIX 2). Returns the original image bytes, or null when this
+  /// device cannot decrypt them. Results are cached in memory so
+  /// the 15-second poll does not re-download every photo.
+  Future<List<int>?> decryptedImageBytesFor(DmMessage message) async {
+    if (!message.isImage ||
+        !message.encrypted ||
+        message.imageUrl == null ||
+        message.encryptedKeys == null) {
+      return null;
+    }
+    final cached = _decryptedImageCache[message.id];
+    if (cached != null) return cached;
+    try {
+      final store = await ChatCryptoStore.instance();
+      final privateKey = store.privateKeyJson;
+      if (privateKey == null) return null;
+      final res = await http
+          .get(Uri.parse(message.imageUrl!))
+          .timeout(const Duration(seconds: 30));
+      if (res.statusCode != 200) return null;
+      final packed = unpackBytesFromPng(res.bodyBytes);
+      if (packed == null) return null;
+      final plain = decryptBytesEnvelope(
+        packed,
+        message.encryptedKeys!,
+        _myId(),
+        privateKey,
+      );
+      if (plain == null) return null;
+      if (_decryptedImageCache.length > 20) {
+        _decryptedImageCache.remove(_decryptedImageCache.keys.first);
+      }
+      _decryptedImageCache[message.id] = plain;
+      return plain;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -553,6 +698,11 @@ class MessagingService {
       }
     } catch (_) {}
     final rows = await _listMessageRows(conversationId, limit: limit);
+    // Epoch pre-pass (v2.11.1, FIX 3): establish every epoch key
+    // carried by this list before decrypting anything, so a
+    // re-encrypted starred message decrypts even though it sits
+    // before its epoch's establishment message.
+    await _establishEpochs(rows);
     final prefs = await ChatPrefs.instance();
     final hidden = prefs.deletedForMeIds(conversationId);
     final out = <DmMessage>[];
@@ -595,29 +745,160 @@ class MessagingService {
     } catch (_) {}
   }
 
-  /// Encrypts [text] for the conversation's members when keys are
-  /// available; returns the (text, ciphertext, encryptedKeys,
-  /// encrypted) tuple to store. Falls back to plaintext when nobody
-  /// in the chat has a public key yet (point 16).
+  /// Encrypts [text] for the conversation's members (v2.11.1,
+  /// epoch keys — FIX 3). Returns the (text, ciphertext,
+  /// encryptedKeys, encrypted) tuple to store. Falls back to
+  /// plaintext when nobody in the chat has a public key yet
+  /// (point 16). The epoch key is RSA-wrapped only on the
+  /// establishment message (the first message of a new epoch);
+  /// later messages in the epoch derive their keys from it and
+  /// carry no wrapped key.
+  ///
+  /// Size-cap failure is NOT swallowed: when the wrapped epoch
+  /// key would not fit in `messages.encryptedKeys`
+  /// ([EncryptedKeysTooLarge] — very large groups only), the error
+  /// propagates so the UI can tell the user the message was not
+  /// sent, instead of silently downgrading to plaintext. The wrap
+  /// happens BEFORE any epoch state is saved, so a failed
+  /// establishment leaves no half-rotated epoch behind.
   Future<({String? text, String? ciphertext, String? encryptedKeys, bool encrypted})>
-  _encryptForConversation(String conversationId, String text) async {
+  _encryptTextForConversation(String conversationId, String text) async {
     final members = await memberRows(conversationId);
     final ids = members.map((m) => m.userId).toSet().toList();
     final keys = await _publicKeysFor(ids);
     if (keys.isEmpty) {
       return (text: text, ciphertext: null, encryptedKeys: null, encrypted: false);
     }
+    final epochs = await ChatEpochStore.instance();
+    final now = DateTime.now();
+    final current = epochs.currentEpoch(conversationId);
+    final rotating = current == null ||
+        epochNeedsRotation(
+          createdAt: current.createdAt,
+          sentCount: current.sentCount,
+          now: now,
+        );
+    final epoch = rotating
+        ? ChatEpoch(
+            epoch: (current?.epoch ?? 0) + 1,
+            keyBase64: base64Encode(
+              List<int>.generate(32, (_) => Random.secure().nextInt(256)),
+            ),
+            createdAt: now,
+            sentCount: 0,
+            lastMessageAt: now,
+          )
+        : current;
+    // Wrap the epoch key BEFORE changing any stored state. A
+    // too-large group throws EncryptedKeysTooLarge here and the
+    // message is not sent (no silent plaintext downgrade, no
+    // half-rotated epoch). Unparsable keys fall back to plaintext,
+    // as in v2.11.0.
+    String? wrappedKeys;
+    if (rotating) {
+      try {
+        wrappedKeys = epochs.wrapEpochKey(epoch.keyBytes, keys);
+      } on EncryptedKeysTooLarge {
+        rethrow;
+      } on StateError {
+        return (text: text, ciphertext: null, encryptedKeys: null, encrypted: false);
+      }
+    }
     try {
-      final envelope = encryptForRecipients(text, keys);
+      if (rotating) {
+        // Rotate: re-encrypt starred messages under the new epoch
+        // first (so they stay readable), then start the new epoch.
+        if (current != null) {
+          await _reencryptStarredForRotation(conversationId, epoch);
+          await epochs.deleteExpiredEpochs(conversationId, now);
+        }
+        await epochs.saveEpoch(conversationId, epoch);
+      }
+      final ciphertext = encryptWithEpochKey(text, epoch.keyBytes, epoch.epoch);
+      await epochs.saveEpoch(
+        conversationId,
+        epoch.copyWith(
+          sentCount: epoch.sentCount + 1,
+          lastMessageAt: now,
+        ),
+      );
       return (
         text: null,
-        ciphertext: envelope.ciphertext,
-        encryptedKeys: envelope.encryptedKeysJson,
+        ciphertext: ciphertext,
+        encryptedKeys: wrappedKeys,
         encrypted: true,
       );
     } catch (_) {
       return (text: text, ciphertext: null, encryptedKeys: null, encrypted: false);
     }
+  }
+
+  /// Re-encrypts my starred messages in a conversation under a
+  /// fresh epoch key, at rotation time (v2.11.1, FIX 3). Without
+  /// this, starred messages — the only ones that survive the
+  /// 12-hour auto-delete — would become unreadable once the old
+  /// epoch key is deleted. Best effort: a message that cannot be
+  /// re-encrypted is left as it is, and rotation still proceeds.
+  Future<void> _reencryptStarredForRotation(
+    String conversationId,
+    ChatEpoch newEpoch,
+  ) async {
+    try {
+      final starredIds = await starredIdsForConversation(conversationId);
+      if (starredIds.isEmpty) return;
+      final members = await memberRows(conversationId);
+      final memberIds = members.map((m) => m.userId).toSet();
+      for (final id in starredIds) {
+        try {
+          final msg = await getMessage(id);
+          if (msg == null ||
+              msg.conversationId != conversationId ||
+              msg.deletedForAll) {
+            continue;
+          }
+          if (msg.isImage) {
+            // The image bytes stay on imgbb; only the wrapped key
+            // changes — drop wrapped keys of users no longer in
+            // the chat, so a removed member keeps no way in.
+            if (msg.encrypted && msg.encryptedKeys != null) {
+              final wrapped =
+                  jsonDecode(msg.encryptedKeys!) as Map<String, dynamic>;
+              wrapped.removeWhere((uid, _) => !memberIds.contains(uid));
+              if (wrapped.isNotEmpty) {
+                await _d.updateRow(
+                  databaseId: _dbId,
+                  tableId: 'messages',
+                  rowId: msg.id,
+                  data: {'encryptedKeys': jsonEncode(wrapped)},
+                );
+              }
+            }
+            continue;
+          }
+          final plain = msg.displayText;
+          if (plain.isEmpty || plain.startsWith('Encrypted message')) {
+            continue;
+          }
+          final cipher = encryptWithEpochKey(
+            plain,
+            newEpoch.keyBytes,
+            newEpoch.epoch,
+          );
+          await _d.updateRow(
+            databaseId: _dbId,
+            tableId: 'messages',
+            rowId: msg.id,
+            data: {
+              'ciphertext': cipher,
+              'encryptedKeys': null,
+              'encrypted': true,
+            },
+          );
+        } catch (_) {
+          // One bad starred message must not block rotation.
+        }
+      }
+    } catch (_) {}
   }
 
   Future<DmMessage> _insertMessage({
@@ -629,6 +910,8 @@ class MessagingService {
     String? replyToId,
     bool isViewOnce = false,
     bool forwarded = false,
+    bool encrypted = false,
+    String? encryptedKeys,
   }) async {
     final myId = _myId();
     final now = DateTime.now();
@@ -650,9 +933,9 @@ class MessagingService {
         'isViewOnce': isViewOnce,
         'viewOnceViewed': false,
         'expiresAt': messageExpiresAt(now).toIso8601String(),
-        'encrypted': false,
+        'encrypted': encrypted,
         'ciphertext': null,
-        'encryptedKeys': null,
+        'encryptedKeys': encryptedKeys,
         'forwarded': forwarded,
       },
     );
@@ -670,7 +953,7 @@ class MessagingService {
     if (clean.isEmpty) {
       throw const CannotMessageException('Write something first.');
     }
-    final encrypted = await _encryptForConversation(conversationId, clean);
+    final encrypted = await _encryptTextForConversation(conversationId, clean);
     final myId = _myId();
     final now = DateTime.now();
     final doc = await _d.createRow(
@@ -708,16 +991,52 @@ class MessagingService {
 
   /// Sends an image message via imgbb (point 5). Set [isViewOnce]
   /// for a View Once photo (point 10).
+  ///
+  /// v2.11.1 (FIX 2): the photo is end-to-end encrypted BEFORE it
+  /// leaves the device — one fresh AES-256 key, wrapped per
+  /// recipient with RSA (the same scheme text messages use), and
+  /// the ciphertext rides to imgbb inside a valid PNG carrier
+  /// (imgbb only accepts real image files). When nobody in the
+  /// chat has a public key yet, the plain upload is used instead —
+  /// the same honest fallback as text messages. When keys exist
+  /// but encryption itself fails, the send fails loudly rather
+  /// than silently downgrading a photo the user expected to be
+  /// encrypted.
   Future<DmMessage> sendImage(
     String conversationId,
     List<int> bytes, {
     String filename = 'photo.jpg',
     String? replyToId,
     bool isViewOnce = false,
+    bool forwarded = false,
   }) async {
+    final members = await memberRows(conversationId);
+    final ids = members.map((m) => m.userId).toSet().toList();
+    final keys = await _publicKeysFor(ids);
+    if (keys.isNotEmpty) {
+      final envelope = encryptBytesForRecipients(bytes, keys);
+      final carrier = packBytesAsPng(envelope.ciphertextBytes);
+      final upload = await uploadImageToImgbb(
+        carrier,
+        filename: 'photo.png',
+        contentType: 'image/png',
+      );
+      final message = await _insertMessage(
+        conversationId: conversationId,
+        type: 'image',
+        imageUrl: upload.url,
+        imageDeleteUrl: upload.deleteUrl,
+        replyToId: replyToId,
+        isViewOnce: isViewOnce,
+        forwarded: forwarded,
+        encrypted: true,
+        encryptedKeys: envelope.encryptedKeysJson,
+      );
+      await _touchConversation(conversationId, 'Photo');
+      unawaited(_purgeQuietly(conversationId));
+      return message;
+    }
     final upload = await uploadImageToImgbb(bytes, filename: filename);
-    // Image bodies are not E2EE-encrypted (the file lives on imgbb);
-    // the URL itself is only reachable from inside this chat.
     final message = await _insertMessage(
       conversationId: conversationId,
       type: 'image',
@@ -725,6 +1044,7 @@ class MessagingService {
       imageDeleteUrl: upload.deleteUrl,
       replyToId: replyToId,
       isViewOnce: isViewOnce,
+      forwarded: forwarded,
     );
     await _touchConversation(conversationId, 'Photo');
     unawaited(_purgeQuietly(conversationId));
@@ -749,7 +1069,7 @@ class MessagingService {
       'editedAt': DateTime.now().toIso8601String(),
     };
     if (message.encrypted) {
-      final encrypted = await _encryptForConversation(
+      final encrypted = await _encryptTextForConversation(
         message.conversationId,
         clean,
       );
@@ -811,6 +1131,33 @@ class MessagingService {
     if (message.isImage) {
       if (message.imageUrl == null) {
         throw const CannotMessageException('This photo is no longer available.');
+      }
+      if (message.isViewOnce) {
+        // Forwarding a View Once photo would turn it into a normal
+        // photo in the target chat — that defeats View Once, so it
+        // is blocked outright (v2.11.1: the old code copied the URL
+        // and silently dropped the View Once flag).
+        throw const CannotMessageException(
+          'View once photos cannot be forwarded.',
+        );
+      }
+      if (message.encrypted) {
+        // Re-encrypt for the target chat (v2.11.1, FIX 2): download
+        // the carrier, decrypt it, and send it fresh. Forwarding
+        // the carrier URL as-is would show noise to people who
+        // cannot decrypt it — and would leak the ciphertext into a
+        // chat whose members never received the key.
+        final bytes = await decryptedImageBytesFor(message);
+        if (bytes == null) {
+          throw const CannotMessageException(
+            'I cannot read this photo, so I cannot forward it.',
+          );
+        }
+        return sendImage(
+          targetConversationId,
+          bytes,
+          forwarded: true,
+        );
       }
       final forwarded = await _insertMessage(
         conversationId: targetConversationId,

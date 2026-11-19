@@ -459,7 +459,7 @@ const TABLES = [
       str('expiresAt', 32, true),
       boolCol('encrypted', false, false),
       str('ciphertext', 4000),
-      str('encryptedKeys', 8000),
+      str('encryptedKeys', 5000),
       boolCol('forwarded', false, false),
     ],
     indexes: [

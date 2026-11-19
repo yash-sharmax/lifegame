@@ -13,6 +13,7 @@ library;
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 /// >>> PASTE THE FREE IMGBB API KEY HERE <<<
 ///
@@ -45,10 +46,13 @@ class ImgbbUpload {
 }
 
 /// Uploads raw image bytes to imgbb. [filename] is only a label
-/// (e.g. 'photo.jpg'). Returns the public URL + delete URL.
+/// (e.g. 'photo.jpg'). [contentType] lets the caller declare the
+/// real format (the encrypted PNG carrier uploads as 'image/png').
+/// Returns the public URL + delete URL.
 Future<ImgbbUpload> uploadImageToImgbb(
   List<int> bytes, {
   String filename = 'photo.jpg',
+  String? contentType,
   http.Client? client,
 }) async {
   if (!isImgbbConfigured) throw ImgbbNotConfigured();
@@ -59,7 +63,14 @@ Future<ImgbbUpload> uploadImageToImgbb(
       ..fields['key'] = imgbbApiKey
       ..fields['name'] = filename
       ..files.add(
-        http.MultipartFile.fromBytes('image', bytes, filename: filename),
+        http.MultipartFile.fromBytes(
+          'image',
+          bytes,
+          filename: filename,
+          contentType: contentType == null
+              ? null
+              : MediaType.parse(contentType),
+        ),
       );
     final streamed = await httpClient.send(request).timeout(
       const Duration(seconds: 60),

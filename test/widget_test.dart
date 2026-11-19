@@ -439,10 +439,10 @@ void main() {
     expect(find.text('Log out'), findsOneWidget);
     // About is clean: plain version only, no build suffix, no tech mentions.
     expect(
-      find.text('Version 2.11.0'),
+      find.text('Version 2.11.1'),
       findsOneWidget,
     );
-    expect(find.textContaining('+23'), findsNothing);
+    expect(find.textContaining('+24'), findsNothing);
     expect(find.textContaining('Flutter'), findsNothing);
     expect(find.textContaining('Appwrite'), findsNothing);
 
@@ -461,10 +461,10 @@ void main() {
     );
     expect(find.textContaining('Recruit to Legend'), findsOneWidget);
     expect(
-      find.text('Version 2.11.0'),
+      find.text('Version 2.11.1'),
       findsWidgets,
     );
-    expect(find.textContaining('+23'), findsNothing);
+    expect(find.textContaining('+24'), findsNothing);
     expect(find.textContaining('Flutter'), findsNothing);
     expect(find.textContaining('Appwrite'), findsNothing);
   });
@@ -1553,7 +1553,10 @@ class _TwoXpProfileRepo extends ProfileRepository {
 /// Two followers, for the Followers list test.
 class _FollowListRepo extends SocialRepository {
   @override
-  Future<List<Profile>> followProfiles({required bool followers}) async => [
+  Future<List<Profile>> followProfiles({
+    required bool followers,
+    String? userId,
+  }) async => [
     const Profile(id: 'u2', username: 'amit', displayName: 'Amit'),
     const Profile(id: 'u3', username: 'zara', displayName: 'Zara'),
   ];
@@ -1571,5 +1574,8 @@ class _FollowListRepo extends SocialRepository {
 /// Nobody followed: the Following list shows its empty state.
 class _EmptyFollowRepo extends SocialRepository {
   @override
-  Future<List<Profile>> followProfiles({required bool followers}) async => [];
+  Future<List<Profile>> followProfiles({
+    required bool followers,
+    String? userId,
+  }) async => [];
 }

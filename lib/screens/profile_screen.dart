@@ -1663,6 +1663,23 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
   bool get _canSeeHabits => _isMe || widget.profile.isPublic || _mutual;
 
+  /// Opens THIS user's Followers / Following list (v2.11.1): the
+  /// counts on the stats row are tappable and show who is actually
+  /// there. Only reachable when the counts are visible (see
+  /// [_canSeeHabits]) — on a private account I am not mutual with,
+  /// nothing is shown and nothing can be opened.
+  void _openFollowList({required bool followers}) {
+    Navigator.of(context).push(
+      WarriorPageRoute(
+        builder: (_) => FollowListScreen(
+          followers: followers,
+          userId: widget.profile.id,
+          socialRepo: _social,
+        ),
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1769,12 +1786,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               ),
             ],
           ),
-          // v2.11.0: Followers / Following for THIS user — visible
+          // v2.11.1: Followers / Following for THIS user — visible
           // only when the account may be seen (public, mutual friend
           // or my own profile). On a private account I am not mutual
-          // with, nothing is shown here. The counts are not tappable:
-          // the follow-list screen only ever shows MY lists, so
-          // opening it here would show the wrong people.
+          // with, nothing is shown here and nothing can be opened.
+          // The counts ARE tappable: they open this user's lists
+          // (FollowListScreen takes the userId now).
           if (_canSeeHabits &&
               _followersCount != null &&
               _followingCount != null) ...[
@@ -1782,18 +1799,26 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             Row(
               children: [
                 Expanded(
-                  child: _StatBox(
-                    label: 'Followers',
-                    value: '$_followersCount',
-                    gradient: AppTheme.emberGradient,
+                  child: InkWell(
+                    onTap: () => _openFollowList(followers: true),
+                    borderRadius: BorderRadius.circular(16),
+                    child: _StatBox(
+                      label: 'Followers',
+                      value: '$_followersCount',
+                      gradient: AppTheme.emberGradient,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: _StatBox(
-                    label: 'Following',
-                    value: '$_followingCount',
-                    gradient: AppTheme.steelGradient,
+                  child: InkWell(
+                    onTap: () => _openFollowList(followers: false),
+                    borderRadius: BorderRadius.circular(16),
+                    child: _StatBox(
+                      label: 'Following',
+                      value: '$_followingCount',
+                      gradient: AppTheme.steelGradient,
+                    ),
                   ),
                 ),
               ],
@@ -2072,6 +2097,7 @@ class FollowListScreen extends StatefulWidget {
     super.key,
     required this.followers,
     this.friends = false,
+    this.userId,
     this.socialRepo,
   });
 
@@ -2080,6 +2106,14 @@ class FollowListScreen extends StatefulWidget {
 
   /// True = the Friend Circle (mutual follows only).
   final bool friends;
+
+  /// Whose list this is (v2.11.1). Null = my own list (the default
+  /// used by my Profile, Friend Circle and New Chat). Passing
+  /// another user's id lists THEIR followers / following — that is
+  /// how the counts on another user's profile open the right
+  /// people. The Friend Circle ignores this (mutual friends are
+  /// always mine).
+  final String? userId;
   final SocialRepository? socialRepo;
 
   @override
@@ -2103,7 +2137,10 @@ class _FollowListScreenState extends State<FollowListScreen> {
     try {
       final people = widget.friends
           ? await _social.mutualFriends()
-          : await _social.followProfiles(followers: widget.followers);
+          : await _social.followProfiles(
+              followers: widget.followers,
+              userId: widget.userId,
+            );
       if (mounted) setState(() => _people = people);
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());

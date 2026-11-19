@@ -577,6 +577,53 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // --- Images -------------------------------------------------------------
 
+  /// The photo widget for a message (v2.11.1, FIX 2): decrypted
+  /// bytes for an encrypted photo, the network image for a plain
+  /// one, and an honest lock placeholder when this device cannot
+  /// decrypt it. Never renders the PNG carrier directly — it would
+  /// just show noise.
+  Widget _photoImage(
+    DmMessage message, {
+    double? width,
+    double? height,
+    required BoxFit fit,
+  }) {
+    final bytes = message.decryptedImageBytes;
+    if (bytes != null) {
+      return Image.memory(
+        Uint8List.fromList(bytes),
+        width: width,
+        height: height,
+        fit: fit,
+        errorBuilder: (context, _, _) => _brokenPhoto(width, height),
+      );
+    }
+    if (message.encrypted) {
+      return Container(
+        width: width,
+        height: height ?? 120,
+        color: AppTheme.cardBorder,
+        alignment: Alignment.center,
+        child: const Icon(Icons.lock_outline, size: 36),
+      );
+    }
+    return Image.network(
+      message.imageUrl ?? '',
+      width: width,
+      height: height,
+      fit: fit,
+      errorBuilder: (context, _, _) => _brokenPhoto(width, height),
+    );
+  }
+
+  Widget _brokenPhoto(double? width, double? height) => Container(
+    width: width,
+    height: height ?? 120,
+    color: AppTheme.cardBorder,
+    alignment: Alignment.center,
+    child: const Icon(Icons.broken_image_outlined, size: 36),
+  );
+
   Future<void> _openImage(DmMessage message) async {
     if (message.imageUrl == null) return;
     if (message.isViewOnce && message.viewOnceViewed) {
@@ -593,14 +640,7 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Stack(
           children: [
             Center(
-              child: Image.network(
-                message.imageUrl!,
-                fit: BoxFit.contain,
-                errorBuilder: (context, _, _) => const Icon(
-                  Icons.broken_image_outlined,
-                  size: 64,
-                ),
-              ),
+              child: _photoImage(message, fit: BoxFit.contain),
             ),
             Positioned(
               top: 0,
@@ -1217,18 +1257,11 @@ class _ChatScreenState extends State<ChatScreen> {
         borderRadius: BorderRadius.circular(10),
         child: Stack(
           children: [
-            Image.network(
-              message.imageUrl ?? '',
+            _photoImage(
+              message,
               width: 220,
               height: 180,
               fit: BoxFit.cover,
-              errorBuilder: (context, _, _) => Container(
-                width: 220,
-                height: 120,
-                color: AppTheme.cardBorder,
-                alignment: Alignment.center,
-                child: const Icon(Icons.broken_image_outlined, size: 36),
-              ),
             ),
             if (message.isViewOnce)
               Positioned(

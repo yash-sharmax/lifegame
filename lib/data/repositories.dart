@@ -3761,10 +3761,9 @@ class SocialRepository {
     return rows;
   }
 
-  /// Ids of the users I follow (accepted only — a pending request is
-  /// not a follow yet).
-  Future<List<String>> followingIds() async {
-    final userId = _requireUserId();
+  /// Ids of the users [userId] follows (accepted only — a pending
+  /// request is not a follow yet).
+  Future<List<String>> followingIdsFor(String userId) async {
     final rows = await _followRowsWhere(
       field: 'followerUid',
       value: userId,
@@ -3773,9 +3772,8 @@ class SocialRepository {
     return rows.map((r) => r['followingUid'] as String).toList();
   }
 
-  /// Ids of the users following me (accepted only).
-  Future<List<String>> followersIds() async {
-    final userId = _requireUserId();
+  /// Ids of the users following [userId] (accepted only).
+  Future<List<String>> followersIdsFor(String userId) async {
     final rows = await _followRowsWhere(
       field: 'followingUid',
       value: userId,
@@ -3783,6 +3781,13 @@ class SocialRepository {
     );
     return rows.map((r) => r['followerUid'] as String).toList();
   }
+
+  /// Ids of the users I follow (accepted only — a pending request is
+  /// not a follow yet).
+  Future<List<String>> followingIds() => followingIdsFor(_requireUserId());
+
+  /// Ids of the users following me (accepted only).
+  Future<List<String>> followersIds() => followersIdsFor(_requireUserId());
 
   /// Pending follow REQUESTS to me (v2.9.0): (follow doc id, the
   /// requester's profile), newest first. Accept → 'accepted';
@@ -3882,11 +3887,21 @@ class SocialRepository {
     return followers.contains(userId);
   }
 
-  /// Public profiles of my followers (or the people I follow), sorted
-  /// by display name. Used by the Followers / Following lists on
-  /// Profile (18 Nov 2026).
-  Future<List<Profile>> followProfiles({required bool followers}) async {
-    final ids = followers ? await followersIds() : await followingIds();
+  /// Public profiles of [userId]'s followers (or the people they
+  /// follow), sorted by display name. [userId] defaults to me, so
+  /// the Followers / Following lists on my own Profile work exactly
+  /// as before; passing another user's id lists THEIR followers /
+  /// following instead (v2.11.1 — the lists on another user's
+  /// profile are tappable now). Callers must respect the visibility
+  /// rules: only call this for a user whose account may be seen.
+  Future<List<Profile>> followProfiles({
+    required bool followers,
+    String? userId,
+  }) async {
+    final target = userId ?? _requireUserId();
+    final ids = followers
+        ? await followersIdsFor(target)
+        : await followingIdsFor(target);
     final profiles = <Profile>[];
     final profilesRepo = ProfileRepository(db: _db);
     for (final id in ids) {

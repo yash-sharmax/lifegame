@@ -299,6 +299,7 @@ class DmMessage {
     this.encryptedKeys,
     this.forwarded = false,
     this.decryptedText,
+    this.decryptedImageBytes,
   });
 
   factory DmMessage.fromJson(Map<String, dynamic> json) {
@@ -394,6 +395,12 @@ class DmMessage {
   /// cannot decrypt it).
   final String? decryptedText;
 
+  /// Local only (v2.11.1, image E2EE): the decrypted photo bytes
+  /// for an encrypted image message, filled in after download +
+  /// decrypt. Null for unencrypted images (shown straight from
+  /// [imageUrl]) and when this device cannot decrypt the photo.
+  final List<int>? decryptedImageBytes;
+
   bool get isImage => type == 'image';
   bool get isExpiredAtNow => DateTime.now().isAfter(expiresAt);
 
@@ -412,6 +419,7 @@ class DmMessage {
   DmMessage copyWith({
     String? text,
     String? decryptedText,
+    List<int>? decryptedImageBytes,
     DateTime? editedAt,
     bool? deletedForAll,
     bool? viewOnceViewed,
@@ -435,6 +443,7 @@ class DmMessage {
     encryptedKeys: encryptedKeys,
     forwarded: forwarded,
     decryptedText: decryptedText ?? this.decryptedText,
+    decryptedImageBytes: decryptedImageBytes ?? this.decryptedImageBytes,
   );
 }
 
