@@ -72,19 +72,29 @@ String formatChatTime(DateTime time) {
 /// revealed rows as-is. The keyword/PIN is not a name, so running
 /// the name filter on it would hide everything the reveal just
 /// loaded ("No chats yet" for the exact keyword "pineapple").
+///
+/// v2.11.4: a plain search also matches the @username of a DM's
+/// other person ([usernameFor]) — "yashsharma" must find the Yash
+/// Sharma DM even though the display name has a space. Group rows
+/// are matched on their title, which [nameFor] already returns.
+/// A leading '@' in the query is ignored.
 List<ConversationItem> visibleChatItems({
   required List<ConversationItem> items,
   required String query,
   required bool revealActive,
   required String Function(ConversationItem) nameFor,
+  String? Function(ConversationItem)? usernameFor,
 }) {
   final q = query.trim();
   if (q.isEmpty) return items;
   if (revealActive) return items;
-  final lower = q.toLowerCase();
-  return items
-      .where((item) => nameFor(item).toLowerCase().contains(lower))
-      .toList();
+  final lower = q.toLowerCase().replaceFirst(RegExp(r'^@'), '');
+  if (lower.isEmpty) return items;
+  return items.where((item) {
+    if (nameFor(item).toLowerCase().contains(lower)) return true;
+    final username = usernameFor?.call(item);
+    return username != null && username.toLowerCase().contains(lower);
+  }).toList();
 }
 
 class ChatsScreen extends StatefulWidget {
@@ -274,6 +284,15 @@ class _ChatsScreenState extends State<ChatsScreen> {
     query: _searchController.text,
     revealActive: _revealActive,
     nameFor: _nameFor,
+    // v2.11.4: match the @username too — "yashsharma" must find
+    // the Yash Sharma DM even though the display name has a space.
+    // Groups have no other user, so their title (via _nameFor)
+    // is the only haystack for them.
+    usernameFor: (item) {
+      final otherId = item.otherUserId;
+      if (otherId == null) return null;
+      return _profilesById[otherId]?.username;
+    },
   );
 
   Future<void> _onSearchChanged(String query) async {
