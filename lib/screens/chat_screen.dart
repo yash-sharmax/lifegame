@@ -820,9 +820,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// The photo widget for a message (v2.11.1, FIX 2): decrypted
   /// bytes for an encrypted photo, the network image for a plain
-  /// one, and an honest lock placeholder when this device cannot
+  /// one, and an honest text placeholder when this device cannot
   /// decrypt it. Never renders the PNG carrier directly — it would
-  /// just show noise.
+  /// just show noise. v2.11.7: the placeholder is plain text, the
+  /// same honest treatment as undecryptable text bubbles — NO
+  /// padlock/lock icon anywhere on the bubble (v2.11.2 rule).
   Widget _photoImage(
     DmMessage message, {
     double? width,
@@ -845,7 +847,12 @@ class _ChatScreenState extends State<ChatScreen> {
         height: height ?? 120,
         color: AppTheme.cardBorder,
         alignment: Alignment.center,
-        child: const Icon(Icons.lock_outline, size: 36),
+        padding: const EdgeInsets.all(12),
+        child: Text(
+          'Encrypted photo — this device cannot decrypt it',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, color: AppTheme.inkSoft),
+        ),
       );
     }
     return Image.network(
