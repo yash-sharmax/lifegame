@@ -30,6 +30,7 @@ import '../data/reminder_service.dart';
 import '../data/repositories.dart';
 import '../data/sync_service.dart';
 import '../logic/chat_reminders.dart';
+import '../logic/ist_time.dart';
 import '../theme.dart';
 
 /// The Reminders empty-state + input examples (v2.10.0): fresh
@@ -115,7 +116,7 @@ class _RemindersScreenState extends State<RemindersScreen> {
   }
 
   List<ChatReminder> get _upcoming {
-    final now = DateTime.now();
+    final now = istNow();
     final list = _reminders
         .where((r) => !r.fired && r.scheduledAt.isAfter(now))
         .toList()
@@ -155,17 +156,17 @@ class _RemindersScreenState extends State<RemindersScreen> {
 
   /// Creates the reminder + confirmation bubble + alarm for a parsed
   /// (or manually set) time. Shared by [_send] and the manual form.
-  /// [showTip] adds the "include a date/day" hint — only when the
-  /// parse was ambiguous (v2.11.2); a clean, successful set shows
-  /// just the confirmation, never the tip.
+  /// v2.11.3: the confirmation is just the confirmation — no "Tip"
+  /// line is ever appended to a successful set (the tip belongs to
+  /// a message that could NOT be understood, and that case already
+  /// has its own reply). All times are IST (ist_time.dart).
   Future<void> _createReminder({
     required String text,
     required DateTime when,
-    bool showTip = false,
   }) async {
     final ownerId = _ownerId;
     if (ownerId.isEmpty) return;
-    final now = DateTime.now();
+    final now = istNow();
     final reminder = ChatReminder(
       id: ID.unique(),
       ownerId: ownerId,
@@ -177,12 +178,8 @@ class _RemindersScreenState extends State<RemindersScreen> {
       id: ID.unique(),
       ownerId: ownerId,
       role: 'assistant',
-      text: showTip
-          ? '${formatReminderConfirmation(when, text)}\n\n'
-                "Tip: include a date, day, 'today' or 'tomorrow' with the "
-                "time. Example: Call mom tomorrow at 7 am."
-          : formatReminderConfirmation(when, text),
-      createdAt: DateTime.now(),
+      text: formatReminderConfirmation(when, text),
+      createdAt: istNow(),
     );
     setState(() {
       _reminders.add(reminder);
@@ -226,7 +223,7 @@ class _RemindersScreenState extends State<RemindersScreen> {
       role: 'assistant',
       text:
           'Updated: ${formatReminderConfirmation(when, updated.text)}',
-      createdAt: DateTime.now(),
+      createdAt: istNow(),
     );
     setState(() {
       final index = _reminders.indexWhere((r) => r.id == reminder.id);
@@ -251,7 +248,9 @@ class _RemindersScreenState extends State<RemindersScreen> {
       _showNoTimeBanner = false;
     });
     _inputController.clear();
-    final now = DateTime.now();
+    // v2.11.3: the reference moment is IST, never the device clock
+    // (a UTC device parsed bare "3:55" as 03:55 UTC).
+    final now = istNow();
     final userMessage = ChatMessage(
       id: ID.unique(),
       ownerId: ownerId,
@@ -291,7 +290,7 @@ class _RemindersScreenState extends State<RemindersScreen> {
                   'reminder and the time, e.g. "Buy milk at 6pm".'
             : 'I could not tell which time you meant. Tell me the '
                   'time again, e.g. "3:08pm".',
-        createdAt: DateTime.now(),
+        createdAt: istNow(),
       );
       setState(() {
         _messages.add(reply);
@@ -328,7 +327,7 @@ class _RemindersScreenState extends State<RemindersScreen> {
         ownerId: ownerId,
         role: 'assistant',
         text: kReminderNoTimeMessage,
-        createdAt: DateTime.now(),
+        createdAt: istNow(),
       );
       setState(() {
         _messages.add(reply);
@@ -351,7 +350,7 @@ class _RemindersScreenState extends State<RemindersScreen> {
         role: 'assistant',
         text: 'What should I remind you about? Tell me the task '
             'with the time, e.g. "Buy milk at 6pm".',
-        createdAt: DateTime.now(),
+        createdAt: istNow(),
       );
       setState(() {
         _messages.add(reply);
@@ -364,13 +363,12 @@ class _RemindersScreenState extends State<RemindersScreen> {
       return;
     }
 
-    // v2.11.2: the tip shows ONLY when the parse was ambiguous
-    // (bare time, no date/day — the period was inferred), never on
-    // a successful, unambiguous set.
+    // v2.11.3: no Tip on a successful set — ever. The tip belongs
+    // to a message that could not be understood, and that case has
+    // its own reply (no-time / clarification) above.
     await _createReminder(
       text: parsed.text,
       when: parsed.when,
-      showTip: reminderParseWasAmbiguous(text),
     );
     if (mounted) setState(() => _sending = false);
   }
@@ -446,9 +444,11 @@ class _RemindersScreenState extends State<RemindersScreen> {
   /// a message field. [initialText] pre-fills the message (used when
   /// the parser could not find a time).
   Future<void> _openManualForm({String? initialText}) async {
-    final now = DateTime.now();
+    final now = istNow();
     var date = DateTime(now.year, now.month, now.day);
-    var time = TimeOfDay.now();
+    // The picker's initial time is IST too — TimeOfDay.now() is
+    // device-local (v2.11.3).
+    var time = TimeOfDay(hour: now.hour, minute: now.minute);
     final textController = TextEditingController(text: initialText ?? '');
     final created = await showModalBottomSheet<bool>(
       context: context,
@@ -535,7 +535,7 @@ class _RemindersScreenState extends State<RemindersScreen> {
                       time.hour,
                       time.minute,
                     );
-                    if (!when.isAfter(DateTime.now())) {
+                    if (!when.isAfter(istNow())) {
                       ScaffoldMessenger.of(sheetContext).showSnackBar(
                         const SnackBar(
                           content: Text(
@@ -799,7 +799,7 @@ class _RemindersScreenState extends State<RemindersScreen> {
   }
 
   String _shortWhen(DateTime when) {
-    final now = DateTime.now();
+    final now = istNow();
     final today = DateTime(now.year, now.month, now.day);
     final day = DateTime(when.year, when.month, when.day);
     final dayLabel = day == today

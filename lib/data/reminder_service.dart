@@ -45,6 +45,7 @@ import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
+import '../logic/ist_time.dart';
 import '../logic/reminders.dart';
 import '../logic/xp.dart';
 import 'local_store.dart';
@@ -135,6 +136,19 @@ class ReminderService {
 
   // -- Android exact alarms ------------------------------------------------
 
+  /// The Asia/Kolkata tz location for alarms (v2.11.3): reminder
+  /// times are IST wall-clock readings, so the alarm must be built
+  /// in the Kolkata location — building it in tz.local (the device
+  /// timezone) fires 5:30 off on a non-IST device. Falls back to
+  /// tz.local when the tz database is not initialised (tests).
+  tz.Location _kolkataLocation() {
+    try {
+      return tz.getLocation('Asia/Kolkata');
+    } catch (_) {
+      return tz.local;
+    }
+  }
+
   Future<void> _initAndroidNotifications() async {
     try {
       tzdata.initializeTimeZones();
@@ -218,8 +232,12 @@ class ReminderService {
         return;
       }
       final when = tz.TZDateTime.from(
-        nextOccurrence(reminder.timeKey),
-        tz.local,
+        // v2.11.3: the next occurrence is an IST wall-clock reading
+        // (nextOccurrence takes the IST "now"), built in the
+        // Kolkata location so the daily repeat fires at the IST
+        // wall time on any device.
+        nextOccurrence(reminder.timeKey, istNow()),
+        _kolkataLocation(),
       );
       await plugin.zonedSchedule(
         id: id,
@@ -283,12 +301,17 @@ class ReminderService {
   /// Schedules the one-shot exact Android alarm for a chat reminder.
   /// No-op on web and when the plugin failed to initialise. A
   /// reminder already in the past is not scheduled.
+  ///
+  /// v2.11.3: [reminder.scheduledAt] is an IST wall-clock reading,
+  /// so it is built in the Kolkata location — the alarm fires at
+  /// the IST instant on any device timezone.
   Future<void> scheduleAndroidChatReminder(ChatReminder reminder) async {
     final plugin = _notifications;
     if (plugin == null) return;
     if (reminder.fired) return;
-    final when = tz.TZDateTime.from(reminder.scheduledAt, tz.local);
-    if (when.isBefore(tz.TZDateTime.now(tz.local))) return;
+    final kolkata = _kolkataLocation();
+    final when = tz.TZDateTime.from(reminder.scheduledAt, kolkata);
+    if (when.isBefore(tz.TZDateTime.now(kolkata))) return;
     try {
       await plugin.zonedSchedule(
         id: _chatNotificationId(reminder),
@@ -327,7 +350,10 @@ class ReminderService {
     if (user == null) return;
     try {
       final store = await LocalStore.getInstance();
-      final now = DateTime.now();
+      // v2.11.3: the tick compares in IST — scheduledAt values are
+      // IST wall-clock readings, and the IST date key matches the
+      // app's Asia/Kolkata date policy (streaks).
+      final now = istNow();
       final today = todayKey(now);
       final reminders = store.loadReminders().where(
         (r) => r.ownerId == user.uid && r.enabled,

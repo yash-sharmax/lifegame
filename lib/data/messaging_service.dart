@@ -758,14 +758,62 @@ class MessagingService {
   }
 
   /// The newest message that would render in the chat (v2.11.2
-  /// FIX 5) — for the list preview. Null when the chat has no
-  /// visible message yet (e.g. its only message is an unreadable
-  /// establishment carrier); the caller then keeps the stored
-  /// preview instead of inventing one.
+  /// FIX 5; v2.11.3: targeted fetch) — for the list preview. Null
+  /// when the chat has no visible message yet (e.g. its only
+  /// message is an unreadable establishment carrier); the caller
+  /// then keeps the stored preview instead of inventing one.
+  ///
+  /// v2.11.3: the old implementation listed up to 200 messages
+  /// and decrypted ALL of them on every list load, so a row showed
+  /// the stored "Encrypted message" until that slow resolution
+  /// finished — and every reload cleared the resolved preview and
+  /// started over, which is why group rows kept flipping back to
+  /// the stale label. This fetches only the newest few rows and
+  /// decrypts those.
   Future<DmMessage?> latestVisibleMessage(String conversationId) async {
-    final messages = await listMessages(conversationId);
-    if (messages.isEmpty) return null;
-    return messages.last;
+    try {
+      final list = await _d.listRows(
+        databaseId: _dbId,
+        tableId: 'messages',
+        queries: [
+          Query.equal('conversationId', conversationId),
+          Query.orderDesc('createdAt'),
+          Query.limit(5),
+        ],
+      );
+      final rows = list.rows
+          .map((doc) => DmMessage.fromJson(_docJson(doc)))
+          .toList();
+      if (rows.isEmpty) return null;
+      // Newest first — the query asks for it, and sorting here
+      // too keeps the result right even if the order is ignored.
+      rows.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      // Epoch pre-pass (v2.11.1): establish every epoch key
+      // carried by these rows before decrypting.
+      await _establishEpochs(rows);
+      final prefs = await ChatPrefs.instance();
+      final hidden = prefs.deletedForMeIds(conversationId);
+      for (final m in rows) {
+        // Expired, or deleted for me: not really there any more —
+        // look at the next newest.
+        if (m.isExpiredAtNow) continue;
+        if (hidden.contains(m.id)) continue;
+        final decrypted = await _decryptForMe(m);
+        // An establishment carrier this device cannot read is key
+        // transport, not a user message — the chat skips it too,
+        // so the preview falls through to the previous message.
+        if (decrypted.isEstablishment && decrypted.decryptedText == null) {
+          continue;
+        }
+        // Any other message renders — even an undecryptable legacy
+        // one (as the honest "Encrypted message" bubble). The
+        // caller keeps the stored preview for that case.
+        return decrypted;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// One conversation by id (v2.11.2 FIX 6: the chat screen

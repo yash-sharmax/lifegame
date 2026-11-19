@@ -30,6 +30,7 @@ import 'dart:convert';
 
 import 'package:appwrite/appwrite.dart';
 
+import '../logic/ist_time.dart';
 import 'appwrite_service.dart';
 
 /// What the AI parser returned: a due time and/or a task text.
@@ -37,8 +38,9 @@ import 'appwrite_service.dart';
 class AiParseResult {
   const AiParseResult({this.due, this.task});
 
-  /// The reminder time (absolute instant; the app uses it as local
-  /// time). Null when the message had no usable time.
+  /// The reminder time as an Asia/Kolkata wall-clock reading
+  /// (same frame as the local parser's output). Null when the
+  /// message had no usable time.
   final DateTime? due;
 
   /// The reminder text (time/date part removed). Null when the AI
@@ -52,7 +54,12 @@ const String kParseReminderFunctionId = 'parse-reminder';
 
 /// Calls the "parse-reminder" function with [message] and returns
 /// its {due, task}, or null on ANY failure (so the caller falls back
-/// to the local parser). [now] is the reference moment; a due time
+/// to the local parser). [now] is the reference moment — an
+/// Asia/Kolkata wall-clock reading (see ist_time.dart); it is sent
+/// as an ISO string with an explicit +05:30 offset, so Gemini's
+/// "current time" reference is IST no matter what timezone the
+/// device is in (v2.11.3: on a UTC device the old code sent a
+/// bare local ISO, which Gemini read as 10:23 AM IST). A due time
 /// more than a minute in the past is rolled forward 24h (see
 /// [aiResultFromResponse]) instead of being discarded.
 Future<AiParseResult?> parseReminderWithAi(
@@ -66,7 +73,7 @@ Future<AiParseResult?> parseReminderWithAi(
           functionId: kParseReminderFunctionId,
           body: jsonEncode({
             'message': message,
-            'nowISO': now.toIso8601String(),
+            'nowISO': istIso8601(now),
             'timezone': 'Asia/Kolkata',
           }),
         )
@@ -87,7 +94,15 @@ Future<AiParseResult?> parseReminderWithAi(
 
 /// Turns the Function's decoded {due, task} JSON into an
 /// [AiParseResult], or null when neither field is usable. Pure and
-/// unit-testable: [now] is the reference moment.
+/// unit-testable: [now] is the reference moment — an Asia/Kolkata
+/// wall-clock reading (see ist_time.dart).
+///
+/// The Function returns `due` as an absolute instant (a
+/// Z-suffixed ISO string); it is converted to IST wall-clock
+/// fields before anything else, so the returned [AiParseResult.due]
+/// is an IST reading, in the same frame as [now] and as the local
+/// parser's output. A `due` string with no offset is treated as
+/// IST fields already (defensive — the Function always sends Z).
 ///
 /// A due time more than a minute in the past is rolled forward 24h
 /// — the same rule the local parser applies (a bare time that has
@@ -103,7 +118,12 @@ AiParseResult? aiResultFromResponse(
   DateTime? due;
   final dueRaw = decoded['due'];
   if (dueRaw is String && dueRaw.trim().isNotEmpty) {
-    due = DateTime.tryParse(dueRaw.trim());
+    final parsed = DateTime.tryParse(dueRaw.trim());
+    if (parsed != null) {
+      // Z / offset → absolute instant → IST fields. No offset →
+      // already IST fields.
+      due = parsed.isUtc ? istFromUtc(parsed) : parsed;
+    }
     if (due != null &&
         due.isBefore(now.subtract(const Duration(minutes: 1)))) {
       due = due.add(const Duration(hours: 24));

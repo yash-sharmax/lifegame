@@ -108,6 +108,12 @@ class _ChatsScreenState extends State<ChatsScreen> {
   // the stored lastMessagePreview goes stale, so after loading we
   // resolve the real latest message per chat and show its text.
   final Map<String, String> _previewOverrides = {};
+  // v2.11.3 FIX 4: the lastMessageAt each override was resolved
+  // for. An override stays valid across reloads while the last
+  // message has not changed — clearing it on every load made rows
+  // flip back to the stored "Encrypted message" until the slow
+  // re-resolution finished.
+  final Map<String, DateTime?> _previewResolvedAt = {};
   bool _loading = true;
   bool _notSetUp = false;
   bool _showingHidden = false;
@@ -115,6 +121,16 @@ class _ChatsScreenState extends State<ChatsScreen> {
   // keyword or lock PIN) — the revealed rows show as-is, not
   // name-filtered (v2.11.2 FIX 2).
   bool _revealActive = false;
+  // v2.11.3 FIX 3: the search generation. Every keystroke bumps
+  // it; a handler superseded by a newer keystroke aborts instead
+  // of clobbering the reveal (fast typing used to let a stale
+  // "pineappl" handler reset _revealActive after the "pineapple"
+  // handler had already revealed the hidden chats).
+  int _searchGen = 0;
+  // v2.11.3 FIX 3: the secret keyword, cached once at startup so
+  // the reveal decision on a keystroke is synchronous — no await
+  // between the keystroke and the decision.
+  String _hiddenKeyword = '';
   // Hidden chats, loaded only when the search looks like a keyword
   // or a PIN — the verifyLock check runs over this small list.
   List<ConversationItem>? _hiddenItems;
@@ -123,6 +139,16 @@ class _ChatsScreenState extends State<ChatsScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadHiddenKeyword();
+  }
+
+  /// Caches the secret keyword once (v2.11.3 FIX 3) so the reveal
+  /// decision on a keystroke is synchronous.
+  Future<void> _loadHiddenKeyword() async {
+    try {
+      final keyword = (await ChatPrefs.instance()).hiddenKeyword;
+      if (mounted) setState(() => _hiddenKeyword = keyword);
+    } catch (_) {}
   }
 
   @override
@@ -131,7 +157,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
     super.dispose();
   }
 
-  Future<void> _load({bool includeHidden = false}) async {
+  Future<void> _load({bool includeHidden = false, int? forSearchGen}) async {
     if (mounted) setState(() => _loading = true);
     try {
       final items = await _service.listMyConversations(
@@ -139,10 +165,27 @@ class _ChatsScreenState extends State<ChatsScreen> {
       );
       final requests = await _service.pendingMessageRequests();
       if (!mounted) return;
+      // v2.11.3 FIX 3: a search handler superseded by a newer
+      // keystroke must not apply its results.
+      if (forSearchGen != null && forSearchGen != _searchGen) return;
       setState(() {
         _items = items;
         _requests = requests;
-        _previewOverrides.clear();
+        // v2.11.3 FIX 4: keep resolved previews across reloads.
+        // Drop an override only when its conversation is gone or
+        // its last message changed — clearing them all on every
+        // load made rows flip back to "Encrypted message" until
+        // the slow re-resolution finished.
+        final liveIds = items.map((i) => i.conversation.id).toSet();
+        _previewOverrides.removeWhere((id, _) => !liveIds.contains(id));
+        _previewResolvedAt.removeWhere((id, _) => !liveIds.contains(id));
+        for (final item in items) {
+          final id = item.conversation.id;
+          if (_previewResolvedAt[id] != item.conversation.lastMessageAt) {
+            _previewOverrides.remove(id);
+            _previewResolvedAt.remove(id);
+          }
+        }
         _loading = false;
         _notSetUp = false;
         _showingHidden = includeHidden;
@@ -164,20 +207,31 @@ class _ChatsScreenState extends State<ChatsScreen> {
   /// message" instead of the actual text. The decrypted latest
   /// message is the truth; when a chat has no visible message the
   /// stored preview stays.
+  ///
+  /// v2.11.3 FIX 4: a resolved preview for the current last
+  /// message is NOT re-resolved on every reload — that is what
+  /// made group rows flip back to "Encrypted message". Only
+  /// conversations with a new last message (or no override yet)
+  /// are resolved.
   Future<void> _resolvePreviews(List<ConversationItem> items) async {
     var changed = false;
     for (final item in items) {
       final c = item.conversation;
       if (c.isRequest) continue;
+      if (_previewOverrides.containsKey(c.id) &&
+          _previewResolvedAt[c.id] == c.lastMessageAt) {
+        continue;
+      }
       final stored = c.lastMessagePreview;
       if (stored != null && stored != 'Encrypted message') continue;
       try {
         final latest = await _service.latestVisibleMessage(c.id);
         if (latest == null) continue;
         final preview = chatPreviewForMessage(latest);
-        if (preview.isEmpty) continue;
+        if (preview.isEmpty || preview == 'Encrypted message') continue;
         if (_previewOverrides[c.id] != preview) {
           _previewOverrides[c.id] = preview;
+          _previewResolvedAt[c.id] = c.lastMessageAt;
           changed = true;
         }
       } catch (_) {}
@@ -223,26 +277,41 @@ class _ChatsScreenState extends State<ChatsScreen> {
   );
 
   Future<void> _onSearchChanged(String query) async {
+    // v2.11.3 FIX 3: every keystroke bumps the generation. A
+    // handler superseded by a newer keystroke aborts after each
+    // await instead of clobbering the reveal — fast typing used
+    // to let a stale "pineappl" handler reset _revealActive (and
+    // reload the visible-only list) after the "pineapple" handler
+    // had already revealed the hidden chats, so the reveal only
+    // appeared after pressing Enter.
+    final gen = ++_searchGen;
     final trimmed = query.trim();
-    // Exact secret keyword → reveal hidden chats (point 13).
-    String keyword = '';
-    try {
-      keyword = (await ChatPrefs.instance()).hiddenKeyword;
-    } catch (_) {}
+    // Exact secret keyword → reveal hidden chats (point 13). The
+    // check runs against the cached keyword, so the reveal
+    // decision is synchronous on the keystroke. When the cache is
+    // not loaded yet (first seconds after launch), read it once.
+    var keyword = _hiddenKeyword;
+    if (keyword.isEmpty && trimmed.isNotEmpty) {
+      try {
+        keyword = (await ChatPrefs.instance()).hiddenKeyword;
+        if (keyword.isNotEmpty && mounted) _hiddenKeyword = keyword;
+      } catch (_) {}
+    }
+    if (!mounted || gen != _searchGen) return;
     if (matchesHiddenKeyword(trimmed, keyword)) {
-      // v2.11.2 FIX 2: the keyword is a reveal, not a name — the
-      // revealed rows must show as-is, not be name-filtered out.
       _revealActive = true;
-      await _load(includeHidden: true);
+      await _load(includeHidden: true, forSearchGen: gen);
       return;
     }
     // A hidden chat's lock PIN typed in search reveals that chat.
     if (trimmed.length >= 4) {
       try {
         final prefs = await ChatPrefs.instance();
+        if (!mounted || gen != _searchGen) return;
         _hiddenItems ??= await _service.listMyConversations(
           includeHidden: true,
         );
+        if (!mounted || gen != _searchGen) return;
         final unlocked = _hiddenItems!
             .where((item) => prefs.verifyLock(item.conversation.id, trimmed))
             .toList();
@@ -259,9 +328,10 @@ class _ChatsScreenState extends State<ChatsScreen> {
     }
     // Plain name search — back to the normal list if we were showing
     // hidden chats for a previous query.
+    if (!mounted || gen != _searchGen) return;
     _revealActive = false;
     if (_showingHidden && !matchesHiddenKeyword(trimmed, keyword)) {
-      await _load();
+      await _load(forSearchGen: gen);
       return;
     }
     setState(() {});
@@ -458,7 +528,10 @@ class _ChatsScreenState extends State<ChatsScreen> {
     if (saved == true) {
       try {
         await (await ChatPrefs.instance()).setHiddenKeyword(controller.text);
+        // v2.11.3 FIX 3: keep the cached keyword in sync so the
+        // reveal works on live typing right after saving.
         if (mounted) {
+          setState(() => _hiddenKeyword = controller.text.trim());
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Hidden-chats keyword saved.')),
           );

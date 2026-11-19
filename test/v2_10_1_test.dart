@@ -23,19 +23,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('v2.10.1: AI past-due roll-forward', () {
+    // v2.11.3: `now` is an Asia/Kolkata wall-clock reading and
+    // `due` is returned in the same frame — the Function's
+    // Z-suffixed instant is converted to IST fields first. The
+    // scenarios below are the same instants as before, restated
+    // in IST wall time.
     test('a due time ~45 min in the past rolls forward 24h, task kept',
         () {
       // The verification scenario: the AI parsed 12.26am on 19 Nov
       // IST (00:26 IST = 18:56 UTC on 18 Nov) and the check ran at
-      // 01:11 IST on 19 Nov (19:41 UTC on 18 Nov) — 45 min later.
-      final now = DateTime.utc(2026, 11, 18, 19, 41);
+      // 01:11 IST on 19 Nov — 45 min later.
+      final now = DateTime(2026, 11, 19, 1, 11);
       final result = aiResultFromResponse(<String, dynamic>{
         'due': '2026-11-18T18:56:00.000Z',
         'task': 'check messages',
       }, now);
       expect(result, isNotNull);
-      // Same time tomorrow — the AI's parse and task are preserved.
-      expect(result!.due, DateTime.utc(2026, 11, 19, 18, 56));
+      // Same time tomorrow, in IST — the AI's parse and task are
+      // preserved.
+      expect(result!.due, DateTime(2026, 11, 20, 0, 26));
       expect(result.task, 'check messages');
     });
 
@@ -44,7 +50,7 @@ void main() {
       // in the past. Rolling it forward 24h still leaves it in the
       // past, so the due time is dropped (the caller falls back to
       // the local parser).
-      final now = DateTime.utc(2026, 11, 18, 19, 41);
+      final now = DateTime(2026, 11, 19, 1, 11);
       final result = aiResultFromResponse(<String, dynamic>{
         'due': '2026-11-17T18:56:00.000Z',
         'task': 'old task',
@@ -55,13 +61,16 @@ void main() {
     });
 
     test('a future due time is returned unchanged', () {
-      final now = DateTime.utc(2026, 11, 18, 12, 0);
+      // 12:00 UTC on 18 Nov is 17:30 IST; the AI's due 18:00 UTC
+      // is 23:30 IST the same day — in the future, returned as
+      // IST fields.
+      final now = DateTime(2026, 11, 18, 17, 30);
       final result = aiResultFromResponse(<String, dynamic>{
         'due': '2026-11-18T18:00:00.000Z',
         'task': 'Buy milk',
       }, now);
       expect(result, isNotNull);
-      expect(result!.due, DateTime.utc(2026, 11, 18, 18, 0));
+      expect(result!.due, DateTime(2026, 11, 18, 23, 30));
       expect(result.task, 'Buy milk');
     });
   });

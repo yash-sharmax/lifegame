@@ -23,6 +23,7 @@ import 'package:lifegame/data/models.dart';
 import 'package:lifegame/data/reminder_service.dart';
 import 'package:lifegame/data/repositories.dart';
 import 'package:lifegame/logic/chat_reminders.dart';
+import 'package:lifegame/logic/ist_time.dart';
 import 'package:lifegame/screens/chats_screen.dart';
 import 'package:lifegame/screens/reminders_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -343,17 +344,10 @@ void main() {
   });
 
   group('ambiguity + clear task', () {
-    test('the tip shows only for a bare time with no date/day', () {
-      expect(
-        reminderParseWasAmbiguous('remind me to drink water at 3:09'),
-        isTrue,
-      );
-      expect(reminderParseWasAmbiguous('Buy milk at 6pm'), isFalse);
-      expect(
-        reminderParseWasAmbiguous('Call mom tomorrow at 7am'),
-        isFalse,
-      );
-    });
+    // v2.11.3: the Tip rule changed — the tip NEVER appears on a
+    // successful set (not even for a bare time). reminderParseWasAmbiguous
+    // is deleted; the no-Tip rule is covered by the v2.11.3 widget
+    // test (a successful set shows the confirmation and no Tip).
 
     test('a message with no clear task is not a task', () {
       expect(hasClearTask('Drink water'), isTrue);
@@ -816,7 +810,8 @@ void main() {
         () async {
       asUser('user-1');
       final store = await LocalStore.getInstance();
-      final past = DateTime.now().subtract(const Duration(minutes: 5));
+      // v2.11.3: fixtures are IST wall times, like stored data.
+      final past = istNow().subtract(const Duration(minutes: 5));
       await store.saveChatReminders([
         ChatReminder(
           id: 'r1',
@@ -837,14 +832,14 @@ void main() {
         isTrue,
       );
       // A future reminder does NOT fire.
-      final future = DateTime.now().add(const Duration(hours: 2));
+      final future = istNow().add(const Duration(hours: 2));
       await store.saveChatReminders([
         ChatReminder(
           id: 'r2',
           ownerId: 'user-1',
           text: 'Call mom',
           scheduledAt: future,
-          createdAt: DateTime.now(),
+          createdAt: istNow(),
         ),
       ]);
       await ReminderService.instance.refresh();
@@ -863,14 +858,14 @@ void main() {
     testWidgets('collapsed by default, expands on tap', (tester) async {
       asUser('user-1');
       final store = await LocalStore.getInstance();
-      final future = DateTime.now().add(const Duration(hours: 2));
+      final future = istNow().add(const Duration(hours: 2));
       await store.saveChatReminders([
         ChatReminder(
           id: 'r1',
           ownerId: 'user-1',
           text: 'Drink water',
           scheduledAt: future,
-          createdAt: DateTime.now(),
+          createdAt: istNow(),
         ),
       ]);
       await store.saveChatMessages('user-1', []);

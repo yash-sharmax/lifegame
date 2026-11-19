@@ -12,9 +12,11 @@
 // Supported (Hinglish + English, deliberately forgiving):
 // - Time: "at 6pm", "6pm", "at 6:00 pm", "6 baje", "18:00", "at 7 am".
 //   v2.11.2: dot separators too ("3.08pm", "3.08"), and a bare time
-//   with no am/pm infers AM/PM from the local time (afternoon +
+//   with no am/pm infers AM/PM from the IST time (afternoon +
 //   hour 1–11 → PM); a past inferred time rolls to tomorrow
 //   keeping the SAME period.
+//   v2.11.3: the reference "now" is ALWAYS Asia/Kolkata
+//   (ist_time.dart) — never the device clock, which may be UTC.
 // - Day words: "kal" / "tomorrow" = tomorrow; "aaj" / "today" = today;
 //   "parso" / "day after tomorrow" = day after tomorrow.
 // - Part of day: "subah" / "morning" = AM; "shaam" / "sham" /
@@ -26,6 +28,8 @@
 //
 // Pure functions, so they are unit-tested (test/chat_reminders_test.dart).
 library;
+
+import 'ist_time.dart';
 
 /// A parsed reminder: the text to remind about, and when.
 class ParsedReminder {
@@ -39,10 +43,13 @@ class ParsedReminder {
 }
 
 /// Parses [message] into a [ParsedReminder], or null when no usable
-/// time can be found in it. [now] is the reference moment (defaults
-/// to DateTime.now()); tests pass a fixed one.
+/// time can be found in it. [now] is the reference moment — an
+/// Asia/Kolkata wall-clock reading (see ist_time.dart); it defaults
+/// to [istNow]. It MUST be IST, never the device clock: on a UTC
+/// device a bare "3:55" at 3:53 PM IST was read as 03:55 UTC and
+/// set for tomorrow 3:55 AM (v2.11.3). Tests pass a fixed IST now.
 ParsedReminder? parseChatReminder(String message, [DateTime? now]) {
-  final current = now ?? DateTime.now();
+  final current = now ?? istNow();
   final lower = message.toLowerCase();
 
   final time = _parseTime(lower);
@@ -55,7 +62,7 @@ ParsedReminder? parseChatReminder(String message, [DateTime? now]) {
   // am/pm in the time itself always wins.
   //
   // v2.11.2: a bare time (no am/pm, no part-of-day word) infers its
-  // period from the user's local time — in the afternoon an hour
+  // period from the IST time — in the afternoon an hour
   // 1–11 means PM ("remind me to drink water at 3:09" at 3:09 PM
   // means 3:09 PM, not 3:09 AM). In the morning it means AM. The
   // inferred time then follows the usual rule below: today when it
@@ -422,7 +429,7 @@ String formatReminderConfirmation(DateTime when, String text) {
 }
 
 // ---------------------------------------------------------------------------
-// v2.11.2 — corrections, ambiguity, and "no clear task".
+// v2.11.2 — corrections, and "no clear task".
 // ---------------------------------------------------------------------------
 
 /// Correction openers: the user is fixing the reminder that was
@@ -502,23 +509,6 @@ String correctionTaskText(String message) {
   );
   final stripped = _stripTimeAndDate(text);
   return stripped.trim();
-}
-
-/// True when the parse had to GUESS something: the message gave no
-/// explicit date/day word AND no explicit am/pm, so the period was
-/// inferred from the local time (v2.11.2). The confirmation bubble
-/// shows the "include a date/day" tip only then — never on a
-/// successful, unambiguous set.
-bool reminderParseWasAmbiguous(String message) {
-  final lower = message.toLowerCase();
-  final now = DateTime.now();
-  final hasDateOrDay =
-      _parseDate(lower, now) != null ||
-      _parseDayWord(lower, now) != null ||
-      _parseWeekday(lower, now) != null;
-  if (hasDateOrDay) return false;
-  final hasMeridiem = RegExp(r'\d\s*(am|pm)\b').hasMatch(lower);
-  return !hasMeridiem;
 }
 
 /// True when [text] (already stripped of its time/date part) names
